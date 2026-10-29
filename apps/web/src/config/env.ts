@@ -61,6 +61,8 @@ export interface AppConfig {
   documents: DocumentsConfig;
   /** Extraction item review in Review. */
   extraction: ExtractionConfig;
+  /** Reconciliation queue: page size and how far the tab counts and Record marks look. */
+  reconciliation: ReconciliationConfig;
   /** The Explore panel (questions to Guide). */
   explore: ExploreConfig;
 }
@@ -122,6 +124,16 @@ export interface ExtractionConfig {
   acceptThreshold: number;
   /** Items loaded per page of the item list. */
   itemsPageSize: number;
+}
+
+export interface ReconciliationConfig {
+  /** Candidates loaded per page of the queue; Keeper's `keeper.reconciliation.default_limit`. */
+  pageSize: number;
+  /**
+   * Candidates read to count a tab and to mark the values of a Record; at most Keeper's
+   * `keeper.reconciliation.max_limit`. A larger set shows as "N+".
+   */
+  countLimit: number;
 }
 
 export interface ExploreConfig {
@@ -193,6 +205,8 @@ const NON_FUNCTIONAL_DEFAULTS = {
   documentsJobPollMs: 3000,
   extractionAcceptThreshold: 0.9,
   extractionItemsPageSize: 200,
+  reconciliationPageSize: 50,
+  reconciliationCountLimit: 500,
   exploreMaxSteps: 6,
   // Above guide.agent.timeout_s (120 s), so Guide's own timeout normally ends the stream first.
   exploreTimeoutMs: 150_000,
@@ -494,6 +508,18 @@ export function loadConfig(raw: RawEnv): AppConfig {
         raw,
         'VITE_EXTRACTION_ITEMS_PAGE_SIZE',
         NON_FUNCTIONAL_DEFAULTS.extractionItemsPageSize,
+      ),
+    },
+    reconciliation: {
+      pageSize: positiveInt(
+        raw,
+        'VITE_RECONCILIATION_PAGE_SIZE',
+        NON_FUNCTIONAL_DEFAULTS.reconciliationPageSize,
+      ),
+      countLimit: positiveInt(
+        raw,
+        'VITE_RECONCILIATION_COUNT_LIMIT',
+        NON_FUNCTIONAL_DEFAULTS.reconciliationCountLimit,
       ),
     },
     explore: {

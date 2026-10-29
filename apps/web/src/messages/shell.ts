@@ -7,6 +7,7 @@ export const shell = {
     canvas: 'Canvas',
     modeler: 'Modeler',
     review: 'Review',
+    reconcile: 'Reconciliation',
     sources: 'Sources',
     agentActivity: 'Agent activity',
     retrievalLab: 'Retrieval lab',

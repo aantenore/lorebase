@@ -10,6 +10,7 @@ const ITEMS = [
   { to: '/$domain/canvas', label: NAV.canvas },
   { to: '/$domain/modeler', label: NAV.modeler },
   { to: '/$domain/review', label: NAV.review },
+  { to: '/$domain/reconcile', label: NAV.reconcile },
   { to: '/$domain/sources', label: NAV.sources },
   { to: '/$domain/agent-activity', label: NAV.agentActivity },
   { to: '/$domain/retrieval-lab', label: NAV.retrievalLab },

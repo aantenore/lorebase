@@ -505,7 +505,7 @@ function Mapping({
         <legend className="mb-1 text-xs font-medium text-muted">
           {t.mapping.attributeMapping}
         </legend>
-        {attributes.map(([attribute]) => {
+        {attributes.map(([attribute, definition]) => {
           const entry = isRecord(mapping[attribute]) ? mapping[attribute] : undefined;
           const mode: MappingMode =
             entry === undefined
@@ -551,6 +551,31 @@ function Mapping({
                     changeMapping(attribute, (current) => ({ ...current, [mode]: value }));
                   }}
                 />
+              )}
+              {mode !== 'none' && definition.valid_time === true && (
+                <div className="grid gap-2 sm:col-span-2 sm:grid-cols-2">
+                  {(['valid_from', 'valid_to'] as const).map((bound) => (
+                    <Input
+                      key={bound}
+                      label={
+                        bound === 'valid_from'
+                          ? t.mapping.validFrom(attribute)
+                          : t.mapping.validTo(attribute)
+                      }
+                      hint={t.mapping.validHint}
+                      value={asText(entry?.[bound])}
+                      error={errorAt(issues, `${path}/attribute_mapping/${attribute}/${bound}`)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        changeMapping(attribute, (current) => {
+                          const out: Doc = { ...current };
+                          setOrDelete(out, bound, value === '' ? undefined : value);
+                          return out;
+                        });
+                      }}
+                    />
+                  ))}
+                </div>
               )}
               {mode !== 'none' && (
                 <TransformsEditor

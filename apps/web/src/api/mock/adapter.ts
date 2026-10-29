@@ -31,6 +31,7 @@ import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
 import { previewDerivation, previewExpressions } from './previews';
+import { createReconciliationMock } from './reconciliation';
 import { createSourcesMock } from './sources';
 import { createSuggestionsMock } from './suggestions';
 import { createTraceMock } from './trace';
@@ -215,6 +216,46 @@ export function createMockApi(options: MockOptions): KeeperApi {
     const branch = `schema/suggestions-${suggestionBranches.toString()}`;
     await mock.branches.create(id, { name: branch, source: target });
     return mock.proposals.create(id, { title, source_ref: branch, target_ref: target });
+  });
+
+  // A decision writes on its Branch, or on a copy proposed back into it when the Branch is
+  // protected or the decision always needs review (duplicate merges).
+  const reconciliation = createReconciliationMock({
+    exists: (id) => domains.has(id),
+    defaultBranch: (id) => domainOf(id).domain.default_branch,
+    branchData: (id, name) => branchOf(domainOf(id), name),
+    commit: async (id, request) => {
+      const domain = domainOf(id);
+      const target = branchOf(domain, request.branch);
+      const commitOn = (data: BranchData) => {
+        request.apply(data);
+        const committed = buildRevision(
+          id,
+          nextRevisionId(),
+          headOf(data),
+          request.message,
+          new Date().toISOString(),
+          'operation',
+          { author: 'usr_mock' },
+        );
+        data.log = [committed, ...data.log];
+        return committed.id;
+      };
+      if (!target.protected && !request.review) {
+        return { revision: commitOn(target), proposal: null, branch: null };
+      }
+      let name = request.reviewBranch;
+      for (let n = 2; domain.branches.has(name); n += 1)
+        name = `${request.reviewBranch}-${n.toString()}`;
+      await mock.branches.create(id, { name, source: request.branch });
+      const revision = commitOn(branchOf(domain, name));
+      const opened = await mock.proposals.create(id, {
+        title: request.message,
+        source_ref: name,
+        target_ref: request.branch,
+      });
+      return { revision, proposal: opened.id, branch: name };
+    },
   });
 
   const requireOperation = (data: BranchData, name: string) => {
@@ -613,8 +654,13 @@ export function createMockApi(options: MockOptions): KeeperApi {
         return Promise.resolve(summary(detail));
       },
       // A copy, as over the wire: the review form changes the stored Proposal in place.
-      get: (id, proposal) =>
-        Promise.resolve(structuredClone(proposalOf(domainOf(id), proposal).detail)),
+      get: (id, proposal) => {
+        const detail = structuredClone(proposalOf(domainOf(id), proposal).detail);
+        const check = reconciliation.checkFor(id, proposal);
+        const checks = detail.checks.filter((c) => c.name !== 'reconciliation');
+        detail.checks = check === null ? checks : [...checks, check];
+        return Promise.resolve(detail);
+      },
       diff: (id, proposal) => {
         const domain = domainOf(id);
         const { detail } = proposalOf(domain, proposal);
@@ -775,6 +821,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
       },
     },
     suggestions: suggestions.api,
+    reconciliation: reconciliation.api,
     admin: admin.api,
   };
   return mock;

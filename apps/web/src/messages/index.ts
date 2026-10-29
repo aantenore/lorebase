@@ -24,6 +24,7 @@ import { extraction } from './extraction';
 import { inference } from './inference';
 import { modeler } from './modeler';
 import { modelerEditors } from './modeler-editors';
+import { reconcile } from './reconcile';
 import { record } from './record';
 import { retrievalLab } from './retrieval-lab';
 import { review } from './review';
@@ -41,6 +42,7 @@ export const messages = {
   modelerEditors,
   inference,
   review,
+  reconcile,
   extraction,
   sources,
   documents,

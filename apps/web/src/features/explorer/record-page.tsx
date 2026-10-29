@@ -4,6 +4,7 @@ import { useHistory, useLineage, useRecord, useRecordLinks, useSchema } from '@/
 import type { AttributeLineage, Kind, RecordChange, Relation, Schema } from '@/api/types';
 import { RecordLink } from '@/app/record-link';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { reconcile as reconcileMessages } from '@/messages/reconcile';
 import { record as recordMessages } from '@/messages/record';
 import { Button } from '@/ui/button';
 import {
@@ -19,6 +20,7 @@ import {
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { Tabs } from '@/ui/tabs';
 import { shortTime } from '@/ui/time';
+import { CandidateMark, useRecordMarks } from '@/features/reconcile/record-marks';
 import { ValueView } from './value-view';
 
 const t = recordMessages;
@@ -255,6 +257,7 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
   const schema = useSchema(scope);
   const record = useRecord(scope, kind, recordKey);
   const [tab, setTab] = useState('details');
+  const marks = useRecordMarks(kind, recordKey);
 
   return (
     <QueryBoundary query={schema}>
@@ -288,7 +291,24 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                       label: t.tabDetails,
                       content: (
                         <>
-                          <Section title={t.attributes.title}>
+                          <Section
+                            title={t.attributes.title}
+                            {...(marks.duplicates.length === 0
+                              ? {}
+                              : {
+                                  actions: (
+                                    <CandidateMark
+                                      candidates={marks.duplicates}
+                                      label={reconcileMessages.record.duplicate(
+                                        marks.duplicates
+                                          .flatMap((c) => c.keys)
+                                          .filter((k) => k !== recordKey)
+                                          .join(', '),
+                                      )}
+                                    />
+                                  ),
+                                })}
+                          >
                             <Table caption={t.attributes.caption}>
                               <THead>
                                 <TR>
@@ -317,6 +337,15 @@ export function RecordPage({ kind, recordKey }: { kind: string; recordKey: strin
                                       </TH>
                                       <TD>
                                         <ValueView value={value} type={attribute.type} />
+                                        {marks.byAttribute.has(attribute.api_name) && (
+                                          <span className="ml-2">
+                                            <CandidateMark
+                                              candidates={
+                                                marks.byAttribute.get(attribute.api_name) ?? []
+                                              }
+                                            />
+                                          </span>
+                                        )}
                                       </TD>
                                       <TD className="text-muted">{attribute.type}</TD>
                                     </TR>

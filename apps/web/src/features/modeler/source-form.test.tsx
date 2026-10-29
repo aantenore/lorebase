@@ -10,7 +10,7 @@ const document = (): SchemaDocument => ({
       primary_key: ['code'],
       attributes: {
         code: { type: 'string' },
-        legal_name: { type: 'string' },
+        legal_name: { type: 'string', valid_time: true },
         country: { type: 'string' },
         risk_score: { type: 'integer', derivation: 'risk' },
       },
@@ -63,6 +63,26 @@ describe('Source editor', () => {
     }
     // A derived Attribute cannot be mapped, so it is not offered.
     expect(screen.queryByRole('combobox', { name: 'Mapping of risk_score' })).toBeNull();
+  });
+
+  it('names the validity columns of a valid_time Attribute and drops them when cleared', async () => {
+    const user = userEvent.setup();
+    const { current } = renderForm(SourcesForm, document());
+    expect(screen.queryByRole('textbox', { name: 'Valid from for country' })).toBeNull();
+    await user.type(screen.getByRole('textbox', { name: 'Valid from for legal_name' }), 'since');
+    await user.type(screen.getByRole('textbox', { name: 'Valid to for legal_name' }), 'until');
+    expect(source(current())['attribute_mapping']).toEqual({
+      legal_name: {
+        column: 'legal_name',
+        transforms: [{ name: 'trim' }],
+        valid_from: 'since',
+        valid_to: 'until',
+      },
+    });
+    await user.clear(screen.getByRole('textbox', { name: 'Valid to for legal_name' }));
+    expect(source(current())['attribute_mapping']).toEqual({
+      legal_name: { column: 'legal_name', transforms: [{ name: 'trim' }], valid_from: 'since' },
+    });
   });
 
   it('accepts only secret references for the connection', async () => {

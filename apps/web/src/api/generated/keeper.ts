@@ -1406,6 +1406,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List reconciliation candidates
+         * @description Candidates of a branch, newest first.
+         */
+        get: operations["list_candidates_api_v1_domains__domain_id__reconciliation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a reconciliation candidate
+         * @description One candidate with its claims and last decision.
+         */
+        get: operations["get_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/resolution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a candidate
+         * @description Decide a candidate: the value is written by `update_{kind}` on its branch (proposed
+         *     from a new branch `reconcile/{candidate}-{random}` when the branch needs review);
+         *     `keep_current` writes nothing. `dry_run` reports the edits without deciding.
+         */
+        post: operations["resolve_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__resolution_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/dismissal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss a candidate
+         * @description Dismiss an open candidate; nothing is written. It can be reopened.
+         */
+        post: operations["dismiss_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__dismissal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen a dismissed candidate
+         * @description Open a dismissed candidate again.
+         */
+        post: operations["reopen_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation:resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve candidates in bulk
+         * @description Apply a policy, or dismiss, over at most `keeper.reconciliation.bulk_max` open
+         *     candidates; each is decided and audited on its own, and one that fails does not stop the
+         *     others.
+         */
+        post: operations["resolve_candidates_api_v1_domains__domain_id__reconciliation_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/domains/{domain_id}/reconciliation/sweeps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a reconciliation sweep
+         * @description Queue a sweep of a branch for Scribe (job `reconcile_sweep`); an identical sweep that
+         *     is queued or running is returned instead of a new one.
+         */
+        post: operations["queue_sweep_api_v1_domains__domain_id__reconciliation_sweeps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/branches/{branch}/log": {
         parameters: {
             query?: never;
@@ -2217,6 +2362,17 @@ export interface components {
             capped: boolean;
         };
         /**
+         * CandidateStatus
+         * @description ``open`` until a person decides; only the pipeline sets ``obsolete`` (AC-33).
+         * @enum {string}
+         */
+        CandidateStatus: "open" | "resolved" | "dismissed" | "obsolete";
+        /**
+         * CandidateType
+         * @enum {string}
+         */
+        CandidateType: "duplicate" | "contradiction" | "superseded" | "stale";
+        /**
          * ChangeKind
          * @enum {string}
          */
@@ -2325,6 +2481,11 @@ export interface components {
             status: "passed" | "failed" | "pending";
             /** Message */
             message?: string | null;
+            /**
+             * Candidates
+             * @description `reconciliation`: ids of the first open candidates of the Proposal.
+             */
+            candidates?: string[] | null;
         };
         /**
          * CheckReport
@@ -4296,6 +4457,13 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
         };
+        /** Page[ReconciliationCandidateOut] */
+        Page_ReconciliationCandidateOut_: {
+            /** Items */
+            items: components["schemas"]["ReconciliationCandidateOut"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
         /** Page[SourceRunOut] */
         Page_SourceRunOut_: {
             /** Items */
@@ -4758,6 +4926,272 @@ export interface components {
              * @default false
              */
             rows_only: boolean;
+        };
+        /**
+         * ReconciliationBulkIn
+         * @description One choice over open candidates: the `ids` given, or those matching `filter`.
+         */
+        ReconciliationBulkIn: {
+            /** Ids */
+            ids?: string[] | null;
+            filter?: components["schemas"]["ReconciliationFilterIn"] | null;
+            /**
+             * Choice
+             * @enum {string}
+             */
+            choice: "policy" | "dismiss";
+            policy?: components["schemas"]["ReconciliationPolicy"] | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        /** ReconciliationBulkItemOut */
+        ReconciliationBulkItemOut: {
+            /** Candidate */
+            candidate: string;
+            /**
+             * Status
+             * @description As a single decision, or `failed`.
+             */
+            status: string;
+            /** Detail */
+            detail?: string | null;
+            /** Proposal */
+            proposal?: string | null;
+            /** Revision */
+            revision?: string | null;
+        };
+        /** ReconciliationBulkOut */
+        ReconciliationBulkOut: {
+            /** Count */
+            count: number;
+            /**
+             * Counts
+             * @description Candidates per status.
+             */
+            counts: {
+                [key: string]: number;
+            };
+            /** Items */
+            items: components["schemas"]["ReconciliationBulkItemOut"][];
+        };
+        /**
+         * ReconciliationCandidateOut
+         * @description A reconciliation candidate and its claims.
+         */
+        ReconciliationCandidateOut: {
+            /** Id */
+            id: string;
+            /** Branch */
+            branch: string;
+            type: components["schemas"]["CandidateType"];
+            status: components["schemas"]["CandidateStatus"];
+            /**
+             * Kind
+             * @description Kind api name (null when the schema lost it).
+             */
+            kind: string | null;
+            /** Kind Id */
+            kind_id: string;
+            /** Keys */
+            keys: string[];
+            /**
+             * Attribute
+             * @description Attribute api name; null for duplicates.
+             */
+            attribute: string | null;
+            /** Attribute Id */
+            attribute_id: string | null;
+            /** Claims */
+            claims: components["schemas"]["ReconciliationClaimOut"][];
+            /**
+             * Claim Count
+             * @description Every distinct claim seen; the newest are listed.
+             */
+            claim_count: number;
+            /** Signals */
+            signals: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Proposal Id
+             * @description The Proposal that raised the candidate, or that a decision opened.
+             */
+            proposal_id: string | null;
+            /**
+             * Decision
+             * @description The last decision: choice, claim, policy, reason and the claims then.
+             */
+            decision: {
+                [key: string]: unknown;
+            } | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * ReconciliationChoice
+         * @enum {string}
+         */
+        ReconciliationChoice: "claim" | "keep_current" | "custom" | "policy" | "merge";
+        /**
+         * ReconciliationClaimOut
+         * @description One value and where it comes from (design 10.6).
+         */
+        ReconciliationClaimOut: {
+            /** Claim Id */
+            claim_id: string;
+            /** @description Masked when the caller is not cleared for it. */
+            value: components["schemas"]["JsonValue"];
+            /** Value Hash */
+            value_hash?: string | null;
+            /**
+             * Source
+             * @description Source identity: `source:`, `document:`, `principal:`...
+             */
+            source?: string | null;
+            /** Provenance Id */
+            provenance_id?: string | null;
+            /** Proposal Item */
+            proposal_item?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Evidence
+             * @description Document, chunk, offsets and quote of an extracted value.
+             */
+            evidence?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Valid From */
+            valid_from?: string | null;
+            /** Valid To */
+            valid_to?: string | null;
+            /** At */
+            at?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ReconciliationDecisionOut
+         * @description Where a decision left the candidate.
+         */
+        ReconciliationDecisionOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "resolved" | "proposed" | "undecided" | "dry_run" | "dismissed" | "reopened";
+            candidate: components["schemas"]["ReconciliationCandidateOut"];
+            /**
+             * Claim Id
+             * @description The claim chosen.
+             */
+            claim_id?: string | null;
+            /**
+             * Revision
+             * @description Revision the write committed.
+             */
+            revision?: string | null;
+            /**
+             * Proposal
+             * @description Proposal of a write that needs review (`proposed`).
+             */
+            proposal?: string | null;
+            /**
+             * Branch
+             * @description Branch written.
+             */
+            branch?: string | null;
+            /** Edits */
+            edits?: {
+                [key: string]: unknown;
+            }[];
+            /** Detail */
+            detail?: string | null;
+        };
+        /** ReconciliationFilterIn */
+        ReconciliationFilterIn: {
+            /** Branch */
+            branch?: string | null;
+            type?: components["schemas"]["CandidateType"] | null;
+            /** Kind */
+            kind?: string | null;
+            /** Attribute */
+            attribute?: string | null;
+            /** Source */
+            source?: string | null;
+        };
+        /**
+         * ReconciliationPolicy
+         * @enum {string}
+         */
+        ReconciliationPolicy: "authority" | "newest_wins" | "prefer_current" | "prefer_incoming";
+        /** ReconciliationReasonIn */
+        ReconciliationReasonIn: {
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * ReconciliationResolveIn
+         * @description A decision (design 10.6): `claim` (`claim_id`), `keep_current`, `custom` (`value`),
+         *     `policy` (`policy`) or, for duplicates, `merge` (`survivor`, `values`).
+         */
+        ReconciliationResolveIn: {
+            choice: components["schemas"]["ReconciliationChoice"];
+            /** Claim Id */
+            claim_id?: string | null;
+            value?: components["schemas"]["JsonValue"];
+            policy?: components["schemas"]["ReconciliationPolicy"] | null;
+            /**
+             * Survivor
+             * @description Key of the Record that stays.
+             */
+            survivor?: string | null;
+            /**
+             * Values
+             * @description Values to set on the survivor, by Attribute api name.
+             */
+            values?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+        };
+        /** ReconciliationSweepIn */
+        ReconciliationSweepIn: {
+            /**
+             * Branch
+             * @description Default: the default branch.
+             */
+            branch?: string | null;
+        };
+        /** ReconciliationSweepOut */
+        ReconciliationSweepOut: {
+            /** Job Id */
+            job_id: number;
+            /** Branch */
+            branch: string;
         };
         /** RecordAddress */
         RecordAddress: {
@@ -10896,7 +11330,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10978,7 +11412,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11055,7 +11489,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11136,7 +11570,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11213,7 +11647,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11294,7 +11728,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11377,7 +11811,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11462,7 +11896,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11544,7 +11978,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11625,7 +12059,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
+            /** @description Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -11644,6 +12078,577 @@ export interface operations {
                 };
             };
             /** @description The target branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_candidates_api_v1_domains__domain_id__reconciliation_get: {
+        parameters: {
+            query?: {
+                /** @description Default: the default branch. */
+                branch?: string | null;
+                type?: components["schemas"]["CandidateType"] | null;
+                status?: components["schemas"]["CandidateStatus"] | null;
+                /** @description Kind api name. */
+                kind?: string | null;
+                /** @description Attribute api name (with kind). */
+                attribute?: string | null;
+                /** @description Source identity of a claim, e.g. `source:src_...`. */
+                source?: string | null;
+                /** @description Page size. */
+                limit?: number | null;
+                /** @description Opaque page cursor. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_ReconciliationCandidateOut_"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationCandidateOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__resolution_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconciliationResolveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDecisionOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    dismiss_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__dismissal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconciliationReasonIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDecisionOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    reopen_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconciliationReasonIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDecisionOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_candidates_api_v1_domains__domain_id__reconciliation_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconciliationBulkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationBulkOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    queue_sweep_api_v1_domains__domain_id__reconciliation_sweeps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReconciliationSweepIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationSweepOut"];
+                };
+            };
+            /** @description Missing permission or clearance. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch or candidate not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request, or the value is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description The branch is locked by another writer. */
             503: {
                 headers: {
                     [name: string]: unknown;
