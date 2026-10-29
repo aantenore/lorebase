@@ -236,6 +236,10 @@ configured:
   setting of that name; default 0) requires approvals from assignees on protected branches. A
   Proposal whose Kinds have steward roles but too few assignees answers 409
   `stewards-unavailable` on merge: grant the role or lower the rule.
+- **Required roles.** `keeper.proposals.required_roles` (or the Domain setting of that name;
+  default empty: off) lists RBAC roles that must each approve a Proposal into a protected
+  branch: one approval from a principal holding the role, who may review it on the target. A
+  merge without one answers 409 `approvals-required` naming the missing roles.
 
 ## Document purge
 

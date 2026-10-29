@@ -2107,6 +2107,16 @@ export interface components {
              * @default false
              */
             stewards_unavailable: boolean;
+            /**
+             * Required Roles
+             * @description Roles that must each have approved (protection rule required_roles); null when the rule does not apply.
+             */
+            required_roles?: string[] | null;
+            /**
+             * Missing Roles
+             * @description Required roles without a counted approval yet, when the rule applies.
+             */
+            missing_roles?: string[] | null;
         };
         /**
          * AttemptOut

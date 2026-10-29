@@ -1417,7 +1417,8 @@ Responses always contain `status` (`committed`, `proposed`, `rejected`, `dry_run
 ### 10.3 Proposals as governance
 
 - Proposal checks: schema validity, merge preview (Conflicts count), size, required reviewers, CI-like custom checks (CEL predicates over the diff, for example "no deletion of more than 1% of Suppliers").
-- Branch protection rules per protected branch: required approvals count, required roles, allowed merge origins.
+- Branch protection rules for protected branches: required approvals count (`required_approvals`) and required roles (`required_roles`), set by the installation (`keeper.proposals`) and overridden per Domain by Domain settings of the same names. `required_roles: [role, ...]` (default none) needs, for each listed RBAC role, at least one counted approval from a principal holding the role through a grant covering the Domain (or a Kind the Proposal touches) who may review the Proposal on the target, as steward assignees are found (10.7); it does not raise the approvals count. A merge missing a role answers 409 `approvals-required` naming the roles (`missing_roles`), and the approvals check lists `required_roles` and `missing_roles`.
+- Not done yet: allowed merge origins per protected branch (a rule on the Proposal's origin, such as only `source_sync` or `manual`), and rules that differ between two protected branches of one Domain; the rules above apply to every protected branch of the Domain.
 - Self-approval is configurable and off by default for protected branches.
 - `required_approvals_from_stewards` (protection rule, default 0): approvals that must come from the Proposal's assignees (10.7), counted among the approvals; the Proposal needs `max(required_approvals, required_approvals_from_stewards)` approvals in all.
 
@@ -1907,6 +1908,7 @@ keeper:
     max_source_key_chars: 1024     # implemented
   proposals:
     required_approvals_from_stewards: 0  # implemented; Domain setting of the same name
+    required_roles: []             # implemented; Domain setting of the same name (10.3)
   stewards:                        # implemented
     max_assignees_listed: 50
     max_grants_scanned: 10000      # grants of a Domain read to find assignees

@@ -154,9 +154,9 @@ class OperationSettings(SectionModel):
 class ProposalSettings(SectionModel):
     """Proposals, reviews and merges (design 6.10, 10.3).
 
-    A Domain overrides `required_approvals` and `required_approvals_from_stewards` with its
-    settings of the same names; its `merge_policy` setting holds the merge policy options of
-    new Proposals.
+    A Domain overrides `required_approvals`, `required_approvals_from_stewards` and
+    `required_roles` with its settings of the same names; its `merge_policy` setting holds the
+    merge policy options of new Proposals.
     """
 
     required_approvals: int = Field(
@@ -169,6 +169,12 @@ class ProposalSettings(SectionModel):
         ge=0,
         description="Of those, approvals that must come from the Proposal's assignees (design "
         "10.7); the Proposal needs the larger of the two in all. 0 turns the rule off.",
+    )
+    required_roles: list[str] = Field(
+        default_factory=list,
+        description="RBAC roles that must each have approved a Proposal before it merges into "
+        "a protected branch: one counted approval from a principal holding the role who may "
+        "review the Proposal. Does not raise the approvals count; empty turns the rule off.",
     )
     allow_self_approval: bool = Field(
         default=False,

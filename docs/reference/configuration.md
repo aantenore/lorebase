@@ -465,12 +465,13 @@ Budget of one Operation expression (ExprLimits)
 
 ### `keeper.proposals`
 
-A Domain overrides required_approvals and required_approvals_from_stewards with its own settings of those names; its `merge_policy` setting holds the merge policy options of new Proposals
+A Domain overrides required_approvals, required_approvals_from_stewards and required_roles with its own settings of those names; its `merge_policy` setting holds the merge policy options of new Proposals
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `keeper.proposals.required_approvals` | `1` | approvals needed to merge into a protected branch |
 | `keeper.proposals.required_approvals_from_stewards` | `0` | of those, approvals from the Proposal's assignees (stewards, design 10.7); the larger of the two is needed |
+| `keeper.proposals.required_roles` | `[]` | roles that must each have approved (one approval from a holder who may review the Proposal); also a Domain setting |
 | `keeper.proposals.allow_self_approval` | `false` | authors may approve their own Proposals into protected branches |
 | `keeper.proposals.changes_requested_blocks` | `true` | an outstanding request_changes review blocks such merges |
 | `keeper.proposals.auto_close_source_branch` | `false` | delete the source branch after the merge (never the default or a protected branch) |
