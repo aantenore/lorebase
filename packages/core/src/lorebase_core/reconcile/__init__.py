@@ -32,6 +32,7 @@ from lorebase_core.reconcile.claims import (
 )
 from lorebase_core.reconcile.detect import (
     EVIDENCE_GONE_SIGNAL,
+    SOURCE_UNSEEN_SIGNAL,
     DuplicateRule,
     Outcome,
     StaleReason,
@@ -39,6 +40,7 @@ from lorebase_core.reconcile.detect import (
     duplicate_draft,
     evidence_gone_verdict,
     pairs,
+    source_unseen_verdict,
     stale_reasons,
     stale_verdict,
     value_verdict,
@@ -69,6 +71,7 @@ from lorebase_core.reconcile.options import (
 __all__ = [
     "CANDIDATE_ID_PREFIX",
     "EVIDENCE_GONE_SIGNAL",
+    "SOURCE_UNSEEN_SIGNAL",
     "STAGE_ORDER",
     "TRANSITIONS",
     "CandidateDraft",
@@ -111,6 +114,7 @@ __all__ = [
     "pairs",
     "parse_quantity",
     "source_identity",
+    "source_unseen_verdict",
     "stale_reasons",
     "stale_verdict",
     "value_hash",

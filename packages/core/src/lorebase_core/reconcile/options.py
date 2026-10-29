@@ -133,12 +133,18 @@ class SemanticOptions(_Options):
 
 
 class StaleOptions(_Options):
-    """``stale`` candidates: values older than a maximum age."""
+    """``stale`` candidates: values older than a maximum age, and Records an ``incremental``
+    Source has not seen within its ``stale_after``."""
 
     max_age: str | None = Field(
         default=None,
         description="ISO 8601 duration (days to seconds, e.g. P30D); null turns the age check "
         "off. Kinds and Attributes override it in the Domain settings.",
+    )
+    source_unseen: bool = Field(
+        default=True,
+        description="Raise source_unseen candidates for Records an incremental Source has not "
+        "read within its stale_after (a Source setting; null there turns it off per Source).",
     )
 
     @field_validator("max_age")

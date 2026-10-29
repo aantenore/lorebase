@@ -1,6 +1,6 @@
 """The `reconcile_sweep` job (design 10.6, trigger 3): one pass over one branch of a Domain.
 
-A pass has two phases, each resumable:
+A pass has three phases, each resumable:
 
 1. **Open candidates** of the branch, newest first: one whose disagreement left the data is
    marked `obsolete` with the reason: a Record it names was deleted (`record_deleted`), its
@@ -15,6 +15,13 @@ A pass has two phases, each resumable:
    values once per Kind, similar titles per Record and, with the semantic stage, stored Record
    vectors at least `semantic.duplicate_threshold` similar; at most
    `duplicates.max_pairs_per_kind` pairs per Kind and job).
+3. **Unseen Records** of each ``incremental`` Source with a `stale_after` (design 9.1), in
+   `(source, key)` order: Records the Source last wrote to the branch, not deleted, still on
+   it, that no run of the Source has read upstream for longer than `stale_after` (its
+   `last_seen_at`, else its last state advance) raise a `stale` candidate `source_unseen`
+   (`stale.source_unseen`, default on). Nothing is deleted. In phase 1 such a candidate is
+   `obsolete` once the Record is deleted (`record_deleted`), the Source saw it again
+   (`source_seen`) or the check no longer applies to the Source (`source_unseen_off`).
 
 Work is counted in candidates examined, Records read, history changes read and title
 statements run; past `sweep_max_changes_per_job` the job stops after the current page and
@@ -29,18 +36,20 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lorebase_core.model import Kind, Schema
+from lorebase_core.model import ElementStatus, Kind, Schema, Source, SyncMode
 from lorebase_core.reconcile import (
+    SOURCE_UNSEEN_SIGNAL,
     CandidateStatus,
     CandidateType,
     Claim,
     ReconcileOptions,
     Stage,
+    source_unseen_verdict,
     stale_verdict,
 )
 from lorebase_scribe.reconcile.detector import (
@@ -61,6 +70,7 @@ from lorebase_store.repositories import (
     MaterializedRepository,
     ProposalItemRepository,
     ProposalRepository,
+    SourceWrittenRepository,
     scope_to_domain,
 )
 from lorebase_store.repositories.reconciliation_candidates import (
@@ -74,6 +84,8 @@ log = logging.getLogger("lorebase.scribe.reconcile")
 
 CANDIDATES_PHASE = "candidates"
 RECORDS_PHASE = "records"
+SOURCES_PHASE = "sources"
+_PHASES = (CANDIDATES_PHASE, RECORDS_PHASE, SOURCES_PHASE)
 
 
 class SweepError(ValueError):
@@ -234,9 +246,12 @@ class ReconcileSweep:
                     None if position is None else (datetime.fromisoformat(position[0]), position[1])
                 )
                 report.resume = await self._candidates(detector, schema, report, after)
+                phase, position = RECORDS_PHASE, None
+            if report.resume is None and phase == RECORDS_PHASE:
+                report.resume = await self._records(detector, schema, report, position)
                 position = None
             if report.resume is None:
-                report.resume = await self._records(detector, schema, report, position)
+                report.resume = await self._unseen(detector, schema, report, position)
             span.set_attribute("lorebase.complete", report.complete)
         if report.complete:
             async with self._sessions() as session, session.begin():
@@ -312,10 +327,12 @@ class ReconcileSweep:
         if row.type == CandidateType.DUPLICATE.value:
             found = await rows.records(kind.id, row.keys)
             return None if len(found) == len(set(row.keys)) else "record_deleted"
+        key = row.keys[0]
+        if row.type == CandidateType.STALE.value and SOURCE_UNSEEN_SIGNAL in (row.signals or {}):
+            return await self._still_unseen(session, detector, schema, report, row, kind)
         attribute = kind.attributes.get(row.attribute_id or "")
         if attribute is None:
             return "attribute_removed"
-        key = row.keys[0]
         if row.type == CandidateType.STALE.value:
             current = await current_claims(
                 rows,
@@ -340,6 +357,38 @@ class ReconcileSweep:
         if verdict.raised:
             return None
         return dropped or "claims_converged"
+
+    async def _still_unseen(
+        self,
+        session: AsyncSession,
+        detector: Detector,
+        schema: Schema,
+        report: SweepReport,
+        row: CandidateRow,
+        kind: Kind,
+    ) -> str | None:
+        """Why a `source_unseen` candidate no longer holds, if it does not (module doc)."""
+        key = row.keys[0]
+        writes = self._runtime.settings.writes
+        rows = MaterializedRepository(session, report.domain, report.branch, writes=writes)
+        if not await rows.records(kind.id, [key]):
+            return "record_deleted"
+        signal = row.signals.get(SOURCE_UNSEEN_SIGNAL)
+        source_id = signal.get("source") if isinstance(signal, Mapping) else None
+        source = schema.sources.get(str(source_id)) if source_id is not None else None
+        if source is None or _stale_after(source, detector.options) is None:
+            return "source_unseen_off"
+        assert isinstance(signal, Mapping)
+        state = (
+            await SourceWrittenRepository(session, report.domain, writes=writes).current(
+                source.id, report.branch, kind.id, [key]
+            )
+        ).get(key)
+        if state is None or state.deleted:
+            return "record_deleted"
+        if state.last_seen_run != signal.get("last_seen_run"):
+            return "source_seen"
+        return None
 
     # Phase 2: Records ---------------------------------------------------------------------------
 
@@ -488,12 +537,103 @@ class ReconcileSweep:
                 detector.collect(verdict, aging[attribute_id], raised)
         return raised, steps
 
+    # Phase 3: Records their Source has not seen ---------------------------------------------
+
+    async def _unseen(
+        self,
+        detector: Detector,
+        schema: Schema,
+        report: SweepReport,
+        position: tuple[str, str] | None,
+    ) -> list[str] | None:
+        if not detector.options.enabled:
+            return None
+        sources = sorted(
+            (
+                (source, delta)
+                for source in schema.sources.values()
+                if (delta := _stale_after(source, detector.options)) is not None
+                and source.target_kind in schema.kinds
+            ),
+            key=lambda found: found[0].id,
+        )
+        if not sources:
+            return None
+        if position is None and self._spent(report):
+            return [SOURCES_PHASE, "", ""]
+        batch = self._runtime.settings.materialize.read_batch_rows
+        writes = self._runtime.settings.writes
+        now = self._clock()
+        for source, delta in sources:
+            if position is not None and position[0] and source.id < position[0]:
+                continue
+            after = (
+                (position[1] or None) if position is not None and source.id == position[0] else None
+            )
+            position = None
+            kind = schema.kinds[source.target_kind]
+            stale_after = source.stale_after or ""
+            while True:
+                async with self._sessions() as session, session.begin():
+                    await scope_to_domain(session, report.domain)
+                    page = await SourceWrittenRepository(
+                        session, report.domain, writes=writes
+                    ).unseen(
+                        source.id,
+                        report.branch,
+                        kind.id,
+                        before=now - delta,
+                        after=after,
+                        limit=batch,
+                    )
+                    if not page:
+                        break
+                    present = await MaterializedRepository(
+                        session, report.domain, report.branch, writes=writes
+                    ).records(kind.id, [row.key for row in page])
+                    raised: list[Raised] = []
+                    for row in page:
+                        seen_at = row.seen_at
+                        if row.key not in present or seen_at is None:
+                            continue
+                        verdict = source_unseen_verdict(
+                            branch=report.branch,
+                            kind_id=kind.id,
+                            key=row.key,
+                            source_id=source.id,
+                            last_seen_run=row.last_seen_run,
+                            last_seen_at=seen_at,
+                            stale_after=stale_after,
+                            now=now,
+                            max_age=delta,
+                        )
+                        detector.collect(verdict, None, raised)
+                    report.counts.merge(await detector.store(session, report.domain, raised))
+                    report.work += len(page)
+                after = page[-1].key
+                if len(page) < batch:
+                    break
+                if self._spent(report):
+                    return [SOURCES_PHASE, source.id, after]
+        return None
+
+
+def _stale_after(source: Source, options: ReconcileOptions) -> timedelta | None:
+    """The `stale_after` the unseen check applies to `source`, if it applies (module doc)."""
+    if (
+        not options.stale.source_unseen
+        or source.status is ElementStatus.DRAFT
+        or source.sync_mode is not SyncMode.INCREMENTAL
+    ):
+        return None
+    return source.stale_after_delta
+
 
 def _cursor(resume: Sequence[str] | None) -> tuple[str, Any]:
     """The phase and position a continuation starts from."""
     if not resume:
         return CANDIDATES_PHASE, None
-    if len(resume) != 3 or resume[0] not in (CANDIDATES_PHASE, RECORDS_PHASE):
+    if len(resume) != 3 or resume[0] not in _PHASES:
         raise SweepError("`resume` must be [phase, position, position]")
     if resume[0] == CANDIDATES_PHASE:
         try:
@@ -506,6 +646,7 @@ def _cursor(resume: Sequence[str] | None) -> tuple[str, Any]:
 __all__ = [
     "CANDIDATES_PHASE",
     "RECORDS_PHASE",
+    "SOURCES_PHASE",
     "ReconcileSweep",
     "SweepError",
     "SweepReport",

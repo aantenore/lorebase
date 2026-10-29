@@ -297,6 +297,7 @@ function sourceToDocument(
     out['target_branch_policy'] = source.target_branch_policy;
   }
   if (source.local_edits !== undefined) out['local_edits'] = source.local_edits;
+  if (source.stale_after !== undefined) out['stale_after'] = source.stale_after;
   for (const [key, value] of Object.entries(source.extra ?? {})) {
     if (!(key in out)) out[key] = value;
   }
@@ -998,6 +999,7 @@ const SOURCE_DOCUMENT_KEYS = [
   'schedule',
   'target_branch_policy',
   'local_edits',
+  'stale_after',
 ];
 
 function sourceFromDocument(
@@ -1061,6 +1063,7 @@ function sourceFromDocument(
   const watermark = reader.optionalString(value, 'watermark_column', path);
   const tombstone = reader.optionalString(value, 'tombstone_column', path);
   const localEdits = reader.optionalString(value, 'local_edits', path);
+  const staleAfter = reader.optionalString(value, 'stale_after', path);
   const branchTemplate = reader.optionalString(
     policy,
     'branch_template',
@@ -1102,6 +1105,7 @@ function sourceFromDocument(
     ...(localEdits === null
       ? {}
       : { local_edits: localEdits as NonNullable<Source['local_edits']> }),
+    ...(staleAfter === null ? {} : { stale_after: staleAfter }),
     schedule: reader.optionalString(value, 'schedule', path),
     target_branch_policy: {
       ...(branchTemplate === null ? {} : { branch_template: branchTemplate }),

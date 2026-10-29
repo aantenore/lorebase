@@ -63,6 +63,9 @@ class SourceWritten(Base):
     deleted: Mapped[bool] = mapped_column(server_default=text("false"))
     run_id: Mapped[str]
     updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    #: The run of an incremental Source that last read the element upstream, and when (9.1).
+    last_seen_run: Mapped[str | None]
+    last_seen_at: Mapped[datetime | None]
 
 
 class SourceWrittenPending(Base):

@@ -16,7 +16,9 @@ caller to the drafts these functions return.
 - **Stale.** A current value older than ``stale.max_age``, whose period has ended, or whose
   source identity has a newer pending claim; or a value whose evidence quote is gone from a
   new version of its document, or whose document was retired (``evidence_gone``, design 9.2:
-  the caller checks the quote, `evidence_gone_verdict` builds the candidate).
+  the caller checks the quote, `evidence_gone_verdict` builds the candidate); or a Record an
+  ``incremental`` Source owns and no run of it has read upstream for longer than the Source's
+  ``stale_after`` (``source_unseen``, design 9.1: `source_unseen_verdict`, never a deletion).
 - **Duplicates** (stage a). Two Records of one Kind that look alike: one candidate per pair of
   keys, whatever rule found it (the rules are recorded in ``signals``).
 """
@@ -86,6 +88,7 @@ class StaleReason(StrEnum):
     PERIOD_ENDED = "period_ended"
     PENDING_CLAIM = "pending_claim"
     EVIDENCE_GONE = "evidence_gone"
+    SOURCE_UNSEEN = "source_unseen"
 
 
 def _groups_disagree(groups: Sequence[Sequence[Claim]]) -> bool:
@@ -238,6 +241,47 @@ def evidence_gone_verdict(
 EVIDENCE_GONE_SIGNAL = StaleReason.EVIDENCE_GONE.value
 """Signal of a ``stale`` candidate raised by a document version check."""
 
+SOURCE_UNSEEN_SIGNAL = StaleReason.SOURCE_UNSEEN.value
+"""Signal of a ``stale`` candidate for a Record its Source has not seen."""
+
+
+def source_unseen_verdict(
+    *,
+    branch: str,
+    kind_id: str,
+    key: str,
+    source_id: str,
+    last_seen_run: str | None,
+    last_seen_at: datetime,
+    stale_after: str,
+    now: datetime,
+    max_age: timedelta,
+) -> Verdict:
+    """A ``stale`` candidate for the Record `key` of an ``incremental`` Source when no run of
+    it has read the Record upstream for longer than `max_age` (the Source's `stale_after`):
+    the Record may have been removed upstream, which such a Source cannot tell. It names no
+    Attribute and holds no claim; the signal names the Source, the last run that saw the Record
+    (`None` when only its last state advance is known) and when. Its fingerprint is scoped by
+    Source and last run, so a dismissed candidate stays dismissed while the Record stays
+    unseen, and a Record seen again and then lost again is raised anew."""
+    if now - last_seen_at <= max_age:
+        return AGREE
+    signal: dict[str, JsonValue] = {
+        "source": source_id,
+        "last_seen_run": last_seen_run,
+        "last_seen_at": last_seen_at.isoformat(),
+        "stale_after": stale_after,
+    }
+    draft = CandidateDraft(
+        type=CandidateType.STALE,
+        branch=branch,
+        kind_id=kind_id,
+        keys=(key,),
+        signals={"stale": [StaleReason.SOURCE_UNSEEN.value], SOURCE_UNSEEN_SIGNAL: signal},
+        scope=f"{SOURCE_UNSEEN_SIGNAL}:{source_id}:{last_seen_run or ''}",
+    )
+    return Verdict(Outcome.RAISED, draft)
+
 
 def duplicate_draft(
     *,
@@ -283,6 +327,7 @@ __all__ = [
     "AGREE",
     "EVIDENCE_GONE_SIGNAL",
     "FILTERED",
+    "SOURCE_UNSEEN_SIGNAL",
     "DuplicateRule",
     "Outcome",
     "StaleReason",
@@ -290,6 +335,7 @@ __all__ = [
     "duplicate_draft",
     "evidence_gone_verdict",
     "pairs",
+    "source_unseen_verdict",
     "stale_reasons",
     "stale_verdict",
     "value_verdict",

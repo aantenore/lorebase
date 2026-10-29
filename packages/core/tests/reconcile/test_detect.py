@@ -11,6 +11,7 @@ from lorebase_core.model import ExtractionOrigin, PeriodMapping, ProvenanceEntry
 from lorebase_core.model.source import AttributeMapping
 from lorebase_core.reconcile import (
     EVIDENCE_GONE_SIGNAL,
+    SOURCE_UNSEEN_SIGNAL,
     CandidateType,
     Claim,
     DuplicateRule,
@@ -23,6 +24,7 @@ from lorebase_core.reconcile import (
     duplicate_draft,
     evidence_gone_verdict,
     pairs,
+    source_unseen_verdict,
     stale_reasons,
     stale_verdict,
     value_verdict,
@@ -253,3 +255,57 @@ def test_evidence_gone_names_both_versions_and_carries_the_old_passage() -> None
     )
     assert aged.draft is not None
     assert aged.draft.fingerprint == draft.fingerprint
+
+
+def _unseen(**changes: Any) -> Verdict:
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    arguments: dict[str, Any] = {
+        "branch": "main",
+        "kind_id": "knd_1",
+        "key": "K-1",
+        "source_id": "src_a",
+        "last_seen_run": "run_1",
+        "last_seen_at": now - timedelta(days=3),
+        "stale_after": "P1D",
+        "now": now,
+        "max_age": timedelta(days=1),
+    }
+    return source_unseen_verdict(**{**arguments, **changes})
+
+
+def test_a_record_unseen_past_stale_after_is_stale_without_claims() -> None:
+    verdict = _unseen()
+    assert verdict.raised
+    draft = verdict.draft
+    assert draft is not None
+    assert draft.type is CandidateType.STALE
+    assert draft.attribute_id is None
+    assert draft.claims == ()
+    assert draft.signals["stale"] == [StaleReason.SOURCE_UNSEEN.value]
+    signal = draft.signals[SOURCE_UNSEEN_SIGNAL]
+    assert isinstance(signal, dict)
+    assert signal["source"] == "src_a"
+    assert signal["last_seen_run"] == "run_1"
+
+
+def test_a_record_seen_within_stale_after_raises_nothing() -> None:
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    assert _unseen(last_seen_at=now - timedelta(hours=23), now=now).outcome is Outcome.AGREE
+
+
+def test_unseen_fingerprints_are_scoped_by_source_and_last_run() -> None:
+    def fingerprint(**changes: Any) -> bytes:
+        draft = _unseen(**changes).draft
+        assert draft is not None
+        return draft.fingerprint
+
+    base = fingerprint()
+    assert fingerprint(now=datetime(2026, 4, 1, tzinfo=UTC)) == base  # one candidate per gap
+    assert fingerprint(source_id="src_b") != base
+    assert fingerprint(last_seen_run="run_2") != base
+    assert fingerprint(last_seen_run=None) != base
+
+
+def test_the_unseen_check_is_on_by_default() -> None:
+    assert StaleOptions().source_unseen is True
+    assert StaleOptions(source_unseen=False).source_unseen is False

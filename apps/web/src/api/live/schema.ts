@@ -348,6 +348,7 @@ const SOURCE_KEYS = [
   'schedule',
   'target_branch_policy',
   'local_edits',
+  'stale_after',
 ] as const;
 
 function source(raw: Raw): Source {
@@ -363,6 +364,7 @@ function source(raw: Raw): Source {
   const separator = strOrNull(raw['flatten_separator']);
   const http = isRaw(raw['http']) ? raw['http'] : undefined;
   const localEdits = strOrNull(raw['local_edits']);
+  const staleAfter = strOrNull(raw['stale_after']);
   const extra = omit(raw, SOURCE_KEYS);
   return {
     id: str(raw['id']),
@@ -395,6 +397,7 @@ function source(raw: Raw): Source {
     ...(localEdits === null
       ? {}
       : { local_edits: localEdits as NonNullable<Source['local_edits']> }),
+    ...(staleAfter === null ? {} : { stale_after: staleAfter }),
     schedule: strOrNull(raw['schedule']),
     target_branch_policy: {
       ...(typeof policy['branch_template'] === 'string'

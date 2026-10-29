@@ -81,7 +81,7 @@ DOMAIN_MEMBERS: Mapping[str, frozenset[str] | None] = {
             "duplicate_threshold",
         }
     ),
-    "stale": frozenset({"max_age"}),
+    "stale": frozenset({"max_age", "source_unseen"}),
 }
 """What a Domain's `reconciliation` setting may override: whole members (None) or the listed
 members of a section. Files (`normalize.units_file`), work limits (`sweep_*`,

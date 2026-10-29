@@ -79,6 +79,8 @@ export const reconcile = {
       negation: 'The values differ by a negation word.',
       equivalent: 'The texts read as paraphrases of each other.',
       periods: 'The claims have validity periods that do not overlap.',
+      source_unseen:
+        'Its incremental Source has not read this Record upstream within stale_after: it may be gone there. Keep the current value, dismiss, or delete the Record.',
     } as Readonly<Record<string, string>>,
   },
 

@@ -213,6 +213,12 @@ def test_operation_with_expressions_is_valid_when_enabled() -> None:
             lambda s: replace_attribute(s, SUPPLIER, RISK_SCORE, default="50"),
             id="valid-default",
         ),
+        pytest.param(
+            lambda s: set_source(
+                s, sync_mode=SyncMode.INCREMENTAL, watermark_column="updated", stale_after="P30D"
+            ),
+            id="incremental-source-with-stale-after",
+        ),
     ],
 )
 def test_valid_variations(mutation: Mutation) -> None:
@@ -743,6 +749,28 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
     (
         "source-incremental-without-watermark",
         lambda s: set_source(s, sync_mode=SyncMode.INCREMENTAL),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-stale-after-on-snapshot",
+        lambda s: set_source(s, stale_after="P30D"),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-stale-after-not-a-duration",
+        lambda s: set_source(
+            s, sync_mode=SyncMode.INCREMENTAL, watermark_column="updated", stale_after="monthly"
+        ),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
+    (
+        "source-stale-after-zero",
+        lambda s: set_source(
+            s, sync_mode=SyncMode.INCREMENTAL, watermark_column="updated", stale_after="PT0S"
+        ),
         {C.SCHEMA_SOURCE_INVALID},
         None,
     ),

@@ -701,6 +701,16 @@ function Sync({
         change={change}
       />
       <TextField
+        label={t.sync.staleAfter}
+        hint={mode === 'incremental' ? t.sync.staleAfterHint : t.sync.staleAfterIncremental}
+        placeholder={t.sync.staleAfterPlaceholder}
+        source={source}
+        field="stale_after"
+        path={path}
+        issues={issues}
+        change={change}
+      />
+      <TextField
         label={t.sync.schedule}
         hint={t.sync.scheduleHint}
         placeholder={t.sync.schedulePlaceholder}

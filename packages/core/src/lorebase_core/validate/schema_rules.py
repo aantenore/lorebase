@@ -1270,6 +1270,22 @@ class _Checker:
                 (*base, "watermark_column"),
                 "incremental Sources need a watermark column",
             )
+        if source.stale_after is not None:
+            delta = source.stale_after_delta
+            if delta is None or delta.total_seconds() <= 0:
+                self.add(
+                    IssueCode.SCHEMA_SOURCE_INVALID,
+                    (*base, "stale_after"),
+                    f"stale_after {source.stale_after!r} is not a positive ISO 8601 duration "
+                    "(days to seconds, e.g. P30D)",
+                )
+            elif source.sync_mode is not SyncMode.INCREMENTAL:
+                self.add(
+                    IssueCode.SCHEMA_SOURCE_INVALID,
+                    (*base, "stale_after"),
+                    "stale_after applies to incremental Sources only (a snapshot run removes "
+                    "what upstream no longer holds)",
+                )
         kind = self.schema.kinds.get(source.target_kind)
         if kind is None:
             self.add(

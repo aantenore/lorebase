@@ -1353,3 +1353,5 @@ scribe:
     stale:
       max_age: null              # ISO 8601 duration (e.g. P30D); null: off. Per Kind and
                                  # Attribute in the Domain settings
+      source_unseen: true        # raise Records an incremental Source has not read within its
+                                 # stale_after (a Source setting in the schema; null there: off)

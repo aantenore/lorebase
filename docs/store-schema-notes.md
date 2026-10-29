@@ -49,6 +49,9 @@ difference).
   `schema_suggestions` on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`,
   `source_written (domain_id, source_id, target_branch, element, key)` and
   `source_written_pending (domain_id, proposal_id, element, key)` (revision `0040`).
+- `source_written.last_seen_run` and `last_seen_at` (revision `0043`, design 9.1 "Incremental
+  Sources"): nullable, additive; readers fall back to `updated_at`. No index: the sweep pages a
+  Source's rows by the primary key and filters on the sighting time.
 - Document identity (revision `0041`, design 9.2 "Document versions and lifecycle"):
   `documents.status` is `text` with a check (`active`, `superseded`, `retired`, `purged`), not an
   enum, like other lifecycle columns that may grow. Unique `(domain_id, sha256) WHERE source_key

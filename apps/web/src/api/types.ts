@@ -401,6 +401,8 @@ export interface Source {
   target_branch_policy: { branch_template?: string; merge_policy?: SourceMergePolicy };
   /** Absent means `review`. */
   local_edits?: LocalEdits;
+  /** Incremental Sources: ISO 8601 duration after which an unseen Record is flagged; absent: off. */
+  stale_after?: string;
   /** Keys the view does not model, kept verbatim so a save never drops them. */
   extra?: Record<string, unknown>;
 }
