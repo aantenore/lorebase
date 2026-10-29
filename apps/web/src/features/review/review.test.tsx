@@ -1,6 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { messages } from '@/messages';
+import type { KeeperApi } from '@/api';
+import { createMockApi, asRemote } from '@/api/mock/adapter';
+import { testConfig } from '@/config/env';
 import { renderApp } from '@/test/render';
 
 describe('Review', () => {
@@ -178,9 +181,164 @@ describe('Review merge attempt', () => {
     expect(await screen.findByText('1 of 6 resolved')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Apply resolutions' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Apply with open Conflicts' });
+    expect(dialog).toHaveTextContent('5 Conflicts are still open');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply anyway' }));
     expect(await screen.findByText(/Merge run: 5 Conflicts remain/)).toBeInTheDocument();
     expect(screen.getByText('1 of 6 resolved')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Merged Revision' })).not.toBeInTheDocument();
+  });
+
+  it('does not apply when the confirmation about open Conflicts is cancelled', async () => {
+    const { user } = await openRiskProposal();
+    await user.click(screen.getByRole('button', { name: 'Apply resolutions' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Apply with open Conflicts' });
+    expect(dialog).toHaveTextContent('6 Conflicts are still open');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Merge run:/)).not.toBeInTheDocument();
+  });
+
+  it('opens the next open Conflict after a save and names the Branches in the headers', async () => {
+    const { user } = await openRiskProposal();
+    expect(screen.getAllByRole('columnheader', { name: /^Ours \(.+\)$/ }).length).toBeGreaterThan(
+      0,
+    );
+
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    await user.click(screen.getByRole('button', { name: 'Save resolution' }));
+    expect(await screen.findByText('1 of 6 resolved')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: /^Conflict DV2 Plant\/MNZ/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('drives the resolver from the keyboard', async () => {
+    const { user } = await openRiskProposal();
+    await user.keyboard('t');
+    expect(screen.getByRole('radio', { name: 'Take theirs' })).toBeChecked();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('1 of 6 resolved')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('region', { name: /^Conflict DV2 Plant\/MNZ/ }),
+    ).toBeInTheDocument();
+    await user.keyboard('n');
+    expect(
+      await screen.findByRole('region', { name: /^Conflict SC1 Supplier/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not save on Enter pressed in the list', async () => {
+    const { user, list } = await openRiskProposal();
+    await user.keyboard('t');
+    list.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByText('0 of 6 resolved')).toBeInTheDocument();
+    await user.keyboard('j');
+    expect(screen.queryByRole('dialog', { name: 'Unsaved resolution' })).toBeInTheDocument();
+  });
+
+  it('keeps the Conflict the person moved to while a save is in flight', async () => {
+    const mock = asRemote(createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }), 0);
+    const api: KeeperApi = {
+      ...mock,
+      conflicts: {
+        ...mock.conflicts,
+        resolve: async (...args) => {
+          await new Promise((done) => setTimeout(done, 150));
+          return mock.conflicts.resolve(...args);
+        },
+      },
+    };
+    const user = userEvent.setup();
+    renderApp('/supply/review/41', testConfig(), api);
+    await screen.findByRole('listbox', { name: 'Conflicts' });
+
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    await user.click(screen.getByRole('button', { name: 'Save resolution' }));
+    await user.click(optionIn('XS5'));
+    await user.click(
+      within(await screen.findByRole('dialog', { name: 'Unsaved resolution' })).getByRole(
+        'button',
+        {
+          name: 'Discard and continue',
+        },
+      ),
+    );
+    expect(await screen.findByText('1 of 6 resolved')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /^Conflict XS5/ })).toBeInTheDocument();
+  });
+
+  it('shows a bulk resolution in the open resolver without calling it unsaved', async () => {
+    const { user } = await openRiskProposal();
+    await user.selectOptions(screen.getByLabelText('Bulk choice'), 'ours');
+    await user.click(screen.getByRole('button', { name: /^Apply "Take ours" to \d+ open$/ }));
+    expect(await screen.findByText('resolved: ours')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Take ours' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Update resolution' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply resolutions' }));
+    expect(await screen.findByRole('dialog')).not.toHaveTextContent('not saved');
+  });
+
+  it('bulk-resolves only the open Conflicts and counts what it sent', async () => {
+    const { user } = await openRiskProposal();
+    await user.click(screen.getByRole('radio', { name: 'Take theirs' }));
+    await user.click(screen.getByRole('button', { name: 'Save resolution' }));
+    expect(await screen.findByText('1 of 6 resolved')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Bulk choice'), 'ours');
+    const button = screen.getByRole('button', { name: /^Apply "Take ours" to \d+ open$/ });
+    const sent = /to (\d+) open/.exec(button.textContent)?.[1] ?? '';
+    await user.click(button);
+    expect(await screen.findByText(`${sent} resolutions stored.`)).toBeInTheDocument();
+    expect(within(optionIn('DV1')).getByText('theirs')).toBeInTheDocument();
+  });
+
+  it('mentions unsaved changes when applying', async () => {
+    const { user } = await openRiskProposal();
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    await user.click(screen.getByRole('button', { name: 'Apply resolutions' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('changes that are not saved');
+  });
+
+  it('keeps the filter when leaving an unsaved Conflict is cancelled', async () => {
+    const { user } = await openRiskProposal();
+    await user.selectOptions(screen.getByLabelText(messages.review.filters.type), 'DV1');
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    await user.click(screen.getByRole('button', { name: 'Next open Conflict' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep editing' }),
+    );
+    expect(screen.getByLabelText(messages.review.filters.type)).toHaveValue('DV1');
+  });
+
+  it('asks before leaving a Conflict with unsaved changes', async () => {
+    const { user } = await openRiskProposal();
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    await user.click(optionIn('DV2'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Unsaved resolution' });
+    await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByRole('radio', { name: 'Take ours' })).toBeChecked();
+
+    await user.click(optionIn('DV2'));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Discard and continue',
+      }),
+    );
+    expect(
+      await screen.findByRole('region', { name: /^Conflict DV2 Plant\/MNZ/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('labels the bulk choice like the resolver does', async () => {
+    const { user } = await openRiskProposal();
+    await user.selectOptions(screen.getByLabelText('Bulk choice'), 'restore');
+    expect(
+      screen.getByRole('button', { name: 'Apply "Restore the Record" to 1 open' }),
+    ).toBeInTheDocument();
   });
 
   it('resolves every Conflict, re-runs the merge and summarizes the merged Revision', async () => {
@@ -206,7 +364,7 @@ describe('Review merge attempt', () => {
 
     // XS9: a bulk choice that only the Conflicts accepting it receive.
     await user.selectOptions(screen.getByLabelText('Bulk choice'), 'restore');
-    await user.click(screen.getByRole('button', { name: 'Apply restore to 1 open' }));
+    await user.click(screen.getByRole('button', { name: 'Apply "Restore the Record" to 1 open' }));
     await saved(4);
 
     // XS4: one value for the whole group.

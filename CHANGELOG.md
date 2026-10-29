@@ -4,10 +4,11 @@ What changed in each release, newest first. The notes are written for the person
 
 ## Unreleased
 
-Release automation and documentation only; no change to the packages' behavior.
+Release automation, documentation and the web app's Conflict resolver; no change to the packages' behavior.
 
 ### Changed
 
+- Web app, Conflict resolver: string values that moved from the base are shown word by word (added and removed words marked, with text for screen readers), and the Ours and Theirs columns carry the names of the target and source Branches. In the custom editor, "Copy base", "Copy ours" and "Copy theirs" load a side into the field. Saving a resolution opens the next open Conflict. Outside text fields `o`, `t` and `b` pick a side, `e` opens the custom editor, `s` or Enter saves and `n` moves to the next open Conflict. Leaving a Conflict with unsaved changes asks first, and "Apply resolutions" asks when Conflicts are still open or the one on screen is unsaved. The bulk choice uses the same names as the resolver ("Take ours", "Restore the Record") instead of the raw choice.
 - The release workflow can be run by hand (`workflow_dispatch`, input `tag`) on an existing tag, and publishes the ten packages to PyPI through trusted publishing, each from its own environment (`pypi-<package>`), when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true` ([release process](docs/release.md#pypi-trusted-publishing)).
 - Documentation: the release verification commands name 0.2.3 and the identity of a run started by hand; the README, the quickstart and the MCP guide say how to install `lorebase-cli` and `lorebase-herald` from PyPI.
 

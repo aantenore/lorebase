@@ -5,6 +5,7 @@ import type {
   Resolution,
   ResolutionChoice,
 } from '@/api/types';
+import { listOrder, neighbor } from './conflict-list';
 import { locationOf, messageOf, type Names } from './conflict-meta';
 
 /** The stored Resolution of a Conflict, if any. */
@@ -15,6 +16,25 @@ export function resolutionOf(attempt: MergeAttempt, conflict: Conflict): Resolut
 export function unresolvedOf(attempt: MergeAttempt): Conflict[] {
   const resolved = new Set(attempt.resolutions.map((r) => r.fingerprint));
   return attempt.conflicts.filter((c) => !resolved.has(c.fingerprint));
+}
+
+/**
+ * The open Conflict after `from` in list order, wrapping at the end. `from` counts as
+ * resolved when it is `saved`, which a refresh has not shown yet. `undefined` when no
+ * other Conflict is open.
+ */
+export function nextOpenAfter(
+  attempt: MergeAttempt,
+  from: string | null,
+  saved: string | null = null,
+): Conflict | undefined {
+  const resolved = new Set(attempt.resolutions.map((r) => r.fingerprint));
+  if (saved !== null) resolved.add(saved);
+  const open = attempt.conflicts.filter(
+    (c) => c.fingerprint === from || !resolved.has(c.fingerprint),
+  );
+  const next = neighbor(listOrder(open), from, 1);
+  return next === undefined || next.fingerprint === from ? undefined : next;
 }
 
 export type StatusFilter = 'all' | 'open' | 'resolved';

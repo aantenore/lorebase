@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Conflict, JsonValue, Resolution, ResolutionChoice } from '@/api/types';
 import { validateValue, type ValueSpec } from '@/api/values';
 import { Button } from '@/ui/button';
@@ -15,7 +15,7 @@ import {
   messageOf,
   type Names,
 } from './conflict-meta';
-import { SideBySide } from './side-by-side';
+import { SideBySide, type SideBranches } from './side-by-side';
 
 const text = reviewMessages.resolver;
 
@@ -30,7 +30,53 @@ export interface ConflictResolverProps {
   readOnly?: boolean;
   saving?: boolean;
   onSave: (resolution: Resolution) => void;
+  /** The Branches behind ours and theirs, named in the column headers when known. */
+  branches?: SideBranches;
+  /** Opens the next open Conflict; the `n` key calls it. */
+  onNext?: () => void;
+  /** Tells whether the draft differs from what is stored, so the caller can warn before leaving. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
+
+const COPY_SIDES = ['base', 'ours', 'theirs'] as const;
+
+const SHORTCUT_CHOICES: Record<string, ResolutionChoice> = {
+  o: 'ours',
+  t: 'theirs',
+  b: 'base',
+  e: 'custom',
+};
+
+const NON_TEXT_INPUTS = new Set(['radio', 'checkbox', 'button', 'submit', 'reset']);
+
+/** Whether a key press lands in a field that takes typed text, CodeMirror included. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target.closest('.cm-editor') !== null) return true;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUTS.has(target.type);
+  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
+/** JSON text with object keys in sorted order, so equal values compare equal. */
+function canonical(value: JsonValue | undefined): string | undefined {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((v) => canonical(v) ?? 'null').join(',')}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(value[key]) ?? 'null'}`)
+    .join(',')}}`;
+}
+
+function sameResolution(a: Resolution, b: Resolution): boolean {
+  return (
+    a.choice === b.choice &&
+    canonical(a.value ?? null) === canonical(b.value ?? null) &&
+    canonical(a.values ?? null) === canonical(b.values ?? null)
+  );
+}
+
+/** Targets that act on their own on Enter, or that belong to the page around the resolver. */
+const OWN_ENTER = 'a, button, summary, [role="button"], [role="listbox"], [role="option"]';
 
 interface Typed {
   value: JsonValue | undefined;
@@ -64,17 +110,37 @@ function CustomSingle({
   disabled: boolean;
 }) {
   const problem = typed === undefined ? null : problemOf(spec, typed);
+  // The input keeps its own text, so a copied value is shown by mounting a fresh input.
+  const [version, setVersion] = useState(0);
   return (
-    <ValueInput
-      label={conflict.kind === 'SC3' ? text.newName : text.customValue}
-      spec={spec}
-      value={typed === undefined ? seedValue(conflict) : typed.value}
-      error={problem}
-      disabled={disabled}
-      onChange={(value, parseError) => {
-        onChange({ value, parseError });
-      }}
-    />
+    <div className="flex flex-col gap-2">
+      <ValueInput
+        key={version}
+        label={conflict.kind === 'SC3' ? text.newName : text.customValue}
+        spec={spec}
+        value={typed === undefined ? seedValue(conflict) : typed.value}
+        error={problem}
+        disabled={disabled}
+        onChange={(value, parseError) => {
+          onChange({ value, parseError });
+        }}
+      />
+      <div role="group" aria-label={text.copyLegend} className="flex flex-wrap gap-2">
+        {COPY_SIDES.map((side) => (
+          <Button
+            key={side}
+            size="sm"
+            disabled={disabled || conflict[side] === null}
+            onClick={() => {
+              onChange({ value: conflict[side], parseError: null });
+              setVersion((v) => v + 1);
+            }}
+          >
+            {text.copySide[side]}
+          </Button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -154,6 +220,19 @@ function CustomMembers({
   );
 }
 
+/** The stored resolution in a form that is equal whenever the resolutions are. */
+function storedKey(resolution: Resolution | undefined): string {
+  return resolution === undefined
+    ? ''
+    : `${resolution.choice}|${canonical(resolution.value ?? null) ?? ''}|${canonical(resolution.values ?? null) ?? ''}`;
+}
+
+function initialSingle(resolution: Resolution | undefined): Typed | undefined {
+  return resolution?.choice !== 'custom' || resolution.value === undefined
+    ? undefined
+    : { value: resolution.value, parseError: null };
+}
+
 function initialMembers(resolution: Resolution | undefined): Record<string, Typed> {
   return Object.fromEntries(
     Object.entries(resolution?.values ?? {}).map(([member, value]) => [
@@ -210,12 +289,25 @@ export function ConflictResolver({
   readOnly = false,
   saving = false,
   onSave,
+  branches,
+  onNext,
+  onDirtyChange,
 }: ConflictResolverProps) {
   const [choice, setChoice] = useState<ResolutionChoice | null>(resolution?.choice ?? null);
-  const [single, setSingle] = useState<Typed | undefined>(
-    resolution?.value === undefined ? undefined : { value: resolution.value, parseError: null },
-  );
+  const [single, setSingle] = useState<Typed | undefined>(() => initialSingle(resolution));
   const [members, setMembers] = useState<Record<string, Typed>>(() => initialMembers(resolution));
+  // Set by the person's own edits; the draft follows the stored resolution until then.
+  const [touched, setTouched] = useState(false);
+  const [seen, setSeen] = useState(() => storedKey(resolution));
+  const stored = storedKey(resolution);
+  if (seen !== stored) {
+    setSeen(stored);
+    if (!touched) {
+      setChoice(resolution?.choice ?? null);
+      setSingle(initialSingle(resolution));
+      setMembers(initialMembers(resolution));
+    }
+  }
   const grouped = isGrouped(conflict);
   const rejected = conflict.details['rejected'];
 
@@ -223,9 +315,90 @@ export function ConflictResolver({
     choice === null
       ? { resolution: null, problem: text.pickChoice }
       : buildResolution(conflict, choice, single, members, spec);
+  const canSave = !readOnly && !saving && draft.resolution !== null;
+  const dirty =
+    !readOnly &&
+    touched &&
+    (resolution === undefined
+      ? choice !== null
+      : draft.resolution === null || !sameResolution(draft.resolution, resolution));
+
+  const save = () => {
+    if (!readOnly && !saving && draft.resolution !== null) onSave(draft.resolution);
+  };
+
+  const sectionRef = useRef<HTMLElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const focusEditor = useRef(false);
+  const focusInEditor = () => {
+    if (editorRef.current === null) return;
+    focusEditor.current = false;
+    editorRef.current.querySelector<HTMLElement>('input, textarea, select')?.focus();
+  };
+  // Runs after every render: the editor exists only once the choice is custom.
+  useEffect(() => {
+    if (focusEditor.current) focusInEditor();
+  });
+
+  // The latest handlers are read through refs so the listeners attach once.
+  const reportDirty = useRef(onDirtyChange);
+  const onKey = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    reportDirty.current = onDirtyChange;
+    onKey.current = (event) => {
+      if (readOnly || event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (isTyping(target)) return;
+      if (target instanceof Element && target.closest('[role="dialog"]') !== null) return;
+      const takesEnter = (el: EventTarget | null) =>
+        el === document.body ||
+        (el instanceof Element &&
+          sectionRef.current?.contains(el) === true &&
+          el.closest(OWN_ENTER) === null);
+      const key = event.key.toLowerCase();
+      const picked = SHORTCUT_CHOICES[key];
+      if (picked !== undefined) {
+        if (!conflict.choices.includes(picked)) return;
+        setTouched(true);
+        setChoice(picked);
+        if (picked === 'custom') {
+          focusEditor.current = true;
+          if (choice === 'custom') focusInEditor();
+        }
+      } else if (key === 's' || (key === 'enter' && takesEnter(target))) {
+        if (!canSave) return;
+        save();
+      } else if (key === 'n' && onNext !== undefined) {
+        onNext();
+      } else {
+        return;
+      }
+      event.preventDefault();
+    };
+  });
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      onKey.current(event);
+    };
+    document.addEventListener('keydown', listener);
+    return () => {
+      document.removeEventListener('keydown', listener);
+    };
+  }, []);
+  useEffect(() => {
+    reportDirty.current?.(dirty);
+  }, [dirty]);
+  useEffect(() => {
+    const report = reportDirty;
+    return () => {
+      report.current?.(false);
+    };
+  }, []);
 
   return (
     <section
+      ref={sectionRef}
       aria-label={text.section(conflict.kind, locationOf(conflict, names))}
       className="flex min-w-0 flex-col gap-4 rounded-md border border-line bg-surface p-4"
     >
@@ -249,7 +422,7 @@ export function ConflictResolver({
         </p>
       )}
 
-      <SideBySide conflict={conflict} names={names} />
+      <SideBySide conflict={conflict} names={names} branches={branches} />
 
       <fieldset className="flex flex-col gap-2" disabled={readOnly}>
         <legend className="mb-1 text-xs font-medium text-muted">{text.legend}</legend>
@@ -263,6 +436,7 @@ export function ConflictResolver({
                 className="mt-1"
                 checked={choice === option}
                 onChange={() => {
+                  setTouched(true);
                   setChoice(option);
                 }}
               />
@@ -275,35 +449,36 @@ export function ConflictResolver({
         })}
       </fieldset>
 
-      {choice === 'custom' &&
-        (grouped ? (
-          <CustomMembers
-            conflict={conflict}
-            spec={spec}
-            values={members}
-            disabled={readOnly}
-            onChange={(member, typed) => {
-              setMembers((current) => ({ ...current, [member]: typed }));
-            }}
-          />
-        ) : (
-          <CustomSingle
-            conflict={conflict}
-            spec={spec}
-            typed={single}
-            disabled={readOnly}
-            onChange={setSingle}
-          />
-        ))}
+      {choice === 'custom' && (
+        <div ref={editorRef}>
+          {grouped ? (
+            <CustomMembers
+              conflict={conflict}
+              spec={spec}
+              values={members}
+              disabled={readOnly}
+              onChange={(member, typed) => {
+                setTouched(true);
+                setMembers((current) => ({ ...current, [member]: typed }));
+              }}
+            />
+          ) : (
+            <CustomSingle
+              conflict={conflict}
+              spec={spec}
+              typed={single}
+              disabled={readOnly}
+              onChange={(typed) => {
+                setTouched(true);
+                setSingle(typed);
+              }}
+            />
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button
-          variant="primary"
-          disabled={readOnly || saving || draft.resolution === null}
-          onClick={() => {
-            if (draft.resolution !== null) onSave(draft.resolution);
-          }}
-        >
+        <Button variant="primary" disabled={!canSave} onClick={save}>
           {resolution === undefined ? text.save : text.update}
         </Button>
         {draft.resolution === null && choice === 'custom' && grouped && (

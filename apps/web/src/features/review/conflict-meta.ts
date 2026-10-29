@@ -49,6 +49,18 @@ export function choiceLabel(conflict: Conflict, choice: ResolutionChoice): strin
   }
 }
 
+/**
+ * The label of a choice for a set of Conflicts: the one they share, or a general name
+ * when their kinds word it differently.
+ */
+export function bulkChoiceLabel(conflicts: Conflict[], choice: ResolutionChoice): string {
+  const labels = new Set(
+    conflicts.filter((c) => c.choices.includes(choice)).map((c) => choiceLabel(c, choice)),
+  );
+  const [only] = labels;
+  return labels.size === 1 && only !== undefined ? only : text.bulk[choice];
+}
+
 export function choiceHint(conflict: Conflict, choice: ResolutionChoice): string | undefined {
   if (choice !== 'relax') return undefined;
   const relaxed = conflict.details['relaxed'];

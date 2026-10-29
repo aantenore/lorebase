@@ -4,7 +4,7 @@ import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
 import { FormAction, FormRow } from '@/ui/layout';
-import { CODE_LABEL } from './conflict-meta';
+import { bulkChoiceLabel, CODE_LABEL } from './conflict-meta';
 import type { ConflictFilter, StatusFilter } from './conflict-state';
 import { groupByKind } from './conflict-list';
 
@@ -95,7 +95,7 @@ export function BulkBar({
       <Select
         label={filters.bulkChoice}
         value={choice}
-        options={choices.map((value) => ({ value, label: value }))}
+        options={choices.map((value) => ({ value, label: bulkChoiceLabel(open, value) }))}
         onChange={(event) => {
           setPicked(event.target.value as ResolutionChoice);
         }}
@@ -107,7 +107,7 @@ export function BulkBar({
             onApply(choice, targets);
           }}
         >
-          {filters.bulkApply(choice, targets.length)}
+          {filters.bulkApply(bulkChoiceLabel(targets, choice), targets.length)}
         </Button>
       </FormAction>
     </FormRow>

@@ -42,9 +42,12 @@ function setup(
     spec?: ValueSpec | null;
     resolution?: Resolution;
     readOnly?: boolean;
+    branches?: { ours: string; theirs: string };
   } = {},
 ) {
   const onSave = vi.fn();
+  const onNext = vi.fn();
+  const onDirtyChange = vi.fn();
   render(
     <ConflictResolver
       conflict={conflict}
@@ -52,10 +55,13 @@ function setup(
       names={names}
       spec={props.spec === undefined ? null : props.spec}
       readOnly={props.readOnly === true}
+      branches={props.branches}
       onSave={onSave}
+      onNext={onNext}
+      onDirtyChange={onDirtyChange}
     />,
   );
-  return { onSave, user: userEvent.setup() };
+  return { onSave, onNext, onDirtyChange, user: userEvent.setup() };
 }
 
 describe('ConflictResolver choices', () => {
@@ -244,6 +250,246 @@ describe('ConflictResolver grouped Conflicts', () => {
     const table = screen.getByRole('table', { name: 'Members of XS4' });
     expect(within(table).getAllByRole('row')).toHaveLength(4);
     expect(within(table).getByText('S-1005')).toBeInTheDocument();
+  });
+});
+
+describe('ConflictResolver word diff', () => {
+  const text = (base: string, ours: string, theirs: string) =>
+    makeConflict({
+      kind: 'DV1',
+      partition: 'Supplier',
+      key: 'S-1',
+      attribute: 'att_name',
+      base,
+      ours,
+      theirs,
+      message: 'm',
+    });
+
+  it('marks the words a side added and removed against the base', () => {
+    setup(text('Monza Foundry S.r.l.', 'Monza Foundry', 'Monza Foundry Group S.r.l.'));
+    const ours = document.querySelector('[data-side="ours"]');
+    const theirs = document.querySelector('[data-side="theirs"]');
+    expect(ours?.querySelector('del')).toHaveTextContent('removed: S.r.l.');
+    expect(ours?.querySelector('ins')).toBeNull();
+    expect(theirs?.querySelector('ins')).toHaveTextContent('added: Group');
+    expect(theirs?.querySelector('del')).toBeNull();
+  });
+
+  it('leaves a value that shares no word with the base as one change', () => {
+    setup(tier(), { spec: tierSpec });
+    expect(document.querySelector('[data-side="ours"] ins')).toBeNull();
+  });
+});
+
+describe('ConflictResolver side headers', () => {
+  it('names the Branches behind ours and theirs when they are known', () => {
+    setup(tier(), { branches: { ours: 'main', theirs: 'risk-update' } });
+    expect(screen.getByRole('columnheader', { name: 'Ours (main)' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Theirs (risk-update)' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Base' })).toBeInTheDocument();
+  });
+
+  it('keeps the plain headers without Branches', () => {
+    setup(tier());
+    expect(screen.getByRole('columnheader', { name: 'Ours' })).toBeInTheDocument();
+  });
+});
+
+describe('ConflictResolver copy into the editor', () => {
+  it('replaces the draft with the value of a side', async () => {
+    const conflict = tier();
+    const { onSave, user } = setup(conflict, { spec: tierSpec });
+    await user.click(screen.getByRole('radio', { name: 'Custom value' }));
+    const field = () => screen.getByLabelText('Custom value', { selector: 'select' });
+    expect(field()).toHaveValue('3');
+
+    await user.click(screen.getByRole('button', { name: 'Copy theirs' }));
+    expect(field()).toHaveValue('1');
+    await user.click(screen.getByRole('button', { name: 'Copy base' }));
+    expect(field()).toHaveValue('2');
+
+    await user.click(screen.getByRole('button', { name: 'Save resolution' }));
+    expect(onSave).toHaveBeenCalledWith({
+      fingerprint: conflict.fingerprint,
+      choice: 'custom',
+      value: '2',
+    });
+  });
+
+  it('cannot copy a side that is absent', async () => {
+    const gone = makeConflict({
+      kind: 'DV2',
+      partition: 'Plant',
+      key: 'MNZ',
+      base: { name: 'a' },
+      ours: { name: 'b' },
+      theirs: null,
+      message: 'm',
+    });
+    const { user } = setup(gone, { spec: { type: 'json' } });
+    await user.click(screen.getByRole('radio', { name: 'Custom value' }));
+    expect(screen.getByRole('button', { name: 'Copy theirs' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Copy ours' })).toBeEnabled();
+  });
+});
+
+describe('ConflictResolver keyboard', () => {
+  it('picks a side with o, t and b, and saves with Enter or s', async () => {
+    const conflict = tier();
+    const { onSave, user } = setup(conflict, { spec: tierSpec });
+    await user.keyboard('o');
+    expect(screen.getByRole('radio', { name: 'Take ours' })).toBeChecked();
+    await user.keyboard('t');
+    expect(screen.getByRole('radio', { name: 'Take theirs' })).toBeChecked();
+    await user.keyboard('b');
+    expect(screen.getByRole('radio', { name: 'Revert to base' })).toBeChecked();
+
+    await user.keyboard('s');
+    expect(onSave).toHaveBeenLastCalledWith({ fingerprint: conflict.fingerprint, choice: 'base' });
+    await user.keyboard('{Enter}');
+    expect(onSave).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the editor with e and focuses it', async () => {
+    const { user } = setup(tier(), { spec: tierSpec });
+    await user.keyboard('e');
+    expect(screen.getByRole('radio', { name: 'Custom value' })).toBeChecked();
+    expect(screen.getByLabelText('Custom value', { selector: 'select' })).toHaveFocus();
+  });
+
+  it('moves on with n', async () => {
+    const { onNext, user } = setup(tier(), { spec: tierSpec });
+    await user.keyboard('n');
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores choices the Conflict does not accept', async () => {
+    const { onSave, user } = setup(
+      makeConflict({ kind: 'XS9', partition: 'feeds', sample: ['a -> b'], message: 'm' }),
+    );
+    await user.keyboard('o');
+    await user.keyboard('t');
+    expect(screen.getAllByRole('radio').some((r) => (r as HTMLInputElement).checked)).toBe(false);
+    await user.keyboard('s');
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('ignores keys typed in a text field', async () => {
+    const { onSave, onNext, user } = setup(tier(), { spec: { type: 'json' } });
+    await user.click(screen.getByRole('radio', { name: 'Custom value' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom value' }), 'o t n s');
+    expect(screen.getByRole('radio', { name: 'Custom value' })).toBeChecked();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('does nothing once the Proposal is closed', async () => {
+    const { onSave, user } = setup(tier(), { spec: tierSpec, readOnly: true });
+    await user.keyboard('o');
+    await user.keyboard('s');
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConflictResolver unsaved changes', () => {
+  it('reports a draft that differs from what is stored', async () => {
+    const conflict = tier();
+    const { onDirtyChange, user } = setup(conflict, {
+      spec: tierSpec,
+      resolution: { fingerprint: conflict.fingerprint, choice: 'ours' },
+    });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    await user.click(screen.getByRole('radio', { name: 'Take theirs' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    await user.click(screen.getByRole('radio', { name: 'Take ours' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('ConflictResolver unsaved changes with object values', () => {
+  it('does not count a stored value with reordered keys as a change', async () => {
+    const record = makeConflict({
+      kind: 'DV2',
+      partition: 'Plant',
+      key: 'MNZ',
+      base: { a: 0 },
+      ours: { a: 1, b: { y: 2, x: 1 } },
+      theirs: null,
+      message: 'm',
+    });
+    const onDirtyChange = vi.fn();
+    const view = (resolution?: Resolution) => (
+      <ConflictResolver
+        conflict={record}
+        resolution={resolution}
+        names={names}
+        spec={{ type: 'json' }}
+        onSave={vi.fn()}
+        onDirtyChange={onDirtyChange}
+      />
+    );
+    const { rerender } = render(view());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'Custom value' }));
+    await user.click(screen.getByRole('button', { name: 'Copy ours' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    rerender(
+      view({
+        fingerprint: record.fingerprint,
+        choice: 'custom',
+        value: { b: { x: 1, y: 2 }, a: 1 },
+      }),
+    );
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('ConflictResolver stored resolution under the draft', () => {
+  const view = (conflict: Conflict, resolution: Resolution | undefined, onDirty: () => void) => (
+    <ConflictResolver
+      conflict={conflict}
+      resolution={resolution}
+      names={names}
+      spec={tierSpec}
+      onSave={vi.fn()}
+      onDirtyChange={onDirty}
+    />
+  );
+
+  it('adopts a resolution stored from elsewhere when nothing was edited', () => {
+    const conflict = tier();
+    const onDirty = vi.fn();
+    const { rerender } = render(view(conflict, undefined, onDirty));
+    expect(screen.getByRole('button', { name: 'Save resolution' })).toBeDisabled();
+    rerender(view(conflict, { fingerprint: conflict.fingerprint, choice: 'ours' }, onDirty));
+    expect(screen.getByRole('radio', { name: 'Take ours' })).toBeChecked();
+    expect(onDirty).toHaveBeenLastCalledWith(false);
+  });
+
+  it('is not dirty once its own save is stored, whatever extra fields come back', async () => {
+    const conflict = tier();
+    const onDirty = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(view(conflict, undefined, onDirty));
+    await user.keyboard('o');
+    expect(onDirty).toHaveBeenLastCalledWith(true);
+    rerender(
+      view(
+        conflict,
+        {
+          fingerprint: conflict.fingerprint,
+          choice: 'ours',
+          value: null,
+          values: null,
+          resolver: 'usr_1',
+        } as unknown as Resolution,
+        onDirty,
+      ),
+    );
+    expect(screen.getByRole('radio', { name: 'Take ours' })).toBeChecked();
+    expect(onDirty).toHaveBeenLastCalledWith(false);
   });
 });
 

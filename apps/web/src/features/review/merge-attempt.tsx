@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useKeeperApi } from '@/api/provider';
 import { useBranchSchema, useConflicts } from '@/api/queries';
 import type {
@@ -16,11 +16,13 @@ import { Button } from '@/ui/button';
 import { Badge, EmptyState, QueryBoundary, Section } from '@/ui/layout';
 import { useToast } from '@/ui/toast';
 import { BulkBar, FilterBar } from './attempt-toolbar';
-import { ConflictList, listOrder, neighbor } from './conflict-list';
+import { ConfirmDialog } from './confirm-dialog';
+import { ConflictList, listOrder } from './conflict-list';
 import { buildNames, partitionName, policyReason, specOf, type Names } from './conflict-meta';
 import { ConflictResolver } from './conflict-resolver';
 import {
   filterConflicts,
+  nextOpenAfter,
   NO_FILTER,
   resolutionOf,
   unresolvedOf,
@@ -29,6 +31,7 @@ import {
 import { MergedSummary } from './merged-summary';
 
 const text = reviewMessages.attempt;
+const confirmText = reviewMessages.confirm;
 
 interface RunReport {
   remaining: number;
@@ -97,27 +100,39 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<ConflictFilter>(NO_FILTER);
   const [report, setReport] = useState<RunReport | null>(null);
+  // Whether the open resolver holds a choice or value that is not saved.
+  const [dirty, setDirty] = useState(false);
+  const [leaveFor, setLeaveFor] = useState<Conflict | null>(null);
+  const [confirmApply, setConfirmApply] = useState(false);
 
   const names = buildNames(schema);
   const filtered = filterConflicts(attempt, filter, names);
   const order = listOrder(filtered);
   const current = order.find((c) => c.fingerprint === selected) ?? order[0];
   const readOnly = proposal.status !== 'open';
+  const shown = useRef(current?.fingerprint);
+  useEffect(() => {
+    shown.current = current?.fingerprint;
+  });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['keeper'] });
 
   const save = useMutation({
     mutationFn: (resolution: Resolution) => api.conflicts.resolve(domain, proposal.id, resolution),
-    onSuccess: () => {
+    onSuccess: async (_stored, resolution) => {
       toast.notify(text.resolutionSaved, 'success');
-      return refresh();
+      await refresh();
+      // Someone who moved elsewhere while the save was in flight keeps their place.
+      if (shown.current !== resolution.fingerprint) return;
+      const next = nextOpenAfter(attempt, resolution.fingerprint, resolution.fingerprint);
+      if (next !== undefined) showConflict(next);
     },
   });
   const saveMany = useMutation({
     mutationFn: (resolutions: Resolution[]) =>
       api.conflicts.resolveMany(domain, proposal.id, { resolutions }),
-    onSuccess: (updated) => {
-      toast.notify(text.resolutionsStored(updated.resolutions.length), 'success');
+    onSuccess: (_updated, sent) => {
+      toast.notify(text.resolutionsStored(sent.length), 'success');
       return refresh();
     },
   });
@@ -138,9 +153,23 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
   });
 
   const open = filtered.filter((c) => resolutionOf(attempt, c) === undefined);
-  const nextOpen = (): Conflict | undefined => {
-    const openOrder = listOrder(unresolvedOf(attempt));
-    return neighbor(openOrder, current?.fingerprint ?? null, 1);
+  // Opens a Conflict, dropping a filter that would hide it.
+  const showConflict = (conflict: Conflict) => {
+    if (!filtered.includes(conflict)) setFilter(NO_FILTER);
+    onSelect(conflict.fingerprint);
+  };
+  // Moves to another Conflict, asking first when the open one has unsaved changes.
+  const goTo = (conflict: Conflict) => {
+    if (dirty && conflict.fingerprint !== current?.fingerprint) setLeaveFor(conflict);
+    else showConflict(conflict);
+  };
+  const goNextOpen = () => {
+    const next = nextOpenAfter(attempt, current?.fingerprint ?? null);
+    if (next !== undefined) goTo(next);
+  };
+  const requestApply = () => {
+    if (unresolvedOf(attempt).length > 0 || dirty) setConfirmApply(true);
+    else apply.mutate();
   };
 
   const applyBulk = (choice: ResolutionChoice, targets: Conflict[]) => {
@@ -161,25 +190,10 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
         <Progress attempt={attempt} />
         {!readOnly && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              disabled={unresolvedOf(attempt).length === 0}
-              onClick={() => {
-                const next = nextOpen();
-                if (next !== undefined) {
-                  setFilter(NO_FILTER);
-                  onSelect(next.fingerprint);
-                }
-              }}
-            >
+            <Button disabled={unresolvedOf(attempt).length === 0} onClick={goNextOpen}>
               {text.nextOpen}
             </Button>
-            <Button
-              variant="primary"
-              disabled={apply.isPending}
-              onClick={() => {
-                apply.mutate();
-              }}
-            >
+            <Button variant="primary" disabled={apply.isPending} onClick={requestApply}>
               {text.apply}
             </Button>
           </div>
@@ -198,7 +212,10 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
             resolutions={attempt.resolutions}
             selected={current?.fingerprint ?? null}
             names={names}
-            onSelect={onSelect}
+            onSelect={(fingerprint) => {
+              const target = filtered.find((c) => c.fingerprint === fingerprint);
+              if (target !== undefined) goTo(target);
+            }}
           />
           {current !== undefined && (
             <ConflictResolver
@@ -209,6 +226,9 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
               spec={specOf(current, schema)}
               readOnly={readOnly}
               saving={save.isPending}
+              branches={{ ours: proposal.target_ref, theirs: proposal.source_ref }}
+              onNext={goNextOpen}
+              onDirtyChange={setDirty}
               onSave={(resolution) => {
                 save.mutate(resolution);
               }}
@@ -217,6 +237,43 @@ function AttemptBody({ domain, proposal, attempt, schema, selected, onSelect }: 
         </div>
       )}
       <p className="text-xs text-muted">{text.keys}</p>
+      <p className="text-xs text-muted">{text.shortcuts}</p>
+      <ConfirmDialog
+        open={confirmApply}
+        title={
+          unresolvedOf(attempt).length > 0 ? confirmText.applyTitle : confirmText.applyUnsavedTitle
+        }
+        message={[
+          unresolvedOf(attempt).length > 0
+            ? confirmText.applyBody(unresolvedOf(attempt).length)
+            : null,
+          dirty ? confirmText.applyUnsaved : null,
+        ]
+          .filter((part) => part !== null)
+          .join(' ')}
+        confirmLabel={confirmText.applyAnyway}
+        onCancel={() => {
+          setConfirmApply(false);
+        }}
+        onConfirm={() => {
+          setConfirmApply(false);
+          apply.mutate();
+        }}
+      />
+      <ConfirmDialog
+        open={leaveFor !== null}
+        title={confirmText.discardTitle}
+        message={confirmText.discardBody}
+        confirmLabel={confirmText.discard}
+        cancelLabel={confirmText.keepEditing}
+        onCancel={() => {
+          setLeaveFor(null);
+        }}
+        onConfirm={() => {
+          if (leaveFor !== null) showConflict(leaveFor);
+          setLeaveFor(null);
+        }}
+      />
     </div>
   );
 }
