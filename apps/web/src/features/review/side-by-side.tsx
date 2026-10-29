@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Conflict, JsonValue } from '@/api/types';
 import { review as reviewMessages } from '@/messages/review';
 import { cn } from '@/ui/cn';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { namePath, type Names } from './conflict-meta';
+import { wordDiff, type DiffPart } from './text-diff';
 
 const text = reviewMessages.sides;
 
@@ -74,9 +75,56 @@ export function diffRows(conflict: Pick<Conflict, Side>): DiffRow[] {
 
 const SIDE_TITLE: Record<Side, string> = { base: text.base, ours: text.ours, theirs: text.theirs };
 
+/** The Branches the sides come from: ours is the target, theirs the source. */
+export interface SideBranches {
+  ours: string;
+  theirs: string;
+}
+
+function titleOf(side: Side, branches: SideBranches | undefined): string {
+  return side === 'base' || branches === undefined
+    ? SIDE_TITLE[side]
+    : text.withBranch(SIDE_TITLE[side], branches[side]);
+}
+
+/** A string side read against the base word by word. */
+function WordDiff({ parts }: { parts: DiffPart[] }) {
+  return (
+    <>
+      {parts.map((part, index) => {
+        const after = parts[index - 1]?.op === 'delete';
+        if (part.op === 'equal') return <span key={index}>{part.text}</span>;
+        const inserted = part.op === 'insert';
+        const Mark = inserted ? 'ins' : 'del';
+        return (
+          <Mark
+            key={index}
+            className={cn(
+              'rounded-sm',
+              // Keeps a removed run and the run that replaces it apart without adding text.
+              inserted && after && 'ml-1',
+              inserted ? 'bg-success/20 no-underline' : 'bg-danger/20 line-through select-none',
+            )}
+          >
+            <span className="sr-only">{inserted ? text.added : text.removed}</span>
+            {part.text}
+          </Mark>
+        );
+      })}
+    </>
+  );
+}
+
 function Cell({ row, side }: { row: DiffRow; side: Side }) {
   const value = row[side];
   const changed = side !== 'base' && row.changed[side];
+  const parts = useMemo(
+    () =>
+      changed && typeof row.base === 'string' && typeof value === 'string'
+        ? wordDiff(row.base, value)
+        : null,
+    [changed, row.base, value],
+  );
   return (
     <TD
       data-side={side}
@@ -88,12 +136,18 @@ function Cell({ row, side }: { row: DiffRow; side: Side }) {
       )}
     >
       {changed && <span className="sr-only">{text.changed}</span>}
-      {show(value)}
+      {parts === null ? show(value) : <WordDiff parts={parts} />}
     </TD>
   );
 }
 
-function MemberTable({ conflict }: { conflict: Conflict }) {
+function MemberTable({
+  conflict,
+  branches,
+}: {
+  conflict: Conflict;
+  branches: SideBranches | undefined;
+}) {
   const raw = conflict.details['members'];
   const members =
     typeof raw === 'object' && raw !== null && !Array.isArray(raw)
@@ -105,7 +159,7 @@ function MemberTable({ conflict }: { conflict: Conflict }) {
         <TR>
           <TH>{text.member}</TH>
           {SIDES.map((side) => (
-            <TH key={side}>{SIDE_TITLE[side]}</TH>
+            <TH key={side}>{titleOf(side, branches)}</TH>
           ))}
         </TR>
       </THead>
@@ -137,11 +191,21 @@ function MemberTable({ conflict }: { conflict: Conflict }) {
  * path (attribute by attribute, property by property); only the paths where a side moved
  * from the base are listed unless the reader asks for the rest.
  */
-export function SideBySide({ conflict, names }: { conflict: Conflict; names: Names }) {
+export function SideBySide({
+  conflict,
+  names,
+  branches,
+}: {
+  conflict: Conflict;
+  names: Names;
+  branches?: SideBranches;
+}) {
   const [all, setAll] = useState(false);
   const noSides = SIDES.every((side) => conflict[side] === null);
   if (noSides) {
-    return conflict.sample.length > 0 ? <MemberTable conflict={conflict} /> : null;
+    return conflict.sample.length > 0 ? (
+      <MemberTable conflict={conflict} branches={branches} />
+    ) : null;
   }
   const rows = diffRows(conflict);
   const visible = all ? rows : rows.filter((r) => r.changed.ours || r.changed.theirs);
@@ -152,7 +216,7 @@ export function SideBySide({ conflict, names }: { conflict: Conflict; names: Nam
           <TR>
             <TH>{text.path}</TH>
             {SIDES.map((side) => (
-              <TH key={side}>{SIDE_TITLE[side]}</TH>
+              <TH key={side}>{titleOf(side, branches)}</TH>
             ))}
           </TR>
         </THead>

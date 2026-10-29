@@ -1,5 +1,12 @@
 import type { AutoResolution, Conflict } from '@/api/types';
-import { locationOf, messageOf, partitionName, policyReason, specOf } from './conflict-meta';
+import {
+  bulkChoiceLabel,
+  locationOf,
+  messageOf,
+  partitionName,
+  policyReason,
+  specOf,
+} from './conflict-meta';
 import { makeConflict } from '@/api/mock/conflicts';
 import { mapSchema } from '@/api/live/schema';
 import fixture from '@/api/live/fixtures/supply-schema.json';
@@ -49,6 +56,19 @@ describe('Conflicts as Keeper reports them', () => {
       type: 'integer',
       constraints: { min: 0, max: 100 },
     });
+  });
+});
+
+describe('bulkChoiceLabel', () => {
+  const dropOn = (kind: 'XS1' | 'XS9') => makeConflict({ kind, partition: 'p', message: 'm' });
+
+  it('uses the label the Conflicts share', () => {
+    expect(bulkChoiceLabel([dropOn('XS9')], 'drop')).toBe('Drop the Links');
+    expect(bulkChoiceLabel([conflict], 'ours')).toBe('Take ours');
+  });
+
+  it('falls back to a general name when the kinds word the choice differently', () => {
+    expect(bulkChoiceLabel([dropOn('XS9'), dropOn('XS1')], 'drop')).toBe('Drop');
   });
 });
 

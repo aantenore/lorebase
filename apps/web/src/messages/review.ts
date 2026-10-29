@@ -90,6 +90,8 @@ export const review = {
     apply: 'Apply resolutions',
     noMatch: 'No Conflict matches the filter.',
     keys: 'Keys in the list: arrows or j and k move, Home and End jump to the ends.',
+    shortcuts:
+      'Keys in the resolver, outside text fields: o ours, t theirs, b base, e custom value, Enter or s save, n next open Conflict.',
   },
 
   filters: {
@@ -103,7 +105,7 @@ export const review = {
     },
     find: 'Find a Conflict',
     bulkChoice: 'Bulk choice',
-    bulkApply: (choice: string, count: number) => `Apply ${choice} to ${count.toString()} open`,
+    bulkApply: (choice: string, count: number) => `Apply "${choice}" to ${count.toString()} open`,
   },
 
   conflicts: {
@@ -146,6 +148,16 @@ export const review = {
     restoreRemoved: 'Restore what was removed',
     relax: 'Relax the rule',
     relaxHint: (rule: string) => `Sets the rule to ${rule}.`,
+    /** Names for a bulk choice whose label differs between the Conflicts it applies to. */
+    bulk: {
+      ours: 'Take ours',
+      theirs: 'Take theirs',
+      base: 'Revert to base',
+      custom: 'Custom value',
+      drop: 'Drop',
+      restore: 'Restore',
+      relax: 'Relax the rule',
+    },
   },
 
   /** Why an automatic resolution picked its side. */
@@ -175,6 +187,21 @@ export const review = {
     member: 'Member',
     newValue: 'New value',
     valueFor: (member: string) => `Value for ${member}`,
+    copyLegend: 'Copy into the editor',
+    copySide: { base: 'Copy base', ours: 'Copy ours', theirs: 'Copy theirs' },
+  },
+
+  confirm: {
+    applyTitle: 'Apply with open Conflicts',
+    applyBody: (open: number) =>
+      `${open.toString()} ${open === 1 ? 'Conflict is' : 'Conflicts are'} still open. The merge will report ${open === 1 ? 'it' : 'them'} again instead of completing.`,
+    applyUnsavedTitle: 'Apply with unsaved changes',
+    applyUnsaved: 'The Conflict on screen has changes that are not saved; Apply leaves them out.',
+    applyAnyway: 'Apply anyway',
+    discardTitle: 'Unsaved resolution',
+    discardBody: 'This Conflict has changes that are not saved. Leave it and discard them?',
+    discard: 'Discard and continue',
+    keepEditing: 'Keep editing',
   },
 
   sides: {
@@ -183,6 +210,9 @@ export const review = {
     theirs: 'Theirs',
     absent: 'absent',
     changed: 'changed: ',
+    added: 'added: ',
+    removed: 'removed: ',
+    withBranch: (side: string, branch: string) => `${side} (${branch})`,
     path: 'Path',
     value: 'value',
     member: 'Member',
