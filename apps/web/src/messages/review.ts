@@ -166,6 +166,8 @@ export const review = {
     unrankedOrigin: 'an unranked origin',
     changedAfter: (won: string, lost: string) => `changed ${won}, after ${lost}`,
     sameTime: (won: string) => `same time ${won}, greater provenance id`,
+    textMerged: (ours: number, theirs: number) =>
+      `text merged: ${ours.toString()} ${ours === 1 ? 'change' : 'changes'} from ours, ${theirs.toString()} from theirs`,
   },
 
   resolver: {

@@ -173,11 +173,13 @@ export function specOf(conflict: Conflict, schema: Schema | undefined): ValueSpe
 }
 
 const asText = (value: JsonValue | undefined) => (typeof value === 'string' ? value : null);
+const asCount = (value: JsonValue | undefined) => (typeof value === 'number' ? value : null);
 
 /**
  * Why a Lineage-based policy picked its side, from the details of the automatic resolution:
- * the winning and losing origins (`authority`) or change times (`newest_wins`). `null` when
- * the resolution carries no reason (`prefer`, `cascade_dangling`, defaults).
+ * the winning and losing origins (`authority`), change times (`newest_wins`) or the changes
+ * taken from each side (`text_merge`). `null` when the resolution carries no reason (`prefer`,
+ * `cascade_dangling`, defaults).
  */
 export function policyReason(auto: AutoResolution): string | null {
   const details = auto.details ?? {};
@@ -195,6 +197,12 @@ export function policyReason(auto: AutoResolution): string | null {
     return details.tie_break === undefined
       ? reviewMessages.policy.changedAfter(won, lost)
       : reviewMessages.policy.sameTime(won);
+  }
+  if (auto.resolver === 'policy:text_merge') {
+    const ours = asCount(details.ours_hunks);
+    const theirs = asCount(details.theirs_hunks);
+    if (ours === null || theirs === null) return null;
+    return reviewMessages.policy.textMerged(ours, theirs);
   }
   return null;
 }

@@ -541,9 +541,11 @@ The result is the merged schema `Σm` plus a list of schema Conflicts.
 **Step 3. Data merge.** For each Record and Link key changed on either side:
 - one side only: take it;
 - same new hash on both: take it;
-- both modified: attribute-level three-way merge on `values`. For each Attribute: one side changed it, take it; both changed it to the same value, take it; otherwise an attribute value Conflict. Array values are compared as whole values.
+- both modified: attribute-level three-way merge on `values`. For each Attribute: one side changed it, take it; both changed it to the same value, take it; otherwise an attribute value Conflict. Array values are compared as whole values. Values of `text` Attributes changed differently on both sides are first merged as text (below).
 - added on both sides with different content: three-way merge against an empty base; differing Attributes conflict.
 - deleted on one side and modified on the other: delete/modify Conflict.
+
+*Text merge.* Two different values of a `text` Attribute that exists in the base are merged by unit, so two Branches editing different parts of a long text no longer conflict. Other types (`string`, `uri`, `ref`, enums, numbers, `json`, arrays) are not merged this way, and neither are add/add values, which have no base. The three values are cut into paragraphs (split at blank lines) or, by default, sentences (split after `.`, `!`, `?` or `…` followed by whitespace); every unit keeps the whitespace that follows it, so the units of a value concatenate to the value exactly and no whitespace is normalized. Each side is aligned with the base (`difflib.SequenceMatcher`) into changes of base units, and the two sides' changes are merged as `diff3` does: a change made on one side is taken, one made identically on both is taken once, and clashing changes make a conflicting hunk. Two changes clash when their base ranges share at least one unit, when both insert at the same place, or when one inserts at the start or end of the other's non-empty change (the order would be ambiguous). Non-empty changes that merely touch merge in base order, so rewriting two neighbouring sentences, one on each side, is a clean merge; the same rules apply to paragraphs. A clean merge needs no winner: it is recorded as an `AutoResolution` with choice `custom`, resolver `policy:text_merge` and `details` `{ours_hunks, theirs_hunks}` (the regions each side changed), the merged value is stored, and the Attribute gets a `merge_resolution` provenance entry naming `policy:text_merge`, as for any resolution that is not a side's own value. It runs after a stored resolution and before the policies of 6.10; when hunks conflict, the Conflict is the same `DV1` (same fingerprint), the policies and people decide it as before, and `details.text_hunks` lists the whole text in order as `{status: clean | conflict, base, ours, theirs, merged}`, `merged` null for conflicting hunks, so a client can show the clean parts merged and the conflicting ones side by side. Text is not merged above three caps: `text_merge_max_chars` (characters over the three values together, default 200,000, configurable), a fixed 20,000 units over the three values, and a fixed cost bound of 4,000,000 on the product of the base's units and the larger of the two sides' (the alignment is quadratic on repetitive text); the Conflict is then a plain `DV1` without `text_hunks`. Constraints (`min_length`, `max_length`, `pattern`) are checked on the merged text in step 4.
 Every taken change keeps its original provenance.
 
 **Step 4. Consistency under the merged schema.** The merged data must satisfy invariant I1 against `Σm`. The engine runs rule checks scoped to what changed, using indexed reads on the materialized target head plus the in-flight merge set:
@@ -586,6 +588,8 @@ Every taken change keeps its original provenance.
 | `XS10` | Trait conformance | Kind no longer implements Trait | adjust mapping, remove Trait from Kind |
 | `XS11` | Broken reference | Schema reference to removed element | edit referencing element, restore referenced element |
 
+A `DV1` on a `text` Attribute whose sides changed the same part carries `details.text_hunks` (6.8 step 3); its fingerprint does not depend on it.
+
 Grouped Conflicts (XS classes over many Records) are presented as one Conflict with a member list, and accept bulk resolutions.
 
 ### 6.10 Resolution flows
@@ -596,7 +600,8 @@ Grouped Conflicts (XS classes over many Records) are presented as one Conflict w
   - `prefer: ours | theirs` per Kind or per Attribute;
   - `authority`: a ranked list of origins (Sources, principals, actors, origin types); the side whose change comes from the higher ranked origin wins per Attribute, and the Source that owns an Attribute can rank first (`schema_authority`; Source syncs with `auto_with_authority` prefer the Source's side on those Attributes);
   - `newest_wins` by provenance timestamp, globally or for specified Attributes, ties decided by provenance entry id;
-  - `cascade_dangling: true`.
+  - `cascade_dangling: true`;
+  - `text_merge`: on by default, merges `text` values edited in different places (6.8 step 3), also settable per Kind, Relation or Attribute and by `paragraph` instead of `sentence`.
   Policy resolutions are recorded as resolutions with resolver `policy:{name}`.
 - **Stale attempts.** If the target head moves while Conflicts are being resolved, the merge attempt is recomputed against the new head. Resolutions whose fingerprints still match are re-applied automatically; new or changed Conflicts are shown as unresolved. This makes long reviews safe.
 - **Completion.** When all Conflicts are resolved, the engine applies the resolutions, re-runs consistency checks (resolutions can create new violations, for example a custom value that breaks uniqueness), and commits the merge Revision. Resolutions are stored as provenance `merge_resolution` on the affected values.
@@ -670,7 +675,7 @@ Decisions taken in `lorebase_core` (`canonical`, `tree`, `revision`, `merge`, `e
 - Merge base: if there are several lowest common ancestors and no virtual base builder is supplied, `merge_base` raises `MergeBaseError`; it never picks one silently. Histories with no common ancestor merge against an empty base.
 
 **Merge**
-- Virtual base (AC-13): `merge` builds it with the same pipeline, run without an index view. In that run consistency checks and Conflict reporting are skipped, policies are not applied, and a change that conflicts keeps the value of its own merge base, so both sides of the outer merge see it as a change. The virtual Revision is never committed; its id is `sha256("lb1\x00virtual-base\x00" || base || ours || theirs || root)` and its root lives in memory for the duration of the merge.
+- Virtual base (AC-13): `merge` builds it with the same pipeline, run without an index view. In that run consistency checks and Conflict reporting are skipped, policies are not applied (the text merge is not a policy and does run, so the virtual ancestor carries merged text, as in a recursive merge), and a change that conflicts keeps the value of its own merge base, so both sides of the outer merge see it as a change. The virtual Revision is never committed; its id is `sha256("lb1\x00virtual-base\x00" || base || ours || theirs || root)` and its root lives in memory for the duration of the merge.
 - Merge resolutions: `apply_resolutions` needs a resolution for every Conflict of the attempt and checks each choice against the kinds table below. It then re-runs the whole merge with the resolutions as directives (schema overrides, ignored side changes, data overrides) and repeats until no new directives appear; rounds are bounded by the number of resolutions. A resolution can therefore surface new Conflicts, for example a custom value that breaks uniqueness. Resolutions passed in `MergeInput` are matched to Conflicts by fingerprint, which is how a stale attempt is recomputed against a moved target (6.10).
 - Fingerprints: `sha256` over the canonical JSON array `[code, partition, key, attribute, base_hash, ours_hash, theirs_hash]` (hex, `null` when absent), followed for grouped Conflicts by the sorted member keys. A group that gains or loses a member is a different Conflict and does not inherit an earlier resolution.
 - Open Conflicts: while a Conflict is open, its location takes the base value as placeholder in the working merge and is excluded from consistency checks. An open schema Conflict on a Kind or Relation suppresses cross-cutting Conflicts in that element's partition, and an open schema delete/modify Conflict (`SC2`) also suppresses data Conflicts there. This keeps one root cause from being reported many times.
@@ -712,8 +717,13 @@ Choice meanings: `ours`, `theirs`, `base` take that side's value, element or sta
 | `authority`, `authority_attributes` | none | Ranked origin labels, highest first, globally or per Attribute id: on `DV1` and `DV3` the side whose last change of the Attribute comes from the higher ranked origin wins |
 | `schema_authority` | `false` | An Attribute's schema `authority` (a Source) ranks first for that Attribute |
 | `newest_wins`, `newest_wins_attributes` | off | On `DV1` and `DV3`, globally or for the listed Attribute ids, the side whose last change of the Attribute is the more recent wins |
+| `text_merge`, `text_merge_elements`, `text_merge_attributes` | `true` | Merge `text` values changed differently on both sides by unit (step 3); globally, per Kind or Relation id, or per Attribute id, the most specific wins. `false` leaves every such value to `DV1` |
+| `text_merge_granularity` | `sentence` | `sentence` or `paragraph`: the unit text is compared and merged by |
+| `text_merge_max_chars` | `200000` | Characters of the three values together above which text is not merged |
 | `sample_size` | `10` | Member keys listed in a grouped Conflict |
 | `atomic_properties` | `type`, `default`, `definition` | Schema properties merged as whole values instead of entry by entry |
+
+**Text merge and policies.** The text merge is not a rule of the chain: it runs first on `text` Attribute Conflicts, after a stored resolution. When it merges cleanly no rule is tried; when hunks conflict the Conflict goes to the rules below and then to a person.
 
 **Policy rules.** `MergePolicy.rules` gives the rules tried on one Conflict, from the most specific to the least: per Attribute `prefer`, `authority`, `newest_wins`; per Kind or Relation `prefer`; global `authority`, `newest_wins`, `prefer`. The first rule that decides resolves the Conflict, recorded as an `AutoResolution` with resolver `policy:{name}`; when none decides, the Conflict is reported. A resolution given by a person always comes first, and the virtual base run applies no policy.
 

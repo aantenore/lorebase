@@ -22,6 +22,7 @@ Engine and storage
 - [x] Canonical HAMT trees, tree diff, immutable Revisions, ancestry and merge base
 - [x] Data validation against the schema
 - [x] Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies `prefer`, cascade and defaults
+- [x] Three-way merge of long `text` values by sentence or paragraph inside the data merge (design 6.8 step 3); the Conflict resolver showing the hunks is next
 - [x] Merge policies `authority` and `newest_wins`
 - [x] Postgres schema and Alembic migrations, row-level security, store repositories
 - [x] Commit pipeline, materializer and verification
