@@ -290,6 +290,29 @@ class SchemaInferenceSettings(SectionModel):
         return self.domain_sources.get(domain_id, self.allowed_sources)
 
 
+class ReconciliationSettings(SectionModel):
+    """Reconciliation queue endpoints (design 10.6). Detection is set in
+    `scribe.reconciliation`."""
+
+    default_limit: int = Field(default=50, ge=1, description="Candidates listed per page.")
+    max_limit: int = Field(default=500, ge=1, description="Largest page a request may ask for.")
+    bulk_max: int = Field(
+        default=1000, ge=1, description="Candidates one bulk resolution may decide."
+    )
+    merge_check: Literal["off", "warn", "block"] = Field(
+        default="warn",
+        description="Proposal check of open candidates: off, warn (the Proposal lists them) "
+        "or block (open contradictions stop the merge); a Domain overrides it in its "
+        "reconciliation setting.",
+    )
+
+    @model_validator(mode="after")
+    def _default_within_max(self) -> Self:
+        if self.default_limit > self.max_limit:
+            raise ValueError("default_limit cannot exceed max_limit")
+        return self
+
+
 class AgentWriteSettings(SectionModel):
     """Writes of external agents through governed Operations (design 10.1, 11.1, 13.2).
 

@@ -132,7 +132,7 @@ class ChangesetEntry(Base):
 
 
 class Provenance(Base):
-    """Where a value came from: origin, actor and time."""
+    """Where a value came from: origin, actor and time, and the validity period it gives."""
 
     __tablename__ = "provenance"
     __table_args__ = (domain_fk(),)
@@ -143,6 +143,9 @@ class Provenance(Base):
     origin_ref: Mapped[dict[str, Any]] = mapped_column(JSONB)
     actor: Mapped[str]
     at: Mapped[datetime]
+    #: Validity period of the values of a `valid_time` Attribute (design 10.6, revision 0038).
+    valid_from: Mapped[datetime | None]
+    valid_to: Mapped[datetime | None]
 
 
 class Ref(Base):

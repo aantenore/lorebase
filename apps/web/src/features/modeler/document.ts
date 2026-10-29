@@ -47,6 +47,7 @@ export interface AttributeDocument {
   /** Api name of the Source that owns the value. */
   authority?: string;
   vault?: boolean;
+  valid_time?: boolean;
 }
 
 export interface TraitImplementationDocument {
@@ -186,6 +187,7 @@ function attributeToDocument(attribute: Attribute, lookup: NameLookup): Attribut
     out['authority'] = lookup.source(attribute.authority) ?? attribute.authority;
   }
   if (attribute.vault === true) out['vault'] = true;
+  if (attribute.valid_time === true) out['valid_time'] = true;
   return out as unknown as AttributeDocument;
 }
 
@@ -620,6 +622,7 @@ function attributeFromDocument(
     derivation_id: derivation === null ? null : (ctx.ids.derivations.get(derivation) ?? null),
     authority: authority === null ? null : (ctx.ids.sources.get(authority) ?? authority),
     ...(reader.bool(value, 'vault', path, false) ? { vault: true } : {}),
+    ...(reader.bool(value, 'valid_time', path, false) ? { valid_time: true } : {}),
   };
 }
 

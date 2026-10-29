@@ -48,6 +48,7 @@ from lorebase_core.model.lineage import (
     Origin,
     OriginType,
     ProvenanceEntry,
+    ReconciliationOrigin,
     SchemaMigrationOrigin,
     SourceSyncOrigin,
 )
@@ -191,6 +192,7 @@ __all__ = [
     "ProvenanceEntry",
     "ProvenanceId",
     "RateLimit",
+    "ReconciliationOrigin",
     "Record",
     "RecordIdentity",
     "Relation",

@@ -33,6 +33,10 @@ class Attribute(Model):
     Record objects hold a vault reference instead of the value (``lorebase_core.model.vault``).
     Unset (None) keeps values inline; the field is then left out of canonical content, so
     schemas written before it keep their hashes.
+
+    ``valid_time`` lets values carry a validity period on their provenance entry (design 5.4,
+    10.6): reconciliation then tells superseded values from contradictions. Like ``vault`` it
+    is absent from content when unset.
     """
 
     id: AttributeId
@@ -51,6 +55,7 @@ class Attribute(Model):
     derivation_id: DerivationId | None = None
     authority: SourceId | None = None
     vault: bool | None = None
+    valid_time: bool | None = None
 
     @field_validator("sensitivity")
     @classmethod
@@ -70,3 +75,8 @@ class Attribute(Model):
     def in_vault(self) -> bool:
         """Whether values are stored in the vault, Record objects holding references."""
         return self.vault is True
+
+    @property
+    def has_valid_time(self) -> bool:
+        """Whether values carry validity periods on their provenance (design 10.6)."""
+        return self.valid_time is True

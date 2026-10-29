@@ -40,6 +40,8 @@ def test_example_file_matches_code_defaults(monkeypatch: pytest.MonkeyPatch) -> 
         ({"api_prefix": "/api/v1/"}, "keeper.api_prefix"),
         ({"cors": {"allow_origins": ["*"], "allow_credentials": True}}, "keeper.cors"),
         ({"pagination": {"default_limit": 600, "max_limit": 500}}, "keeper.pagination"),
+        ({"reconciliation": {"default_limit": 600, "max_limit": 500}}, "keeper.reconciliation"),
+        ({"reconciliation": {"merge_check": "strict"}}, "keeper.reconciliation.merge_check"),
         ({"limits": {"max_request_body_bytes": 0}}, "keeper.limits.max_request_body_bytes"),
         ({"unknown": 1}, "keeper.unknown"),
         (
