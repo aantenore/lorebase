@@ -56,12 +56,30 @@ class Transform(Model):
     args: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class PeriodMapping(Model):
+    """One end of the validity period of a mapped value: a column or an expression (design
+    10.6). Read as a timestamp; a date means its first instant (UTC)."""
+
+    column: str | None = None
+    expression: str | None = None
+
+    @model_validator(mode="after")
+    def _check_input(self) -> Self:
+        if (self.column is None) == (self.expression is None):
+            raise ValueError("a period mapping needs exactly one of column or expression")
+        return self
+
+
 class AttributeMapping(Model):
-    """Maps one column or one expression, through transforms, to an Attribute."""
+    """Maps one column or one expression, through transforms, to an Attribute. A value of a
+    ``valid_time`` Attribute may also map its validity period (``valid_from``, ``valid_to``),
+    which lands on the provenance entry of the value, not in content."""
 
     column: str | None = None
     expression: str | None = None
     transforms: tuple[Transform, ...] = ()
+    valid_from: PeriodMapping | None = None
+    valid_to: PeriodMapping | None = None
 
     @model_validator(mode="after")
     def _check_input(self) -> Self:

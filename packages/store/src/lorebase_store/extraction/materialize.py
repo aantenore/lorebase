@@ -15,7 +15,8 @@ Rules:
   on a Relation that allows one Link per `from` (or `to`) Record, the Links it replaces are
   removed; Links of foreign-key backed Relations are skipped (they derive from an Attribute);
 - every value set by an item is attributed to an `extraction` provenance entry with the job,
-  document, evidence offsets, model and prompt version.
+  document, evidence offsets, model and prompt version, and the validity period its evidence
+  states (`valid_from`, `valid_to`; values of `valid_time` Attributes, design 10.6).
 
 Validation is the commit pipeline's: an accepted Record that misses a required value fails the
 commit with `ValidationFailedError` and nothing is written.
@@ -106,7 +107,7 @@ class _Provenance:
 
     def __init__(self, context: MaterializeContext) -> None:
         self._context = context
-        self._entries: dict[tuple[str, int, int, str], ProvenanceEntry] = {}
+        self._entries: dict[tuple[str, int, int, str, Any, Any], ProvenanceEntry] = {}
 
     def entry(self, item: ItemRow, evidence: Mapping[str, Any] | None) -> str:
         found = evidence or item.evidence or {}
@@ -114,7 +115,8 @@ class _Provenance:
         end = max(int(found.get("end") or 0), start)
         document = str(found.get("document_id") or "")
         model = str(found.get("model") or item.model or RULES_MODEL)
-        key = (document, start, end, model)
+        valid_from, valid_to = found.get("valid_from"), found.get("valid_to")
+        key = (document, start, end, model, valid_from, valid_to)
         if key not in self._entries:
             self._entries[key] = ProvenanceEntry(
                 id=new_id(IdPrefix.PROVENANCE),
@@ -128,6 +130,8 @@ class _Provenance:
                 ),
                 actor=self._context.actor,
                 at=format_timestamp(self._context.clock()),
+                valid_from=valid_from,
+                valid_to=valid_to,
             )
         return self._entries[key].id
 

@@ -113,7 +113,9 @@ class Resolved:
 
 @dataclass(slots=True)
 class ValueCandidate:
-    """An Attribute value for the Record `subject` names."""
+    """An Attribute value for the Record `subject` names; `valid_from` and `valid_to` are the
+    validity period the text states for a value of a `valid_time` Attribute (canonical
+    timestamps, either may be open)."""
 
     subject: Resolved
     attribute_id: str
@@ -122,6 +124,17 @@ class ValueCandidate:
     confidence: float
     tier: int
     model: str
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+    def evidence_dict(self) -> dict[str, Any]:
+        """The evidence passage, with the period when the value has one."""
+        found = self.evidence.as_dict()
+        if self.valid_from is not None:
+            found["valid_from"] = self.valid_from
+        if self.valid_to is not None:
+            found["valid_to"] = self.valid_to
+        return found
 
 
 @dataclass(slots=True)

@@ -6,6 +6,10 @@ unchanged (Lineage is not content, so rewriting the same values is no change). L
 mapped Relations follow the rows. `removed` keys are the owned keys the run did not see (when
 deletions apply) plus the keys of tombstone rows that exist. The changes of one key are kept
 together in a `ChangeGroup`, so a batch boundary never splits a Record from its Links.
+
+A value whose row maps a validity period (`MappedRow.periods`) and that the change writes (new
+or different from the stored one) gets a provenance entry of its own carrying the period; the
+other values of the change share the row's entry (design 10.6).
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ from pydantic import JsonValue
 from lorebase_core.canonical import ObjectType, normalize, object_hash
 from lorebase_core.model import Link, ProvenanceEntry, Record
 from lorebase_core.validate import DataChange, LinkDelete, LinkUpsert, RecordDelete, RecordUpsert
-from lorebase_scribe.sources.mapping import MappedRow, RowMapper
+from lorebase_scribe.sources.mapping import MappedRow, Period, RowMapper
+from lorebase_store.materialize.rows import ELEMENT_PROVENANCE_KEY
 
 ProvenanceFactory = Callable[[MappedRow], ProvenanceEntry]
 
@@ -43,10 +48,32 @@ class CurrentState:
 
 @dataclass(frozen=True)
 class Change:
-    """A data change and the provenance entry it is attributed to (`None`: the commit's)."""
+    """A data change and the provenance entry it is attributed to (`None`: the commit's);
+    `periods` holds the entries of the values that carry a validity period."""
 
     change: DataChange
     provenance: ProvenanceEntry | None = None
+    periods: Mapping[str, ProvenanceEntry] = field(default_factory=dict)
+
+    @property
+    def entries(self) -> list[ProvenanceEntry]:
+        """Every provenance entry the change names."""
+        own = [] if self.provenance is None else [self.provenance]
+        return [*own, *self.periods.values()]
+
+    def attribution(self) -> str | dict[str, str] | None:
+        """What the commit attributes the change to: the entry id, or a map from Attribute id
+        to entry id when values carry periods (every value of the Record is named, so none
+        falls back to the commit's own entry)."""
+        if self.provenance is None:
+            return None
+        if not self.periods:
+            return self.provenance.id
+        named: dict[str, str] = {ELEMENT_PROVENANCE_KEY: self.provenance.id}
+        if isinstance(self.change, RecordUpsert):
+            named.update(dict.fromkeys(self.change.record.values, self.provenance.id))
+        named.update({attribute: entry.id for attribute, entry in self.periods.items()})
+        return named
 
 
 @dataclass(frozen=True)
@@ -116,6 +143,30 @@ def _removal(mapper: RowMapper, key: str, current: CurrentState, delta: Delta) -
     return ChangeGroup(key, tuple(changes))
 
 
+def with_period(entry: ProvenanceEntry, period: Period) -> ProvenanceEntry:
+    """A copy of `entry` carrying `period` (the caller gives it a fresh id)."""
+    valid_from, valid_to = period
+    return ProvenanceEntry.model_validate(
+        {**entry.model_dump(mode="json"), "valid_from": valid_from, "valid_to": valid_to}
+    )
+
+
+def _period_entries(
+    row: MappedRow,
+    record: Record,
+    stored: StoredRecord | None,
+    provenance: ProvenanceFactory,
+) -> dict[str, ProvenanceEntry]:
+    """Entries of the values of `row` that carry a period and that the change writes."""
+    found: dict[str, ProvenanceEntry] = {}
+    for attribute_id, period in row.periods.items():
+        value = record.values.get(attribute_id)
+        if value is None or (stored is not None and stored.values.get(attribute_id) == value):
+            continue
+        found[attribute_id] = with_period(provenance(row), period)
+    return found
+
+
 def compute_delta(
     mapper: RowMapper,
     rows: Iterable[MappedRow],
@@ -140,7 +191,8 @@ def compute_delta(
         changes: list[Change] = []
         if stored is None or content_hash(record) != stored.object_hash:
             entry = provenance(row)
-            changes.append(Change(RecordUpsert(record=record), entry))
+            periods = _period_entries(row, record, stored, provenance)
+            changes.append(Change(RecordUpsert(record=record), entry, periods))
             (delta.added if stored is None else delta.changed).append(key)
         else:
             delta.unchanged += 1

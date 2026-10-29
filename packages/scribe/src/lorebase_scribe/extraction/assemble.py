@@ -13,12 +13,15 @@
   required is missing; a Link is accepted at once only when its endpoints exist or are accepted
   at once too. Items that set a value of a vault Attribute are never accepted at once: the
   extraction commit checks vault values against erased ones, so a reviewer decides (design
-  13.5).
+  13.5). A value item `hold` says raises a reconciliation contradiction (design 10.6,
+  `hold_auto_accept`) is not accepted at once either.
+- A value's validity period (a `valid_time` Attribute) goes with its evidence (`valid_from`,
+  `valid_to`), from where the commit puts it on the provenance entry.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -96,8 +99,10 @@ def assemble_items(
     principal: str,
     now: datetime,
     settings: ExtractionSettings,
+    hold: Callable[[ValueCandidate], bool] | None = None,
 ) -> Assembled:
-    """Items of an extraction Proposal, in order: Records, values, Links."""
+    """Items of an extraction Proposal, in order: Records, values, Links. `hold` names the
+    value items that must stay pending whatever their confidence (module doc)."""
     result = Assembled()
     threshold = settings.auto_accept_threshold
     schema = ontology.schema
@@ -148,7 +153,7 @@ def assemble_items(
             evidence[view.key_attribute.id] = mention.mention.evidence.as_dict()
         for attribute_id, value in best_values.get(element, {}).items():
             record_values[attribute_id] = value.value
-            evidence[attribute_id] = {**value.evidence.as_dict(), "model": value.model}
+            evidence[attribute_id] = {**value.evidence_dict(), "model": value.model}
             confidences.append(value.confidence)
         for attribute in view.kind.attributes.values():
             if attribute.id not in record_values and attribute.default is not None:
@@ -240,6 +245,9 @@ def assemble_items(
                 and resolution.status == "matched"
                 and not (target is not None and target.in_vault)
             )
+            if confident and hold is not None and hold(value):
+                result.count("held_by_reconciliation")
+                confident = False
             decision, by, at = decide(confident)
             partition, element_key = record_element(*element)
             drafts.append(
@@ -259,7 +267,7 @@ def assemble_items(
                         partition=partition,
                         element_key=element_key,
                         attribute_id=attribute_id,
-                        evidence=value.evidence.as_dict(),
+                        evidence=value.evidence_dict(),
                         confidence=round(value.confidence, 4),
                         decision=decision,
                         decided_by=by,

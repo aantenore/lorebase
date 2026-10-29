@@ -9,6 +9,7 @@ from lorebase_core.model import (
     AggregateDerivation,
     AggregateFunction,
     Attribute,
+    AttributeMapping,
     Cardinality,
     CreateLinkStep,
     CreateRecordStep,
@@ -21,6 +22,7 @@ from lorebase_core.model import (
     OperationStep,
     PathDerivation,
     PathStep,
+    PeriodMapping,
     Precondition,
     Relation,
     RelationBacking,
@@ -713,6 +715,19 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         None,
     ),
     # Sources
+    (
+        "source-period-without-valid-time",
+        lambda s: set_source(
+            s,
+            attribute_mapping={
+                LEGAL_NAME: AttributeMapping(
+                    column="name", valid_from=PeriodMapping(column="since")
+                )
+            },
+        ),
+        {C.SCHEMA_SOURCE_INVALID},
+        None,
+    ),
     (
         "source-literal-connection",
         lambda s: set_source(s, connection="postgresql://user:pw@db/erp"),

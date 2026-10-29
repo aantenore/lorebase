@@ -136,6 +136,9 @@ async def open_scribe(
                 checkpoint_interval_s=(
                     scribe.audit_checkpoints.interval_s if scribe.audit_checkpoints.enabled else 0
                 ),
+                reconcile_interval_s=(
+                    scribe.reconciliation.sweep_interval_s if scribe.reconciliation.enabled else 0
+                ),
             )
             yield Scribe(engine, context, worker, scheduler, scribe)
     finally:

@@ -1229,7 +1229,7 @@ class _Checker:
                 f"the primary key has {len(kind.primary_key)}",
                 kind=kind.id,
             )
-        for attribute_id in source.attribute_mapping:
+        for attribute_id, attribute_mapping in source.attribute_mapping.items():
             attribute = kind.attributes.get(attribute_id)
             if attribute is None:
                 self.add(
@@ -1244,6 +1244,17 @@ class _Checker:
                     IssueCode.SCHEMA_SOURCE_INVALID,
                     (*base, "attribute_mapping", attribute_id),
                     f"derived attribute {attribute.api_name!r} cannot be mapped",
+                    kind=kind.id,
+                    attribute=attribute_id,
+                )
+            elif not attribute.valid_time and (
+                attribute_mapping.valid_from is not None or attribute_mapping.valid_to is not None
+            ):
+                self.add(
+                    IssueCode.SCHEMA_SOURCE_INVALID,
+                    (*base, "attribute_mapping", attribute_id),
+                    f"attribute {attribute.api_name!r} has no valid_time: its mapping cannot "
+                    "name a validity period",
                     kind=kind.id,
                     attribute=attribute_id,
                 )

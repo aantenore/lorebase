@@ -62,7 +62,9 @@ flowchart LR
    origin `extraction` is opened, and the items at or above `auto_accept_threshold` (complete
    new Records only, Links only between Records that exist or are accepted too) are committed
    on the branch through the commit pipeline, with `extraction` Lineage per value (job,
-   document, evidence offsets, model, prompt version). The rest wait for review.
+   document, evidence offsets, model, prompt version, and the value's validity period when the
+   item states one). The rest wait for review, and so do value items that contradict the
+   current value's source (`scribe.reconciliation.hold_auto_accept`, [Scribe](scribe.md#reconciliation)).
 7. **Review** (`GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide`).
    Reviewers accept, reject or reset items, one by one with edits or in bulk by filter. After
    each decision the branch is re-materialized to hold exactly the accepted items (a rejected
