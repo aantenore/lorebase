@@ -45,6 +45,7 @@ from lorebase_core.infer.suggestions import (
     merge_attributes,
 )
 from lorebase_store.models import metadata
+from lorebase_store.repositories.quotes import erase_quotes
 
 SUGGESTIONS: Table = metadata.tables["schema_suggestions"]
 
@@ -317,6 +318,27 @@ class SchemaSuggestionRepository:
                 if attempt or _sqlstate(error) != DEADLOCK:
                     raise
         raise AssertionError("unreachable")  # pragma: no cover
+
+    async def erase_quotes(self, document_id: str, erased: str) -> int:
+        """Replace the quotes of the examples taken from `document_id` by `erased` (document
+        purge); the number of suggestions changed."""
+        await self._serialize()
+        found = await self._session.execute(
+            select(SUGGESTIONS.c.id, SUGGESTIONS.c.examples).where(
+                self._scoped(), SUGGESTIONS.c.examples.contains([{"document_id": document_id}])
+            )
+        )
+        changed = 0
+        for suggestion_id, examples in found.all():
+            new, hit = erase_quotes(examples, document_id, erased)
+            if hit:
+                await self._session.execute(
+                    update(SUGGESTIONS)
+                    .where(self._scoped(), SUGGESTIONS.c.id == suggestion_id)
+                    .values(examples=new)
+                )
+                changed += 1
+        return changed
 
     async def record(
         self,

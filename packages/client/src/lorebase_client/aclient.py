@@ -1673,12 +1673,16 @@ class Documents(_Resource):
         filename: str | None = None,
         extract: bool | None = None,
         tiers: Sequence[int] | None = None,
+        source_key: str | None = None,
     ) -> m.DocumentUploaded:
         """Upload a document: a path (named after the file) or bytes with a `filename`.
 
-        `extract` (server default: true) queues an extraction job on the given `tiers`.
+        `extract` (server default: true) queues an extraction job on the given `tiers`. With a
+        `source_key`, new bytes become a new version of the key's document.
         """
-        call = ep.upload_document(domain, file, filename=filename, extract=extract, tiers=tiers)
+        call = ep.upload_document(
+            domain, file, filename=filename, extract=extract, tiers=tiers, source_key=source_key
+        )
         return await self._c.send(call)
 
     async def upload_url(
@@ -1689,6 +1693,7 @@ class Documents(_Resource):
         filename: str | None = None,
         extract: bool | None = None,
         tiers: Sequence[int] | None = None,
+        source_key: str | None = None,
     ) -> m.DocumentUploaded:
         """Have the server fetch the document from an allowlisted URL."""
         body = m.DocumentFromUrl(
@@ -1696,17 +1701,55 @@ class Documents(_Resource):
             filename=filename,
             extract=extract,
             tiers=None if tiers is None else list(tiers),
+            source_key=source_key,
         )
         return await self._c.send(ep.upload_document_url(domain, body))
 
     async def list(
-        self, domain: str, *, limit: int | None = None, cursor: str | None = None
+        self,
+        domain: str,
+        *,
+        source_key: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> m.Page[m.Document]:
-        """Documents of the Domain, newest first."""
-        return await self._c.send(ep.list_documents(domain, limit=limit, cursor=cursor))
+        """Documents of the Domain, newest first; `source_key` keeps one key's versions."""
+        call = ep.list_documents(domain, source_key=source_key, limit=limit, cursor=cursor)
+        return await self._c.send(call)
 
-    def iterate(self, domain: str, *, page_size: int | None = None) -> AsyncIterator[m.Document]:
-        return self._c.iterate(ep.list_documents(domain, limit=page_size))
+    def iterate(
+        self, domain: str, *, source_key: str | None = None, page_size: int | None = None
+    ) -> AsyncIterator[m.Document]:
+        return self._c.iterate(ep.list_documents(domain, source_key=source_key, limit=page_size))
+
+    async def versions(
+        self,
+        domain: str,
+        document_id: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Page[m.Document]:
+        """The versions of the document's source key, newest first."""
+        call = ep.document_versions(domain, document_id, limit=limit, cursor=cursor)
+        return await self._c.send(call)
+
+    def iterate_versions(
+        self, domain: str, document_id: str, *, page_size: int | None = None
+    ) -> AsyncIterator[m.Document]:
+        return self._c.iterate(ep.document_versions(domain, document_id, limit=page_size))
+
+    async def retire(self, domain: str, document_id: str, *, reason: str) -> m.DocumentRetired:
+        """Retire a document: it is never extracted again and its evidence is re-checked."""
+        body = m.RetirementIn(reason=reason)
+        return await self._c.send(ep.retire_document(domain, document_id, body))
+
+    async def purge(
+        self, domain: str, document_id: str, *, reason: str, confirm: str
+    ) -> m.DocumentPurged:
+        """Irreversibly delete the content of a document; `confirm` is the document id."""
+        body = m.PurgeIn(reason=reason, confirm=confirm)
+        return await self._c.send(ep.purge_document(domain, document_id, body))
 
     async def get(self, domain: str, document_id: str) -> m.DocumentDetail:
         """A document with its extraction jobs."""

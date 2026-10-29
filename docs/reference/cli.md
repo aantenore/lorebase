@@ -1950,12 +1950,17 @@ $ lorebase documents [OPTIONS] COMMAND [ARGS]...
 
 * `upload`: Upload a document (PATH, or --url) and...
 * `list`: List the documents of a Domain, newest first.
+* `versions`: List the versions of a document&#x27;s source...
 * `get`: Show a document with its extraction jobs.
 * `text`: Print the parsed text of a document (the...
+* `retire`: Retire a document: it is never extracted...
+* `purge`: Irreversibly erase a document&#x27;s bytes,...
 
 #### `lorebase documents upload`
 
 Upload a document (PATH, or --url) and queue its extraction.
+
+With --key, new bytes become a new version of the key&#x27;s document.
 
 **Usage**:
 
@@ -1972,6 +1977,7 @@ $ lorebase documents upload [OPTIONS] [PATH]
 * `--url <str>`: Have the server fetch the document from this URL instead.
 * `--no-extract`: Store the document without queueing extraction.
 * `--tiers <str>`: Extraction tiers, comma separated (e.g. 0,1).
+* `--key <str>`: Source key (path, URL or external id): the document&#x27;s identity.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.
@@ -1985,6 +1991,29 @@ List the documents of a Domain, newest first.
 ```console
 $ lorebase documents list [OPTIONS]
 ```
+
+**Options**:
+
+* `--key <str>`: Only the versions of this source key.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--all`: Print every item, however many.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase documents versions`
+
+List the versions of a document&#x27;s source key, newest first.
+
+**Usage**:
+
+```console
+$ lorebase documents versions [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Document id.  [required]
 
 **Options**:
 
@@ -2030,6 +2059,49 @@ $ lorebase documents text [OPTIONS] {ID}
 
 **Options**:
 
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase documents retire`
+
+Retire a document: it is never extracted again and its evidence is re-checked.
+
+**Usage**:
+
+```console
+$ lorebase documents retire [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Document id.  [required]
+
+**Options**:
+
+* `--reason <str>`: Why, recorded in the audit.  [required]
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase documents purge`
+
+Irreversibly erase a document&#x27;s bytes, text, chunks and evidence quotes.
+
+**Usage**:
+
+```console
+$ lorebase documents purge [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Document id.  [required]
+
+**Options**:
+
+* `--reason <str>`: Why, recorded in the audit.  [required]
+* `--confirm <str>`: The document id again: the purge is irreversible.  [required]
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.

@@ -16,7 +16,19 @@ type Explicit<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: Exclude<T[P], u
 
 // ---------------------------------------------------------------- documents
 
-export type DocumentInfo = Explicit<S['DocumentOut'], 'text_sha256' | 'created_at'>;
+export type DocumentInfo = Explicit<
+  S['DocumentOut'],
+  | 'text_sha256'
+  | 'created_at'
+  | 'source_key'
+  | 'replaces'
+  | 'retired_at'
+  | 'retired_by'
+  | 'purged_at'
+  | 'purged_by'
+>;
+
+export type DocumentStatus = DocumentInfo['status'];
 
 export type ExtractionJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | (string & {});
 
@@ -31,6 +43,11 @@ export type ExtractionJob = Omit<
 /** A document with its extraction jobs, newest first. */
 export interface DocumentDetail extends DocumentInfo {
   extraction_jobs: ExtractionJob[];
+  /** Open `stale` reconciliation candidates whose claims come from this document. */
+  open_stale_candidates: number;
+  /** Whether the caller holds `document.retire` / `document.purge` Domain-wide. */
+  can_retire: boolean;
+  can_purge: boolean;
 }
 
 /** A multipart upload, or a document fetched by Keeper from an allowlisted URL. */
@@ -39,9 +56,26 @@ export type UploadDocumentInput = {
   extract?: boolean;
   /** Extraction tiers (0, 1, 2); Keeper's default if absent. */
   tiers?: number[];
+  /** Stable identity of the document across versions; new bytes under a key are a new version. */
+  source_key?: string;
 } & ({ file: File } | { url: string; filename?: string });
 
-export type DocumentUploaded = Omit<S['DocumentUploaded'], 'document' | 'job_id'> & {
+export type DocumentUploaded = Omit<
+  S['DocumentUploaded'],
+  'document' | 'job_id' | 'check_job_id'
+> & {
+  document: DocumentInfo;
+  job_id: number | null;
+  check_job_id: number | null;
+};
+
+export interface DocumentRetired {
+  document: DocumentInfo;
+  job_id: number | null;
+}
+
+/** What a purge removed. */
+export type DocumentPurged = Omit<S['DocumentPurged'], 'document' | 'job_id'> & {
   document: DocumentInfo;
   job_id: number | null;
 };

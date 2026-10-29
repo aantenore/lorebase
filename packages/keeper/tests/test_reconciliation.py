@@ -35,6 +35,7 @@ from lorebase_keeper.services.reconciliation import (
     unreadable,
 )
 from lorebase_store.repositories import CandidateRow, wrap_claim
+from lorebase_store.repositories.reconciliation_candidates import wrap_signals
 
 SUPPLY_SCHEMA = Path(__file__).resolve().parents[3] / "examples" / "supply" / "schema.yaml"
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
@@ -195,6 +196,33 @@ def test_sensitive_claims_are_shown_by_clearance(schema: Schema) -> None:
     narrowed = Masking(Clearance(kinds={Sensitivity.CONFIDENTIAL: frozenset({"knd_other"})}))
     assert shown(stored, schema, narrowed.over(schema))["claims"][0]["value"] == blind.masked
     assert raw_value(stored.claims[0]["value"]) == "PL123"
+
+
+def test_evidence_gone_quotes_are_masked_like_evidence(schema: Schema) -> None:
+    kind = schema.kind_by_api_name("Supplier")
+    assert kind is not None
+    vat = kind.attribute_by_api_name("vat_number")
+    assert vat is not None
+    tags = (Sensitivity.CONFIDENTIAL,)
+    signal = {"document": "doc_1", "from_version": 1, "to_version": 2, "quote": "VAT PL123"}
+    stored = candidate(
+        wrap_claim(claim("p1", "PL123", "document:doc_1", "2026-01-01T00:00:00Z"), tags),
+        kind=kind.id,
+        attribute=vat.id,
+    )
+    stored = CandidateRow(
+        **{
+            **{name: getattr(stored, name) for name in CandidateRow.__slots__},
+            "type": "stale",
+            "signals": wrap_signals({"stale": ["evidence_gone"], "evidence_gone": signal}, tags),
+        }
+    )
+    blind = Masking(Clearance()).over(schema)
+    seen = shown(stored, schema, blind)["signals"]
+    assert seen["evidence_gone"] == {**signal, "quote": blind.masked}
+    assert seen["stale"] == ["evidence_gone"]
+    cleared = Masking(Clearance(everywhere=frozenset(tags))).over(schema)
+    assert shown(stored, schema, cleared)["signals"]["evidence_gone"] == signal
 
 
 def test_a_value_none_of_the_claims_holds_makes_the_candidate_stale() -> None:

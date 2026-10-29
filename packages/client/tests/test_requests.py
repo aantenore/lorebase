@@ -1144,6 +1144,14 @@ DOCUMENT_ROW = {
     "metadata": {},
     "created_at": "2026-10-01T08:00:00Z",
     "created_by": "usr_1",
+    "source_key": None,
+    "version": 1,
+    "replaces": None,
+    "status": "active",
+    "retired_at": None,
+    "retired_by": None,
+    "purged_at": None,
+    "purged_by": None,
 }
 ITEM_ROW = {
     "id": "itm_1",
@@ -1218,7 +1226,7 @@ def test_documents_upload_url_list_and_get(http: respx.MockRouter, sleeps: Sleep
         "error": None,
     }
     http.get("/domains/supply/documents/doc_1").respond(
-        200, json={**DOCUMENT_ROW, "extraction_jobs": [job]}
+        200, json={**DOCUMENT_ROW, "extraction_jobs": [job], "open_stale_candidates": 2}
     )
     with make(sleeps) as client:
         again = client.documents.upload_url(
@@ -1237,6 +1245,64 @@ def test_documents_upload_url_list_and_get(http: respx.MockRouter, sleeps: Sleep
     assert listing.calls[0].request.url.params["limit"] == "5"
     assert listed == ["doc_1"]
     assert detail.extraction_jobs[0].proposal_id == "prp_1"
+    assert detail.open_stale_candidates == 2
+
+
+def test_documents_source_key_versions_retire_and_purge(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    v2 = {**DOCUMENT_ROW, "id": "doc_2", "source_key": "k", "version": 2, "replaces": "doc_1"}
+    upload = http.post("/domains/supply/documents").respond(
+        201, json={"document": v2, "duplicate": False, "job_id": None, "check_job_id": 9}
+    )
+    listing = http.get("/domains/supply/documents").respond(
+        200, json={"items": [v2], "next_cursor": None}
+    )
+    versions = http.get("/domains/supply/documents/doc_2/versions").respond(
+        200, json={"items": [v2, DOCUMENT_ROW], "next_cursor": None}
+    )
+    retired = {**v2, "status": "retired", "retired_by": "usr_1"}
+    retire = http.post("/domains/supply/documents/doc_2/retirement").respond(
+        200, json={"document": retired, "job_id": 11}
+    )
+    purge = http.post("/domains/supply/documents/doc_2/purge").respond(
+        200,
+        json={
+            "document": {**retired, "status": "purged"},
+            "job_id": None,
+            "blob_deleted": True,
+            "text_deleted": True,
+            "chunks": 3,
+            "cache_entries": 2,
+            "items": 1,
+            "candidates": 0,
+            "suggestions": 0,
+        },
+    )
+    with make(sleeps) as client:
+        sent = client.documents.upload("supply", b"raw", filename="raw.bin", source_key="k")
+        client.documents.upload_url("supply", "https://example.test/a.pdf", source_key="k")
+        client.documents.list("supply", source_key="k")
+        listed = [d.id for d in client.documents.iterate_versions("supply", "doc_2")]
+        page = client.documents.versions("supply", "doc_2", limit=2)
+        done = client.documents.retire("supply", "doc_2", reason="obsolete")
+        erased = client.documents.purge("supply", "doc_2", reason="gdpr", confirm="doc_2")
+    assert sent.check_job_id == 9
+    assert sent.document.version == 2
+    assert b'name="source_key"\r\n\r\nk' in upload.calls[0].request.content
+    assert json.loads(upload.calls[1].request.content)["source_key"] == "k"
+    assert listing.calls.last.request.url.params["source_key"] == "k"
+    assert listed == ["doc_2", "doc_1"]
+    assert [d.version for d in page.items] == [2, 1]
+    assert versions.calls.last.request.url.params["limit"] == "2"
+    assert done.job_id == 11
+    assert done.document.status == "retired"
+    assert json.loads(retire.calls.last.request.content) == {"reason": "obsolete"}
+    assert json.loads(purge.calls.last.request.content) == {"reason": "gdpr", "confirm": "doc_2"}
+    assert erased.blob_deleted is True
+    assert erased.chunks == 3
+    assert retire.call_count == 1
+    assert purge.call_count == 1
 
 
 async def test_async_documents_upload_and_decide(http: respx.MockRouter, sleeps: Sleeps) -> None:

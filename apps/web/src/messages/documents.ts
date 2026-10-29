@@ -22,6 +22,7 @@ export const documents = {
     upload: (n: number) => `Upload ${n.toString()} ${n === 1 ? 'Document' : 'Documents'}`,
     stored: (n: number) => `${n.toString()} ${n === 1 ? 'Document' : 'Documents'} stored.`,
     storedBefore: 'Stored before; nothing new was queued.',
+    storedVersion: (version: number) => `Stored as version ${version.toString()}.`,
     storedPlain: 'Stored without extraction.',
     storedQueued: (job: number) => `Stored; extraction job ${job.toString()} queued.`,
     results: 'Upload results',
@@ -30,6 +31,8 @@ export const documents = {
     urlHint: 'Only allowed hosts can be fetched.',
     filenameLabel: 'File name (optional)',
     fetch: 'Fetch Document',
+    sourceKeyLabel: 'Source key (optional)',
+    sourceKeyHint: 'New bytes under the same key become a new version of the Document.',
   },
 
   library: {
@@ -43,8 +46,51 @@ export const documents = {
     by: 'By',
     extraction: 'Extraction',
     proposal: 'Proposal',
+    version: 'Version',
+    status: 'Status',
     pending: '...',
     proposalLink: (id: string) => `Proposal #${id}`,
+  },
+
+  lifecycle: {
+    statuses: {
+      active: 'active',
+      superseded: 'superseded',
+      retired: 'retired',
+      purged: 'purged',
+    },
+    versionLabel: (version: number) => `v${version.toString()}`,
+    sourceKey: 'Source key',
+    version: 'Version',
+    status: 'Status',
+    details: 'Details',
+    retiredBy: (by: string, at: string) => `Retired by ${by} on ${at}.`,
+    purgedBy: (by: string, at: string) => `Purged by ${by} on ${at}.`,
+    versionsTitle: 'Versions',
+    versionsLabel: 'Versions of this Document',
+    current: 'current',
+    staleCandidates: (n: number) =>
+      n === 1
+        ? '1 open stale candidate comes from this Document.'
+        : `${n.toString()} open stale candidates come from this Document.`,
+    staleLink: 'Open them in Reconciliation',
+    actions: 'Lifecycle',
+    retire: 'Retire',
+    retireTitle: 'Retire this Document',
+    retireNote:
+      'A retired Document stays on record but is no longer read; claims quoting it become stale.',
+    retireConfirm: 'Retire Document',
+    purge: 'Purge',
+    purgeTitle: 'Purge this Document',
+    purgeNote:
+      'Purging deletes the stored file, its parsed text and what was derived from them. It cannot be undone.',
+    purgeConfirm: 'Purge Document',
+    reasonLabel: 'Reason',
+    confirmLabel: (id: string) => `Type ${id} to confirm`,
+    working: 'Working...',
+    forbidden: 'Your credential is not allowed to do this.',
+    purged: (n: { chunks: number; items: number }) =>
+      `Purged: ${n.chunks.toString()} chunks and ${n.items.toString()} items removed.`,
   },
 
   page: {
@@ -78,6 +124,7 @@ export const documents = {
     characters: (start: number, end: number) =>
       `Characters ${start.toString()} to ${end.toString()}`,
     notParsed: 'The text of this Document has not been parsed yet.',
+    wasPurged: 'This Document was purged: its text is no longer stored.',
     passagesOnly: 'The parsed text is not available yet; the passages the items quote are shown.',
     truncated: (shown: string, total: string) =>
       `The text is long: the first ${shown} of ${total} characters are shown.`,

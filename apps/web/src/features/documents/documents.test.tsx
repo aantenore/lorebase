@@ -2,6 +2,8 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { testConfig } from '@/config/env';
 import { messages } from '@/messages';
+import { asRemote, createMockApi } from '@/api/mock/adapter';
+import type { KeeperApi } from '@/api';
 import { renderApp } from '@/test/render';
 import { segment, spansOf } from './document-spans';
 
@@ -23,7 +25,7 @@ describe('Documents: library', () => {
     const { table } = await openLibrary();
     expect(screen.getByRole('link', { name: 'Documents' })).toHaveAttribute('aria-current', 'page');
     const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
 
     const contract = rows.find((r) => /contract-c-3025/.test(r.textContent ?? ''));
     if (contract === undefined) throw new Error('no row');
@@ -36,6 +38,111 @@ describe('Documents: library', () => {
     if (scan === undefined) throw new Error('no row');
     expect(await within(scan).findByText('failed')).toBeInTheDocument();
     expect(within(scan).queryByRole('link', { name: /Proposal/ })).toBeNull();
+  });
+});
+
+describe('Documents: versions in the library', () => {
+  it('shows version, source key and a status badge only when not active', async () => {
+    const { table } = await openLibrary();
+    const rows = within(table).getAllByRole('row').slice(1);
+    const notices = rows.filter((r) => /quality-notice-p-10016/.test(r.textContent ?? ''));
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toHaveTextContent('quality/notice-p-10016');
+    expect(notices[0]).toHaveTextContent('v2');
+    expect(within(notices[0] as HTMLElement).queryByText('superseded')).toBeNull();
+    expect(notices[1]).toHaveTextContent('v1');
+    expect(within(notices[1] as HTMLElement).getByText('superseded')).toBeInTheDocument();
+  });
+
+  it('sends the source key with an upload and reports the new version', async () => {
+    const { user } = await openLibrary();
+    const input = screen.getByLabelText(messages.documents.intake.inputLabel);
+    await user.upload(input, file('x1.md', 'v one'));
+    await user.type(screen.getByLabelText(/Source key/), 'policy/x');
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
+    await screen.findByText(/: Stored; extraction job/);
+    await user.upload(input, file('x2.md', 'v two'));
+    await user.click(screen.getByRole('button', { name: messages.documents.intake.upload(1) }));
+    expect(await screen.findByRole('list', { name: 'Upload results' })).toHaveTextContent(
+      'x2.md: Stored as version 2.',
+    );
+  });
+});
+
+describe('Documents: lifecycle on the document page', () => {
+  it('shows key, version, status, versions and the stale candidates link', async () => {
+    renderApp('/supply/documents/doc_quality_notice_114_v1');
+    await screen.findByRole('heading', { name: 'quality-notice-p-10016.md' });
+    const details = screen.getByLabelText(messages.documents.lifecycle.details);
+    expect(details).toHaveTextContent('quality/notice-p-10016');
+    expect(details).toHaveTextContent('v1');
+    expect(details).toHaveTextContent('superseded');
+    const stale = screen.getByRole('link', { name: messages.documents.lifecycle.staleLink });
+    expect(stale.getAttribute('href')).toContain('/supply/reconcile?');
+    expect(decodeURIComponent(stale.getAttribute('href') ?? '')).toContain(
+      'source=document:doc_quality_notice_114_v1',
+    );
+    expect(stale.getAttribute('href')).toContain('type=stale');
+
+    const list = await screen.findByRole('list', {
+      name: messages.documents.lifecycle.versionsLabel,
+    });
+    const entries = within(list).getAllByRole('listitem');
+    expect(entries[0]).toHaveTextContent('v2');
+    expect(within(entries[0] as HTMLElement).getByRole('link')).toBeInTheDocument();
+    expect(entries[1]).toHaveTextContent('v1 (current)');
+  });
+
+  it('retires with a reason and shows it retired', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/documents/doc_scan_1999');
+    await user.click(await screen.findByRole('button', { name: 'Retire' }));
+    const dialog = screen.getByRole('dialog', { name: messages.documents.lifecycle.retireTitle });
+    const confirm = within(dialog).getByRole('button', { name: 'Retire Document' });
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Reason'), 'Superseded by a clean scan');
+    await user.click(confirm);
+    expect(await screen.findByText(/Retired by usr_mock on/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
+  });
+
+  it('purges only after the document id is typed, then says it was purged', async () => {
+    const user = userEvent.setup();
+    renderApp('/supply/documents/doc_contracts_oct');
+    await user.click(await screen.findByRole('button', { name: 'Purge' }));
+    const dialog = screen.getByRole('dialog', { name: messages.documents.lifecycle.purgeTitle });
+    const confirm = within(dialog).getByRole('button', { name: 'Purge Document' });
+    await user.type(within(dialog).getByLabelText('Reason'), 'Wrong file');
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText(/Type doc_contracts_oct/), 'doc_contracts_o');
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText(/Type doc_contracts_oct/), 'ct');
+    await user.click(confirm);
+    expect(await screen.findByText(/Purged by usr_mock on/)).toBeInTheDocument();
+    expect(await screen.findByText(messages.documents.viewer.wasPurged)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Purge' })).toBeNull();
+  });
+
+  it('hides Retire and Purge when the caller may not', async () => {
+    const base: KeeperApi = asRemote(
+      createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }),
+      0,
+    );
+    const api: KeeperApi = {
+      ...base,
+      documents: {
+        ...base.documents,
+        get: async (domain, id) => ({
+          ...(await base.documents.get(domain, id)),
+          can_retire: false,
+          can_purge: false,
+        }),
+      },
+    };
+    renderApp('/supply/documents/doc_scan_1999', testConfig(), api);
+    await screen.findByRole('heading', { name: 'scan-contract-1999.pdf' });
+    expect(screen.queryByRole('button', { name: 'Retire' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Purge' })).toBeNull();
   });
 });
 

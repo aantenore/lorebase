@@ -293,6 +293,9 @@ def test_domain_settings_override_the_options() -> None:
     assert effective_options(base, {"reconciliation": {"unknown": 1}}) is base
     assert effective_options(base, {"reconciliation": "off"}) is base
     assert effective_options(base, None) is base
+    off = effective_options(base, {"reconciliation": {"triggers": {"document_versions": False}}})
+    assert off.triggers.document_versions is False
+    assert off.triggers.extraction is True
 
 
 def test_stored_claims_are_read_back_unwrapped() -> None:

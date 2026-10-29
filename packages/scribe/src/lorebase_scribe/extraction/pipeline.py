@@ -101,6 +101,11 @@ from lorebase_store.extraction import (
     materialize_items,
     refresh_proposal,
 )
+from lorebase_store.jobs import (
+    DOCUMENT_VERSION_CHECK_JOB,
+    document_version_check_payload,
+    enqueue_job,
+)
 from lorebase_store.materialize import create_branch
 from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.models.enums import ItemDecision, ProposalOrigin, ProposalStatus, RunStatus
@@ -147,6 +152,11 @@ DETERMINISTIC_RELATIONS = frozenset({"cooccurrence", "fake"})
 
 class ExtractionError(RuntimeError):
     """The job cannot succeed as queued (unknown document, unusable model configuration)."""
+
+
+class DocumentRetiredError(ExtractionError):
+    """A document of the job is retired or purged: it is never extracted again (design 9.2,
+    problem type `document-retired` in Keeper)."""
 
 
 PERMANENT_ERRORS: tuple[type[Exception], ...] = (ExtractionError, ParseError, BlobNotFoundError)
@@ -296,13 +306,16 @@ class StoreCache:
             model,
         )
 
-    async def put(self, key: bytes, data: Any, usage: Usage, model: str) -> None:
+    async def put(
+        self, key: bytes, data: Any, usage: Usage, model: str, *, chunk_hash: bytes | None = None
+    ) -> None:
         async with self._sessions() as session, session.begin():
             await ExtractionCacheRepository(session).put(
                 key,
                 model=model,
                 output=data,
                 usage={"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens},
+                chunk_hash=chunk_hash,
             )
 
 
@@ -424,6 +437,10 @@ class ExtractionRun:
                 row = await repository.get(document_id)
                 if row is None:
                     raise ExtractionError(f"no document {document_id!r} in {domain_id!r}")
+                if not row.extractable:
+                    raise DocumentRetiredError(
+                        f"document {document_id!r} is {row.status}: it is not extracted again"
+                    )
                 documents.append(row)
             report = ExtractionReport(
                 job_id=job_id,
@@ -488,6 +505,23 @@ class ExtractionRun:
                 usage=dict(report.usage),
                 proposal_id=report.proposal_id,
                 error=error,
+            )
+            await self._queue_version_checks(session, report)
+
+    async def _queue_version_checks(self, session: AsyncSession, report: ExtractionReport) -> None:
+        """Queue the evidence check of each document of the job that is a new version of its
+        key (design 9.2), once the new version's own extraction is known, failed or not."""
+        repository = DocumentRepository(session, report.domain)
+        for document_id in report.documents:
+            row = await repository.get(document_id)
+            if row is None or row.replaces is None or not row.extractable:
+                continue
+            await enqueue_job(
+                session,
+                DOCUMENT_VERSION_CHECK_JOB,
+                domain_id=report.domain,
+                payload=document_version_check_payload(row.id, mode="version"),
+                unique=True,
             )
 
     # Extraction -------------------------------------------------------------------------

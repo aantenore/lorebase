@@ -452,3 +452,9 @@ class DocumentSettings(SectionModel):
         description="Characters of parsed text one `GET .../documents/{id}/text` returns; a "
         "longer text is cut there and the answer says `truncated`.",
     )
+    max_source_key_chars: int = Field(
+        default=1024,
+        ge=1,
+        description="Longest `source_key` of an upload (the stable identity whose new bytes "
+        "are new versions), after trimming surrounding white space.",
+    )

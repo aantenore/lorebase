@@ -3,6 +3,8 @@ import { apiErrorFromProblem, notFound } from '../errors';
 import type {
   DocumentDetail,
   DocumentInfo,
+  DocumentPurged,
+  DocumentRetired,
   DocumentUploaded,
   ExtractionJob,
 } from '../extraction-types';
@@ -66,6 +68,14 @@ const infoOf = (detail: DocumentDetail): DocumentInfo => ({
   metadata: structuredClone(detail.metadata),
   created_at: detail.created_at,
   created_by: detail.created_by,
+  source_key: detail.source_key,
+  version: detail.version,
+  replaces: detail.replaces,
+  status: detail.status,
+  retired_at: detail.retired_at,
+  retired_by: detail.retired_by,
+  purged_at: detail.purged_at,
+  purged_by: detail.purged_by,
 });
 
 /**
@@ -92,6 +102,28 @@ export function createDocumentsMock(
     return docs;
   };
 
+  const find = (domain: string, id: string): MockDocument => {
+    const found = library(domain).find((d) => d.detail.id === id);
+    if (found === undefined) throw notFound(`Document ${id}`);
+    return found;
+  };
+
+  const page = (all: DocumentInfo[], params?: { cursor?: string | null; limit?: number }) => {
+    const offset = decodeCursor(params?.cursor);
+    const limit = params?.limit;
+    const end = limit === undefined ? all.length : offset + limit;
+    return {
+      items: all.slice(offset, end),
+      next_cursor: end < all.length ? encodeCursor(end) : null,
+    };
+  };
+
+  /** Runs a step so that what it throws is a rejected promise, as for the real client. */
+  const settle = <T>(step: () => T): Promise<T> =>
+    new Promise((resolve) => {
+      resolve(step());
+    });
+
   const advance = (job: ExtractionJob) => {
     const seen = polls.get(job.id);
     if (seen === undefined || job.status === 'succeeded' || job.status === 'failed') return;
@@ -106,16 +138,67 @@ export function createDocumentsMock(
   };
 
   const api: KeeperApi['documents'] = {
-    list: (domain, params) => {
-      const all = library(domain).map((d) => d.detail);
-      const offset = decodeCursor(params?.cursor);
-      const limit = params?.limit;
-      const end = limit === undefined ? all.length : offset + limit;
-      return Promise.resolve({
-        items: all.slice(offset, end).map(infoOf),
-        next_cursor: end < all.length ? encodeCursor(end) : null,
-      });
-    },
+    list: (domain, params) =>
+      Promise.resolve(
+        page(
+          library(domain).map((d) => infoOf(d.detail)),
+          params,
+        ),
+      ),
+
+    versions: (domain, id, params) =>
+      settle(() => {
+        const found = find(domain, id);
+        const key = found.detail.source_key;
+        const all = library(domain)
+          .filter((d) => d.detail === found.detail || (key !== null && d.detail.source_key === key))
+          .map((d) => d.detail)
+          .sort((x, y) => y.version - x.version);
+        return page(all.map(infoOf), params);
+      }),
+
+    retire: (domain, id, reason) =>
+      settle(() => {
+        const found = find(domain, id);
+        if (reason.trim() === '') throw rejected('/body/reason', 'must not be empty');
+        const detail = found.detail;
+        if (detail.status !== 'retired' && detail.status !== 'purged') {
+          detail.status = 'retired';
+          detail.retired_at = new Date().toISOString();
+          detail.retired_by = 'usr_mock';
+        }
+        return { document: infoOf(detail), job_id: null } satisfies DocumentRetired;
+      }),
+
+    purge: (domain, id, input) =>
+      settle(() => {
+        const found = find(domain, id);
+        if (input.reason.trim() === '') throw rejected('/body/reason', 'must not be empty');
+        if (input.confirm !== id) {
+          throw rejected('/body/confirm', 'must equal the document id');
+        }
+        const detail = found.detail;
+        const hadText = found.text !== null;
+        if (detail.status !== 'purged') {
+          detail.status = 'purged';
+          detail.purged_at = new Date().toISOString();
+          detail.purged_by = 'usr_mock';
+          detail.text_sha256 = null;
+          detail.open_stale_candidates = 0;
+          found.text = null;
+        }
+        return {
+          document: infoOf(detail),
+          job_id: null,
+          blob_deleted: true,
+          text_deleted: hadText,
+          chunks: hadText ? 1 : 0,
+          cache_entries: 0,
+          items: 0,
+          candidates: 0,
+          suggestions: 0,
+        } satisfies DocumentPurged;
+      }),
 
     get: (domain, id) => {
       const found = library(domain).find((d) => d.detail.id === id);
@@ -183,14 +266,35 @@ export function createDocumentsMock(
         sha = fakeDigest(input.url);
       }
 
-      const existing = docs.find((d) => d.detail.sha256 === sha);
+      const key = input.source_key?.trim() || null;
+      // A key names one document through its versions: the active one answers equal bytes,
+      // and new bytes supersede it.
+      const active =
+        key === null
+          ? undefined
+          : docs.find((d) => d.detail.source_key === key && d.detail.status === 'active');
+      const existing =
+        key === null
+          ? docs.find((d) => d.detail.sha256 === sha)
+          : active?.detail.sha256 === sha
+            ? active
+            : undefined;
       if (existing !== undefined) {
         return {
           document: infoOf(existing.detail),
           duplicate: true,
           job_id: null,
+          check_job_id: null,
         } satisfies DocumentUploaded;
       }
+      const version =
+        1 +
+        Math.max(
+          0,
+          ...docs
+            .filter((d) => d.detail.source_key === key && key !== null)
+            .map((d) => d.detail.version),
+        );
       counter += 1;
       const now = new Date().toISOString();
       const extract = input.extract ?? true;
@@ -221,11 +325,28 @@ export function createDocumentsMock(
         metadata,
         created_at: now,
         created_by: 'usr_mock',
+        source_key: key,
+        version,
+        replaces: active?.detail.id ?? null,
+        status: 'active',
+        retired_at: null,
+        retired_by: null,
+        purged_at: null,
+        purged_by: null,
         extraction_jobs: jobs,
+        open_stale_candidates: 0,
+        can_retire: true,
+        can_purge: true,
       };
+      if (active !== undefined) active.detail.status = 'superseded';
       docs.unshift({ detail, text });
       for (const job of jobs) polls.set(job.id, 0);
-      return { document: infoOf(detail), duplicate: false, job_id: extract ? counter : null };
+      return {
+        document: infoOf(detail),
+        duplicate: false,
+        job_id: extract ? counter : null,
+        check_job_id: null,
+      };
     },
 
     text: (domain, id) => {

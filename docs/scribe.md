@@ -49,6 +49,7 @@ Domain-wide `data.read` grant.
 | `extraction` | `{"documents": [ids], "tiers": [..] or null, "requested_by"}` | Documents into a Proposal of items ([extraction.md](extraction.md)) |
 | `embeddings` | the scheduler, every `embeddings_interval_s` per Domain; a job that used its row budget (continuation) | One embedding pass over the Domain's materialized branches ([below](#embeddings)). Payload `{"branches"?, "reindex"?, "resume"?}`; the scheduled one is `{}` |
 | `reconcile_sweep` | the scheduler, every `scribe.reconciliation.sweep_interval_s` per Domain (0, the default, disables it); a job that used its work budget (continuation) | One reconciliation pass over a branch ([below](#reconciliation)). Payload `{"branch"?, "resume"?}`; the scheduled one is `{}` (the default branch) |
+| `document_version_check` | an `extraction` job that read a new version of a keyed document, once it finished; Keeper at a keyed upload that does not extract, and at a retirement; a job that used its value budget (continuation) | The evidence check of a new document version or a retired document ([below](#reconciliation), [extraction](extraction.md#document-versions-and-lifecycle)). Payload `{"document", "mode": "version" or "retire", "resume"?}` |
 | `audit_verify` | the scheduler, every `audit_verify_interval_s` | Recomputes every audit hash chain; the result names the first broken entry, and `lorebase.audit.verifications` counts the outcome ([operations](operations.md#audit-chain-verification)) |
 
 ### Worker loop
@@ -458,6 +459,16 @@ and the Proposal stays open for review ([design 10.6](design.md#106-reconciliati
   same Source with a newer value waiting in a `proposal` Proposal raises `stale`. Added
   Records are checked for duplicates. The run's counts carry `reconciliation_raised` and
   `reconciliation_claim_added`.
+- **Document versions** (`document_version_check`). For a new version of a keyed document,
+  every value whose current provenance is `extraction` from an earlier version of the key (found
+  through the accepted items of those versions, on the branch their Proposals targeted) and
+  that the new version's own items do not propose again: its old evidence quote is looked for
+  in the new version's parsed text with the white-space-insensitive match of evidence
+  verification. Gone, or unreadable (purged), raises `stale` with signal `evidence_gone`
+  (`{document, from_version, to_version, quote}`); found changes nothing. A retirement runs the
+  same check with empty text. No model is called and nothing is retracted. It looks at
+  `scribe.extraction.versions.max_values_per_job` values, then queues its continuation; a
+  Domain turns it off with `triggers.document_versions: false`.
 - **Sweep** (`reconcile_sweep`). Marks `obsolete`, with the reason, the open candidates whose
   disagreement left the data (Record deleted, Proposal closed or item rejected, claims equal
   under the current options, stale value replaced); then walks the Records of each Kind for

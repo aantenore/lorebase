@@ -92,15 +92,53 @@ class SourceWrittenPending(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
 
+DOCUMENT_STATUSES = ("active", "superseded", "retired", "purged")
+"""Lifecycle of a document (design 9.2 "Document versions and lifecycle")."""
+
+
 class Document(Base):
-    """Uploaded document; the bytes live in the blob store at `blob_ref`. One row per Domain
-    and content hash."""
+    """Uploaded document; the bytes live in the blob store at `blob_ref`.
+
+    A keyless document is one row per Domain and content hash (purged rows aside). A keyed one
+    (`source_key`) is a version of the document of that key: `version` counts from 1,
+    `replaces` names the version it replaced, at most one version of a key is `active`, and
+    the bytes of the active version are unique per key (revision 0041)."""
 
     __tablename__ = "documents"
     __table_args__ = (
         h32_check("sha256"),
         domain_fk(),
-        Index(None, "domain_id", "sha256", unique=True),
+        CheckConstraint("status IN ('active', 'superseded', 'retired', 'purged')", name="status"),
+        CheckConstraint("version >= 1", name="version"),
+        Index(
+            "ix_documents_domain_id_sha256",
+            "domain_id",
+            "sha256",
+            unique=True,
+            postgresql_where=text("source_key IS NULL AND status <> 'purged'"),
+        ),
+        Index(
+            "ix_documents_domain_id_source_key_version",
+            "domain_id",
+            "source_key",
+            "version",
+            unique=True,
+            postgresql_where=text("source_key IS NOT NULL"),
+        ),
+        Index(
+            "ix_documents_domain_id_source_key_active",
+            "domain_id",
+            "source_key",
+            unique=True,
+            postgresql_where=text("source_key IS NOT NULL AND status = 'active'"),
+        ),
+        Index(
+            "ix_documents_domain_id_source_key_sha256",
+            "domain_id",
+            "source_key",
+            "sha256",
+            postgresql_where=text("source_key IS NOT NULL"),
+        ),
     )
 
     domain_id: Mapped[DomainKey]
@@ -116,6 +154,14 @@ class Document(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
     created_by: Mapped[str]
+    source_key: Mapped[str | None]
+    version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    replaces: Mapped[str | None]
+    status: Mapped[str] = mapped_column(server_default=text("'active'"))
+    retired_at: Mapped[datetime | None]
+    retired_by: Mapped[str | None]
+    purged_at: Mapped[datetime | None]
+    purged_by: Mapped[str | None]
 
 
 class DocumentBlob(Base):
@@ -179,16 +225,24 @@ class ExtractionJob(Base):
 
 
 class ExtractionCacheEntry(Base):
-    """Model output cached by content key; holds no Domain data beyond the key."""
+    """Model output cached by content key; holds no Domain data beyond the key. `chunk_hash`
+    names the document chunk an answer was computed from, so purging a document drops the
+    answers of its chunks (revision 0041; null for answers cached before, or not about a
+    chunk)."""
 
     __tablename__ = "extraction_cache"
-    __table_args__ = (h32_check("cache_key"),)
+    __table_args__ = (
+        h32_check("cache_key"),
+        h32_check("chunk_hash"),
+        Index(None, "chunk_hash", postgresql_where=text("chunk_hash IS NOT NULL")),
+    )
 
     cache_key: Mapped[H32] = mapped_column(primary_key=True)
     model: Mapped[str]
     output: Mapped[dict[str, Any]]
     usage: Mapped[dict[str, Any]]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    chunk_hash: Mapped[H32 | None]
 
 
 class InferenceEndpointMode(Base):

@@ -16,7 +16,8 @@ outbox payloads wrap them (`{"$sensitive": {"tags": [...], "value": ...}}`, a va
 value being its vault reference); a value of an untagged Attribute whose JSON holds `$sensitive`
 or `$vault` keys is wrapped with every tag, so it cannot pose as a wrapper. The evidence of such
 a claim quotes the value: its members other than the locators (`EVIDENCE_LOCATORS`) are wrapped
-the same way, and left out for a vault Attribute (the document and offsets stay). Values a
+the same way, and left out for a vault Attribute (the document and offsets stay); so is the quote a
+signal carries (`evidence_gone`, `wrap_signals`). Values a
 decision records (`value`, `values`) are wrapped like claim values (`wrap_decision`), and its
 snapshot of the claims is the stored, wrapped one. Readers mask all of them by clearance.
 
@@ -46,6 +47,7 @@ from lorebase_core.reconcile import (
     merge_claims,
 )
 from lorebase_store.models import metadata
+from lorebase_store.repositories.quotes import erase_quotes
 
 CANDIDATES: Table = metadata.tables["reconciliation_candidates"]
 
@@ -166,6 +168,34 @@ def wrap_claim(
     return out
 
 
+def wrap_signals(
+    signals: Mapping[str, Any], tags: Collection[Sensitivity], *, vault: bool = False
+) -> dict[str, Any]:
+    """`signals` with the `quote` member of each signal object wrapped like evidence quotes
+    (left empty for a vault Attribute); other members unchanged."""
+    out: dict[str, Any] = {}
+    for name, signal in signals.items():
+        if isinstance(signal, Mapping) and signal.get("quote") is not None:
+            quote = None if vault else _wrap_value(signal["quote"], tags)
+            out[name] = {**signal, "quote": quote}
+        else:
+            out[name] = signal
+    return out
+
+
+def _merge_signals(stored: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    """Signals of a candidate seen again: incoming members win, lists are united (a value both
+    too old and without evidence keeps both `stale` reasons)."""
+    merged = dict(stored)
+    for name, signal in incoming.items():
+        before = merged.get(name)
+        if isinstance(before, list) and isinstance(signal, list):
+            merged[name] = [*before, *(s for s in signal if s not in before)]
+        else:
+            merged[name] = signal
+    return merged
+
+
 def wrap_decision(decision: Mapping[str, Any], tags: Collection[Sensitivity]) -> dict[str, Any]:
     """`decision` with the values it names (`value`, and each of `values`) wrapped like claim
     values; other members unchanged."""
@@ -223,6 +253,7 @@ class ReconciliationCandidateRepository:
         table = CANDIDATES
         fingerprint = draft.fingerprint
         incoming = [wrap_claim(c.document(), sensitivity, vault=vault) for c in draft.claims]
+        signals = wrap_signals(draft.signals, sensitivity, vault=vault)
         merged = merge_claims([], incoming, stored_count=0, max_claims=max_claims)
         inserted = (
             (
@@ -239,7 +270,7 @@ class ReconciliationCandidateRepository:
                         keys=list(draft.keys),
                         attribute_id=draft.attribute_id,
                         claims=merged.kept,
-                        signals=dict(draft.signals),
+                        signals=signals,
                         claim_count=merged.count,
                         proposal_id=draft.proposal_id,
                         created_at=now,
@@ -263,7 +294,7 @@ class ReconciliationCandidateRepository:
         values: dict[str, Any] = {
             "claims": merged.kept,
             "claim_count": merged.count,
-            "signals": {**current.signals, **draft.signals},
+            "signals": _merge_signals(current.signals, signals),
             "updated_at": now,
         }
         if draft.proposal_id is not None and current.proposal_id is None:
@@ -273,16 +304,8 @@ class ReconciliationCandidateRepository:
         row = await self._update(current.id, values)
         return UpsertOutcome(row, created=False, claims_added=merged.added)
 
-    async def page(
-        self,
-        filters: CandidateFilter,
-        *,
-        limit: int,
-        after: tuple[datetime, str] | None = None,
-    ) -> list[CandidateRow]:
-        """Candidates matching `filters`, newest first, after the keyset `(created_at, id)`."""
+    def _filtered(self, query: Any, filters: CandidateFilter) -> Any:
         table = CANDIDATES
-        query = select(table).where(self._scoped())
         for column, value in (
             (table.c.branch, filters.branch),
             (table.c.type, None if filters.type is None else filters.type.value),
@@ -296,6 +319,23 @@ class ReconciliationCandidateRepository:
             query = query.where(table.c.claims.contains([{"source": filters.source}]))
         if filters.kind_ids is not None:
             query = query.where(table.c.kind_id.in_(sorted(filters.kind_ids)))
+        return query
+
+    async def count(self, filters: CandidateFilter) -> int:
+        """Number of candidates matching `filters`."""
+        query = self._filtered(select(func.count()).select_from(CANDIDATES), filters)
+        return int((await self._session.execute(query.where(self._scoped()))).scalar_one())
+
+    async def page(
+        self,
+        filters: CandidateFilter,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None = None,
+    ) -> list[CandidateRow]:
+        """Candidates matching `filters`, newest first, after the keyset `(created_at, id)`."""
+        table = CANDIDATES
+        query = self._filtered(select(table).where(self._scoped()), filters)
         if after is not None:
             at, last_id = after
             query = query.where(
@@ -509,3 +549,27 @@ class ReconciliationCandidateRepository:
             .one()
         )
         return _row(updated)
+
+    async def erase_quotes(self, document_id: str, erased: str) -> int:
+        """Replace the evidence quotes of `document_id` in the claims, signals and decisions
+        of the candidates naming it by `erased` (document purge); the number changed."""
+        table = CANDIDATES
+        query = select(table).where(
+            self._scoped(),
+            or_(
+                table.c.claims.contains([{"evidence": {"document_id": document_id}}]),
+                table.c.signals["evidence_gone"]["document"].astext == document_id,
+            ),
+        )
+        changed = 0
+        for found in (await self._session.execute(query)).mappings():
+            row = _row(found)
+            values: dict[str, Any] = {}
+            for name in ("claims", "signals", "decision"):
+                new, hit = erase_quotes(getattr(row, name), document_id, erased)
+                if hit:
+                    values[name] = new
+            if values:
+                await self._update(row.id, values)
+                changed += 1
+        return changed

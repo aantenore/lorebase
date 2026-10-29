@@ -7,9 +7,10 @@ from typing import Any
 
 import pytest
 
-from lorebase_core.model import PeriodMapping
+from lorebase_core.model import ExtractionOrigin, PeriodMapping, ProvenanceEntry
 from lorebase_core.model.source import AttributeMapping
 from lorebase_core.reconcile import (
+    EVIDENCE_GONE_SIGNAL,
     CandidateType,
     Claim,
     DuplicateRule,
@@ -20,6 +21,7 @@ from lorebase_core.reconcile import (
     StaleReason,
     Verdict,
     duplicate_draft,
+    evidence_gone_verdict,
     pairs,
     stale_reasons,
     stale_verdict,
@@ -194,3 +196,60 @@ def test_period_mappings_need_one_input() -> None:
     assert mapping.valid_to is None
     # Unset periods leave the mapping's content as before.
     assert "valid_from" not in AttributeMapping(column="city").content()
+
+
+def test_evidence_gone_names_both_versions_and_carries_the_old_passage() -> None:
+    current = Claim.of_provenance(
+        ProvenanceEntry(
+            id=ident("prv", 1),
+            origin=ExtractionOrigin(
+                job_id="exj_1",
+                document_id="doc_1",
+                span_start=0,
+                span_end=5,
+                model_id="rules",
+                prompt_version="v1",
+            ),
+            actor="svc",
+            at="2026-10-01T00:00:00Z",
+        ),
+        "Gdansk",
+    )
+    passage = {"document_id": "doc_1", "start": 0, "end": 5, "quote": "in Gdansk"}
+    verdict = evidence_gone_verdict(
+        current,
+        branch="main",
+        kind_id=KIND,
+        key="S-1",
+        attribute_id=ATTR,
+        document_id="doc_1",
+        from_version=1,
+        to_version=2,
+        quote="in Gdansk",
+        evidence=passage,
+    )
+    assert verdict.raised
+    draft = verdict.draft
+    assert draft is not None
+    assert draft.type is CandidateType.STALE
+    assert draft.signals["stale"] == [StaleReason.EVIDENCE_GONE.value]
+    assert draft.signals[EVIDENCE_GONE_SIGNAL] == {
+        "document": "doc_1",
+        "from_version": 1,
+        "to_version": 2,
+        "quote": "in Gdansk",
+    }
+    assert draft.claims[0].evidence == passage
+    assert draft.claims[0].source == "document:doc_1"
+    # Same value, same fingerprint as any other stale candidate of it: one candidate.
+    aged = stale_verdict(
+        current,
+        branch="main",
+        kind_id=KIND,
+        key="S-1",
+        attribute_id=ATTR,
+        now=datetime(2027, 1, 1, tzinfo=UTC),
+        max_age=timedelta(days=1),
+    )
+    assert aged.draft is not None
+    assert aged.draft.fingerprint == draft.fingerprint

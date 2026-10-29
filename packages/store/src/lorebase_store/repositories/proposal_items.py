@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import ItemDecision
+from lorebase_store.repositories.quotes import erase_quotes
 
 ITEMS: Table = metadata.tables["proposal_items"]
 
@@ -215,3 +216,45 @@ class ProposalItemRepository:
             .group_by(ITEMS.c.decision)
         )
         return {ItemDecision(decision).value: int(count) for decision, count in result}
+
+    async def of_jobs(
+        self,
+        job_ids: Iterable[str],
+        *,
+        decisions: Iterable[ItemDecision] = (),
+        item_types: Iterable[str] = (),
+    ) -> list[ItemRow]:
+        """Items produced by the extraction jobs `job_ids`, in job then proposal order."""
+        wanted = sorted(set(job_ids))
+        if not wanted:
+            return []
+        query = select(ITEMS).where(ITEMS.c.domain_id == self._domain, ITEMS.c.job_id.in_(wanted))
+        chosen = list(decisions)
+        if chosen:
+            query = query.where(ITEMS.c.decision.in_(chosen))
+        types = list(item_types)
+        if types:
+            query = query.where(ITEMS.c.item_type.in_(types))
+        query = query.order_by(ITEMS.c.job_id, ITEMS.c.seq, ITEMS.c.item_id)
+        return [_item(row) for row in (await self._session.execute(query)).mappings()]
+
+    async def erase_quotes(self, job_ids: Iterable[str], document_id: str, erased: str) -> int:
+        """Replace the evidence quotes of `document_id` in the items of `job_ids` (subject and
+        evidence) by `erased` (document purge); the number of items changed."""
+        changed = 0
+        for row in await self.of_jobs(job_ids):
+            subject, in_subject = erase_quotes(row.subject, document_id, erased)
+            evidence, in_evidence = erase_quotes(row.evidence, document_id, erased)
+            if not (in_subject or in_evidence):
+                continue
+            await self._session.execute(
+                update(ITEMS)
+                .where(
+                    ITEMS.c.domain_id == self._domain,
+                    ITEMS.c.job_id == row.job_id,
+                    ITEMS.c.item_id == row.item_id,
+                )
+                .values(subject=subject, evidence=evidence)
+            )
+            changed += 1
+        return changed

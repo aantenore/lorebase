@@ -13,6 +13,8 @@ from lorebase_store.repositories.documents import (
     ExtractionCacheRepository,
     ExtractionJobRepository,
     ExtractionJobRow,
+    PurgedContent,
+    VersionOutcome,
 )
 from lorebase_store.repositories.domains import DomainNotFoundError, DomainRepository, DomainRow
 from lorebase_store.repositories.events import OutboxRepository
@@ -149,6 +151,7 @@ __all__ = [
     "ProposalRow",
     "ProvenanceRepository",
     "ProvenanceRow",
+    "PurgedContent",
     "ReconciliationCandidateRepository",
     "RecordOutcome",
     "RecordRow",
@@ -171,6 +174,7 @@ __all__ = [
     "SourceWrittenRepository",
     "SuggestionRow",
     "UpsertOutcome",
+    "VersionOutcome",
     "WrittenRow",
     "advisory_lock_key",
     "copy_fence",

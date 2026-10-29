@@ -18,6 +18,7 @@ import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import { shortTime } from '@/ui/time';
 import { useToast } from '@/ui/toast';
 import { JobBadge } from './job-status';
+import { STATUS_TONE } from './lifecycle';
 
 interface Outcome {
   name: string;
@@ -37,14 +38,15 @@ function outcomeOf(name: string, uploaded: DocumentUploaded): Outcome {
   if (uploaded.duplicate) {
     return { name, text: documentsMessages.intake.storedBefore, failed: false };
   }
-  return {
-    name,
-    text:
-      uploaded.job_id === null
-        ? documentsMessages.intake.storedPlain
-        : documentsMessages.intake.storedQueued(uploaded.job_id),
-    failed: false,
-  };
+  const queued =
+    uploaded.job_id === null
+      ? documentsMessages.intake.storedPlain
+      : documentsMessages.intake.storedQueued(uploaded.job_id);
+  const text =
+    uploaded.document.version > 1
+      ? `${documentsMessages.intake.storedVersion(uploaded.document.version)} ${queued}`
+      : queued;
+  return { name, text, failed: false };
 }
 
 /** Options shared by file and URL intake: whether to extract and with which tiers. */
@@ -104,8 +106,13 @@ function Intake({ domain }: { domain: string }) {
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const [url, setUrl] = useState('');
   const [filename, setFilename] = useState('');
+  const [sourceKey, setSourceKey] = useState('');
 
-  const options = { extract, ...(extract ? { tiers } : {}) };
+  const options = {
+    extract,
+    ...(extract ? { tiers } : {}),
+    ...(sourceKey.trim() === '' ? {} : { source_key: sourceKey.trim() }),
+  };
   const tiersMissing = extract && tiers.length === 0;
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['keeper', 'documents'] });
@@ -173,6 +180,15 @@ function Intake({ domain }: { domain: string }) {
           }}
           wording={WORDING}
           onChange={setFiles}
+        />
+        <Input
+          label={documentsMessages.intake.sourceKeyLabel}
+          className="w-96 max-w-full"
+          value={sourceKey}
+          hint={documentsMessages.intake.sourceKeyHint}
+          onChange={(event) => {
+            setSourceKey(event.target.value);
+          }}
         />
         <ExtractionOptions
           extract={extract}
@@ -248,6 +264,19 @@ function Intake({ domain }: { domain: string }) {
   );
 }
 
+function DocumentVersion({ document }: { document: DocumentInfo }) {
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      {documentsMessages.lifecycle.versionLabel(document.version)}
+      {document.status !== 'active' && (
+        <Badge tone={STATUS_TONE[document.status]}>
+          {documentsMessages.lifecycle.statuses[document.status]}
+        </Badge>
+      )}
+    </span>
+  );
+}
+
 function LibraryRow({ domain, document }: { domain: string; document: DocumentInfo }) {
   const scopeSearch = useScopeSearch();
   const detail = useDocument(domain, document.id);
@@ -263,6 +292,12 @@ function LibraryRow({ domain, document }: { domain: string; document: DocumentIn
         >
           {document.filename}
         </Link>
+        {document.source_key !== null && (
+          <span className="block font-mono text-xs text-muted">{document.source_key}</span>
+        )}
+      </TD>
+      <TD>
+        <DocumentVersion document={document} />
       </TD>
       <TD className="text-muted">{document.media_type}</TD>
       <TD>{formatBytes(document.size)}</TD>
@@ -326,6 +361,7 @@ export function DocumentsPage() {
               <THead>
                 <TR>
                   <TH>{documentsMessages.library.document}</TH>
+                  <TH>{documentsMessages.library.version}</TH>
                   <TH>{documentsMessages.library.type}</TH>
                   <TH>{documentsMessages.library.size}</TH>
                   <TH>{documentsMessages.library.added}</TH>

@@ -235,7 +235,7 @@ describe('mock documents', () => {
     const first = await api.documents.list('supply', { limit: 2 });
     expect(first.items.map((d) => d.id)).toEqual(['doc_contract_c3025', 'doc_amendment_c3013']);
     const rest = await api.documents.list('supply', { cursor: first.next_cursor });
-    expect(rest.items).toHaveLength(4);
+    expect(rest.items).toHaveLength(5);
     expect(rest.next_cursor).toBeNull();
     expect((await api.documents.list('hr')).items).toEqual([]);
   });

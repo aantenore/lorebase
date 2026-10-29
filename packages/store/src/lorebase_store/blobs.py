@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
-from sqlalchemy import Table, select
+from sqlalchemy import Table, delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,11 @@ class BlobStore(Protocol):
         """The bytes stored under `ref`; raises `BlobNotFoundError`."""
         ...
 
+    async def delete(self, session: AsyncSession, domain_id: str, ref: str) -> bool:
+        """Delete the bytes stored under `ref` (document purge); false when there were none.
+        The caller checks that no other document holds the reference."""
+        ...
+
 
 def sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
@@ -55,14 +60,29 @@ class PostgresBlobStore:
         )
         return f"{POSTGRES_SCHEME}:{digest.hex()}"
 
-    async def get(self, session: AsyncSession, domain_id: str, ref: str) -> bytes:
+    @staticmethod
+    def _key(ref: str) -> bytes:
         scheme, _, digest = ref.partition(":")
         if scheme != POSTGRES_SCHEME or not digest:
             raise BlobNotFoundError(f"not a Postgres blob reference: {ref!r}")
         try:
-            key = bytes.fromhex(digest)
+            return bytes.fromhex(digest)
         except ValueError:
             raise BlobNotFoundError(f"invalid blob reference: {ref!r}") from None
+
+    async def delete(self, session: AsyncSession, domain_id: str, ref: str) -> bool:
+        key = self._key(ref)
+        deleted = (
+            await session.execute(
+                delete(BLOBS)
+                .where(BLOBS.c.domain_id == domain_id, BLOBS.c.sha256 == key)
+                .returning(BLOBS.c.sha256)
+            )
+        ).scalar_one_or_none()
+        return deleted is not None
+
+    async def get(self, session: AsyncSession, domain_id: str, ref: str) -> bytes:
+        key = self._key(ref)
         content = (
             await session.execute(
                 select(BLOBS.c.content).where(BLOBS.c.domain_id == domain_id, BLOBS.c.sha256 == key)

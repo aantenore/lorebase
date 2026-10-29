@@ -15,7 +15,9 @@ Role semantics where the design table leaves room:
   `editor` uploads documents for extraction (`document.write`) and reads them
   (`document.read`); `reviewer` reads documents too, since extraction items quote them;
   documents are raw, unmasked input, so `viewer`, `explorer` and `agent-reader` do not read
-  them;
+  them; `maintainer` retires documents (`document.retire`: their values raise `stale`
+  candidates and they are never extracted again); only `admin` purges them
+  (`document.purge`: bytes, text and quotes deleted, irreversibly);
   `reviewer` reviews them and resolves Conflicts; merging needs `proposal.merge`
   (`maintainer`), into protected and unprotected branches alike;
 - `admin` holds every permission of the Domain (it is the Domain owner role); only it may
@@ -57,6 +59,8 @@ class Permission(StrEnum):
     SOURCE_SYNC = "source.sync"
     DOCUMENT_READ = "document.read"
     DOCUMENT_WRITE = "document.write"
+    DOCUMENT_RETIRE = "document.retire"
+    DOCUMENT_PURGE = "document.purge"
     JOB_MANAGE = "job.manage"
     GRANT_MANAGE = "grant.manage"
     APIKEY_MANAGE = "apikey.manage"
@@ -113,7 +117,12 @@ BUILTIN_ROLES: Mapping[str, frozenset[Permission]] = MappingProxyType(
         "reviewer": _REVIEWER,
         "maintainer": _EDITOR
         | _REVIEWER
-        | {Permission.PROPOSAL_MERGE, Permission.SOURCE_MANAGE, Permission.JOB_MANAGE},
+        | {
+            Permission.PROPOSAL_MERGE,
+            Permission.SOURCE_MANAGE,
+            Permission.JOB_MANAGE,
+            Permission.DOCUMENT_RETIRE,
+        },
         "admin": frozenset(Permission) - INSTALLATION_ADMIN_PERMISSIONS,
         "agent-reader": _VIEWER,
     }

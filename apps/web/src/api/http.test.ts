@@ -794,6 +794,18 @@ describe('live adapter: documents and extraction items', () => {
     metadata: { source: 'upload' },
     created_at: '2026-10-20T08:00:00Z',
     created_by: 'usr_1',
+    version: 1,
+    status: 'active',
+  };
+  // What the screens get: the members Keeper leaves out made explicit.
+  const mapped = {
+    ...document,
+    source_key: null,
+    replaces: null,
+    retired_at: null,
+    retired_by: null,
+    purged_at: null,
+    purged_by: null,
   };
 
   it('uploads a document as multipart with extract and tiers, and reports a duplicate', async () => {
@@ -801,14 +813,25 @@ describe('live adapter: documents and extraction items', () => {
       'POST /domains/supply/documents': json({ document, duplicate: true, job_id: null }, 200),
     });
     const file = new File(['# Contract'], 'c.md', { type: 'text/markdown' });
-    const uploaded = await api.documents.upload('supply', { file, extract: true, tiers: [0, 1] });
-    expect(uploaded).toEqual({ document, duplicate: true, job_id: null });
+    const uploaded = await api.documents.upload('supply', {
+      file,
+      extract: true,
+      tiers: [0, 1],
+      source_key: 'k/1',
+    });
+    expect(uploaded).toEqual({
+      document: mapped,
+      duplicate: true,
+      job_id: null,
+      check_job_id: null,
+    });
     const body = calls[0]?.body;
     expect(body).toBeInstanceOf(FormData);
     const form = body as FormData;
     expect((form.get('file') as File).name).toBe('c.md');
     expect(form.get('extract')).toBe('true');
     expect(form.get('tiers')).toBe('[0,1]');
+    expect(form.get('source_key')).toBe('k/1');
     expect(calls[0]?.headers['Content-Type']).toBeUndefined();
   });
 
@@ -819,9 +842,14 @@ describe('live adapter: documents and extraction items', () => {
     const uploaded = await api.documents.upload('supply', {
       url: 'https://docs.example.com/c.pdf',
       filename: 'c.pdf',
+      source_key: 'k/2',
     });
     expect(uploaded.job_id).toBe(7);
-    expect(calls[0]?.body).toEqual({ url: 'https://docs.example.com/c.pdf', filename: 'c.pdf' });
+    expect(calls[0]?.body).toEqual({
+      url: 'https://docs.example.com/c.pdf',
+      filename: 'c.pdf',
+      source_key: 'k/2',
+    });
   });
 
   it('refuses an upload with the findings of the 422', async () => {
@@ -853,7 +881,13 @@ describe('live adapter: documents and extraction items', () => {
     };
     const { api, calls } = fakeKeeper({
       'GET /domains/supply/documents': { items: [document], next_cursor: 'c2' },
-      'GET /domains/supply/documents/doc_1': { ...document, extraction_jobs: [job] },
+      'GET /domains/supply/documents/doc_1': {
+        ...document,
+        extraction_jobs: [job],
+        open_stale_candidates: 2,
+        can_retire: true,
+        can_purge: false,
+      },
       'GET /domains/supply/documents/doc_1/text': {
         document_id: 'doc_1',
         text_sha256: 'ab'.repeat(32),
@@ -863,11 +897,11 @@ describe('live adapter: documents and extraction items', () => {
       },
     });
     const page = await api.documents.list('supply', { limit: 1 });
-    expect(page).toEqual({ items: [document], next_cursor: 'c2' });
+    expect(page).toEqual({ items: [mapped], next_cursor: 'c2' });
     expect(calls[0]?.url.searchParams.get('limit')).toBe('1');
-    expect((await api.documents.get('supply', 'doc_1')).extraction_jobs[0]?.proposal_id).toBe(
-      'prp_1',
-    );
+    const detail = await api.documents.get('supply', 'doc_1');
+    expect(detail.extraction_jobs[0]?.proposal_id).toBe('prp_1');
+    expect(detail).toMatchObject({ open_stale_candidates: 2, can_retire: true, can_purge: false });
     expect(await api.documents.text('supply', 'doc_1')).toEqual({
       text: 'Supplier S-1025',
       length: 40,
@@ -876,6 +910,40 @@ describe('live adapter: documents and extraction items', () => {
     // 404 until Scribe parsed the document.
     expect(await api.documents.text('supply', 'doc_2')).toBeNull();
     expect(calls).toHaveLength(4);
+  });
+
+  it('lists versions, retires and purges', async () => {
+    const retired = { ...document, status: 'retired', retired_by: 'usr_1' };
+    const { api, calls } = fakeKeeper({
+      'GET /domains/supply/documents/doc_1/versions': { items: [document], next_cursor: null },
+      'POST /domains/supply/documents/doc_1/retirement': json(
+        { document: retired, job_id: 3 },
+        200,
+      ),
+      'POST /domains/supply/documents/doc_1/purge': json(
+        {
+          document: { ...document, status: 'purged' },
+          blob_deleted: true,
+          text_deleted: true,
+          chunks: 2,
+          cache_entries: 0,
+          items: 1,
+          candidates: 0,
+          suggestions: 0,
+        },
+        200,
+      ),
+    });
+    expect(await api.documents.versions('supply', 'doc_1')).toEqual({
+      items: [mapped],
+      next_cursor: null,
+    });
+    const done = await api.documents.retire('supply', 'doc_1', 'Old');
+    expect(done).toMatchObject({ job_id: 3, document: { status: 'retired', retired_by: 'usr_1' } });
+    expect(calls[1]?.body).toEqual({ reason: 'Old' });
+    const purged = await api.documents.purge('supply', 'doc_1', { reason: 'X', confirm: 'doc_1' });
+    expect(purged).toMatchObject({ job_id: null, chunks: 2, document: { status: 'purged' } });
+    expect(calls[2]?.body).toEqual({ reason: 'X', confirm: 'doc_1' });
   });
 
   const itemOut = {

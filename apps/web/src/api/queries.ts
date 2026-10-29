@@ -85,6 +85,8 @@ export const keys = {
   revision: (domain: DomainId, id: RevisionId) => ['keeper', 'revision', domain, id] as const,
   documents: (domain: DomainId) => ['keeper', 'documents', domain] as const,
   document: (domain: DomainId, id: string) => ['keeper', 'document', domain, id] as const,
+  documentVersions: (domain: DomainId, id: string) =>
+    ['keeper', 'document-versions', domain, id] as const,
   documentText: (domain: DomainId, id: string, textSha256: string | null) =>
     ['keeper', 'document-text', domain, id, textSha256] as const,
   proposalItems: (domain: DomainId, id: string) =>
@@ -418,6 +420,19 @@ export function useDocument(domain: DomainId, id: string) {
     queryFn: () => api.documents.get(domain, id),
     refetchInterval: (query) =>
       documents.jobPollMs > 0 && jobIsActive(query.state.data) ? documents.jobPollMs : false,
+  });
+}
+
+/** The versions of a document's source key, newest first (all pages). */
+export function useDocumentVersions(domain: DomainId, id: string) {
+  const api = useKeeperApi();
+  const { pageSize } = useConfig();
+  return useInfiniteQuery({
+    queryKey: keys.documentVersions(domain, id),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.documents.versions(domain, id, { limit: pageSize, cursor: pageParam }),
+    getNextPageParam: (last) => last.next_cursor,
   });
 }
 

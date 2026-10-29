@@ -70,6 +70,8 @@ import type {
   DecideItemsResult,
   DocumentDetail,
   DocumentInfo,
+  DocumentPurged,
+  DocumentRetired,
   DocumentText,
   DocumentUploaded,
   ExtractionItem,
@@ -240,6 +242,19 @@ export interface KeeperApi {
      * it is not parsed; the viewer then shows the evidence passages.
      */
     text(domain: DomainId, document: string): Promise<DocumentText | null>;
+    /** The versions of the document's source key, newest first (`GET .../versions`). */
+    versions(domain: DomainId, document: string, params?: PageParams): Promise<Page<DocumentInfo>>;
+    /** Takes the document out of use, keeping it for the record (`POST .../retirement`). */
+    retire(domain: DomainId, document: string, reason: string): Promise<DocumentRetired>;
+    /**
+     * Deletes the stored bytes, text and what was derived from them (`POST .../purge`);
+     * irreversible. `confirm` must equal the document id.
+     */
+    purge(
+      domain: DomainId,
+      document: string,
+      input: { reason: string; confirm: string },
+    ): Promise<DocumentPurged>;
   };
 
   readonly conflicts: {

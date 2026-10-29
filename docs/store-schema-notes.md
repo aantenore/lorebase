@@ -49,6 +49,16 @@ difference).
   `schema_suggestions` on `(domain_id, id)`, `document_chunks (domain_id, document_id, seq)`,
   `source_written (domain_id, source_id, target_branch, element, key)` and
   `source_written_pending (domain_id, proposal_id, element, key)` (revision `0040`).
+- Document identity (revision `0041`, design 9.2 "Document versions and lifecycle"):
+  `documents.status` is `text` with a check (`active`, `superseded`, `retired`, `purged`), not an
+  enum, like other lifecycle columns that may grow. Unique `(domain_id, sha256) WHERE source_key
+  IS NULL AND status <> 'purged'` (keyless content addressing; a purged row no longer holds the
+  bytes), unique `(domain_id, source_key, version) WHERE source_key IS NOT NULL`, unique
+  `(domain_id, source_key) WHERE source_key IS NOT NULL AND status = 'active'` (one current
+  version per key, so its bytes are unique per key) and a lookup index on `(domain_id,
+  source_key, sha256)`. Uploads under one key are serialized by a transaction advisory lock.
+  `extraction_cache.chunk_hash` (nullable, 32-byte check, partial index) names the chunk an
+  answer was computed from, for purges.
 - `audit_log.seq`, `outbox.id` and `jobs.id` are `bigint` identities (ordering matters); other ids
   are application-generated prefixed text ids.
 - Timestamps that are hashed or carried by history (`revisions.created_at`, `ref_log.at`,

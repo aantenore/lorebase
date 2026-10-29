@@ -100,7 +100,7 @@ The Sources of the schema with their connection reference, mapping summary, sync
 
 ![Documents](images/documents.png)
 
-Where contracts, notices and reports enter a Domain to be read into Proposals ([extraction](extraction.md)). A drop zone and a picker take the files, with the caps of the configuration stated and enforced, a switch for "Extract after storing" and the extraction tiers, and a form takes a URL for the hosts Keeper allows. The library lists each document with its type, size, who added it, the status of its latest extraction job and a link to the Proposal it opened. A document opens in a viewer with its jobs (model, prompt version, tokens, cost) and its parsed text, with the evidence of the Proposal's items highlighted. Live: the example documents of `examples/supply`.
+Where contracts, notices and reports enter a Domain to be read into Proposals ([extraction](extraction.md)). A drop zone and a picker take the files, with the caps of the configuration stated and enforced, a switch for "Extract after storing" and the extraction tiers, and a form takes a URL for the hosts Keeper allows. The library lists each document with its type, size, who added it, the status of its latest extraction job and a link to the Proposal it opened. A document uploaded under a source key shows its version and status, and its page lists the versions of the key, the open `stale` candidates its evidence raised (linked to the Reconciliation queue) and, for those who hold the permissions, Retire and Purge (typing the document id to confirm). A document opens in a viewer with its jobs (model, prompt version, tokens, cost) and its parsed text, with the evidence of the Proposal's items highlighted. Live: the example documents of `examples/supply`.
 
 ## Review
 
