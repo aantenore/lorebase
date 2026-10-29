@@ -773,6 +773,10 @@ class SourceSync:
             actor=self._principal,
             policy=policy,
             idempotency_key=report.run_id,
+            # The operator's mode, never the Domain's `reconciliation` override.
+            reconciliation_check=None
+            if self._reconciliation is None
+            else self._reconciliation.merge_check,
         )
         automatic = mode in (SourcePolicy.AUTO_WHEN_CLEAN, SourcePolicy.AUTO_WITH_AUTHORITY)
         if automatic and not self._settings.auto_merge_protected:

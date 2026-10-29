@@ -1297,6 +1297,9 @@ scribe:
     sweep_interval_s: 0.0        # scheduled sweep of every Domain; 0 disables it
     sweep_max_changes_per_job: 50000   # history changes one sweep job reads; then a continuation
     max_claims_per_candidate: 20 # newest claims kept per candidate; the others are counted
+    merge_check: warn            # Proposal check of open candidates on the Proposals Scribe
+                                 # merges: off, warn or block; operator only (a Domain sets
+                                 # reconciliation_check instead)
     triggers:
       extraction: true           # check extraction value items while they are assembled
       source_sync: true          # check a Source sync's changes before they are merged

@@ -9212,7 +9212,7 @@
           "reconciliation"
         ],
         "summary": "Resolve a candidate",
-        "description": "Decide a candidate: the value is written by `update_{kind}` on its branch (proposed\nfrom `reconcile/{candidate}` when the branch needs review); `keep_current` writes nothing.\n`dry_run` reports the edits without deciding.",
+        "description": "Decide a candidate: the value is written by `update_{kind}` on its branch (proposed\nfrom a new branch `reconcile/{candidate}-{random}` when the branch needs review);\n`keep_current` writes nothing. `dry_run` reports the edits without deciding.",
         "operationId": "resolve_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__resolution_post",
         "security": [
           {

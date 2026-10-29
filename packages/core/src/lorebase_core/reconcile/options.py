@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -27,6 +28,10 @@ class Stage(StrEnum):
 
 
 STAGE_ORDER: tuple[Stage, ...] = tuple(Stage)
+
+
+MergeCheck = Literal["off", "warn", "block"]
+"""Mode of the `reconciliation` Proposal check (design 10.3, 10.6)."""
 
 
 class _Options(BaseModel):
@@ -172,6 +177,12 @@ class ReconcileOptions(_Options):
     normalize: NormalizeOptions = Field(default_factory=NormalizeOptions)
     semantic: SemanticOptions = Field(default_factory=SemanticOptions)
     stale: StaleOptions = Field(default_factory=StaleOptions)
+    merge_check: MergeCheck = Field(
+        default="warn",
+        description="Proposal check of open candidates for the Proposals Scribe merges or "
+        "previews (Source syncs, extraction): off, warn or block. Set by the operator only; a "
+        "Domain chooses with its reconciliation_check setting.",
+    )
 
     @field_validator("stages")
     @classmethod
@@ -190,6 +201,7 @@ class ReconcileOptions(_Options):
 __all__ = [
     "STAGE_ORDER",
     "DuplicateOptions",
+    "MergeCheck",
     "NormalizeOptions",
     "ReconcileOptions",
     "SemanticOptions",
