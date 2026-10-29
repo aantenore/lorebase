@@ -1,4 +1,5 @@
 import { apiErrorFromProblem } from '../errors';
+import type { Domain, UpdateDomainInput } from '../types';
 
 /**
  * The mock's reading of a Domain's `extraction` setting (design 9.2), with the installation
@@ -45,7 +46,7 @@ function membersProblems(raw: Record<string, unknown>, at: string, keys: Set<str
 }
 
 /** Problems of a written `extraction` value, at `/body/settings/extraction/...`. */
-export function extractionProblems(raw: unknown): Issue[] {
+function extractionProblems(raw: unknown): Issue[] {
   const at = '/body/settings/extraction';
   if (raw === null) return [];
   if (!isRecord(raw)) return [{ pointer: at, message: 'must be an object', code: 'invalid' }];
@@ -83,7 +84,7 @@ export function extractionProblems(raw: unknown): Issue[] {
   return found;
 }
 
-export function rejectedSettings(issues: Issue[]) {
+function rejectedSettings(issues: Issue[]) {
   return apiErrorFromProblem({
     type: 'urn:lorebase:problem:validation-failed',
     title: 'Request validation failed',
@@ -103,7 +104,7 @@ function ignoredMembers(raw: Record<string, unknown>, path: string): string[] {
 }
 
 /** Paths of the values of the `extraction` setting that do not apply, as Keeper reports them. */
-export function ignoredSettings(settings: Record<string, unknown>): string[] {
+function ignoredSettings(settings: Record<string, unknown>): string[] {
   const raw = settings['extraction'];
   if (raw === undefined || raw === null) return [];
   if (!isRecord(raw)) return ['extraction'];
@@ -113,4 +114,32 @@ export function ignoredSettings(settings: Record<string, unknown>): string[] {
     if (isRecord(rule)) ignored.push(...ignoredMembers(rule, `extraction.rules[${index}]`));
   });
   return ignored;
+}
+
+/** `PATCH /domains/{d}`: the Domain with the changes applied, or a 422 naming the problems. */
+export function updateDomain(domain: Domain, input: UpdateDomainInput): Domain {
+  const changed = input.settings ?? {};
+  const issues = [
+    ...Object.keys(changed)
+      .filter((key) => key !== 'extraction')
+      .map((key) => ({
+        pointer: `/body/settings/${key}`,
+        message: 'not a setting this request may change (extraction)',
+        code: 'invalid',
+      })),
+    ...('extraction' in changed ? extractionProblems(changed['extraction']) : []),
+  ];
+  if (issues.length > 0) throw rejectedSettings(issues);
+  const settings: Record<string, unknown> = { ...domain.settings };
+  for (const [key, value] of Object.entries(changed)) {
+    if (value === null) delete settings[key];
+    else settings[key] = value;
+  }
+  return {
+    ...domain,
+    ...(input.display_name == null ? {} : { display_name: input.display_name }),
+    ...(input.description === undefined ? {} : { description: input.description }),
+    settings,
+    ignored_settings: ignoredSettings(settings),
+  };
 }
