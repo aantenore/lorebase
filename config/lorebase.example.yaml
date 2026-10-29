@@ -433,7 +433,8 @@ keeper:
     max_limit: 500               # largest page a request may ask for
     bulk_max: 1000               # candidates one bulk resolution may decide
     merge_check: warn            # Proposal check of open candidates: off, warn (listed) or block
-                                 # (open contradictions stop the merge); a Domain overrides it
+                                 # (open contradictions stop the merge); the stricter of this and
+                                 # the Domain reconciliation_check applies (off < warn < block)
   documents:                     # document intake for extraction (docs/extraction.md)
     max_bytes: 20971520          # largest document (20 MiB); the upload route allows this much
     multipart_overhead_bytes: 65536  # plus this, whatever limits.max_request_body_bytes says
@@ -1298,8 +1299,9 @@ scribe:
     sweep_max_changes_per_job: 50000   # history changes one sweep job reads; then a continuation
     max_claims_per_candidate: 20 # newest claims kept per candidate; the others are counted
     merge_check: warn            # Proposal check of open candidates on the Proposals Scribe
-                                 # merges: off, warn or block; operator only (a Domain sets
-                                 # reconciliation_check instead)
+                                 # merges: off, warn or block; the stricter of this and the
+                                 # Domain reconciliation_check applies (off < warn < block), so
+                                 # a Domain can tighten it, never loosen it
     triggers:
       extraction: true           # check extraction value items while they are assembled
       source_sync: true          # check a Source sync's changes before they are merged
