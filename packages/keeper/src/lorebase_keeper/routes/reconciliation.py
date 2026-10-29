@@ -46,7 +46,7 @@ from lorebase_keeper.services.reads import ReadGuard
 from lorebase_keeper.services.reconciliation_settle import SWEEP_ACTION
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
-from lorebase_store.jobs import enqueue_job
+from lorebase_store.jobs import RECONCILE_SWEEP_JOB, enqueue_job, reconcile_sweep_payload
 from lorebase_store.reads import head_schema
 from lorebase_store.repositories import (
     CandidateFilter,
@@ -59,9 +59,6 @@ router = APIRouter(tags=["reconciliation"])
 
 QUEUE = "/domains/{domain_id}/reconciliation"
 CANDIDATE = QUEUE + "/{candidate_id}"
-SWEEP_JOB = "reconcile_sweep"
-"""Job type of a reconciliation sweep run by Scribe; payload `{"branch": name}`."""
-
 DataRead = Annotated[ReadGuard, Depends(read_guard())]
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
@@ -715,7 +712,11 @@ async def queue_sweep(
         branch = (body.branch if body is not None else None) or domain.default_branch
         await require_branch(session, domain_id, branch)
         job_id = await enqueue_job(
-            session, SWEEP_JOB, domain_id=domain_id, payload={"branch": branch}, unique=True
+            session,
+            RECONCILE_SWEEP_JOB,
+            domain_id=domain_id,
+            payload=reconcile_sweep_payload(branch=branch),
+            unique=True,
         )
     annotate(request, action=SWEEP_ACTION, target=branch, job=job_id)
     return ReconciliationSweepOut(job_id=job_id, branch=branch)
