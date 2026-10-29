@@ -7597,7 +7597,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7815,7 +7815,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7922,7 +7922,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8037,7 +8037,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8144,7 +8144,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8261,7 +8261,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8401,7 +8401,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8584,7 +8584,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8710,7 +8710,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8827,7 +8827,7 @@
             }
           },
           "409": {
-            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+            "description": "Proposal not open (`proposal-not-open`), approvals missing (`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8848,6 +8848,927 @@
           },
           "503": {
             "description": "The target branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation": {
+      "get": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "List reconciliation candidates",
+        "description": "Candidates of a branch, newest first.",
+        "operationId": "list_candidates_api_v1_domains__domain_id__reconciliation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Default: the default branch.",
+              "title": "Branch"
+            },
+            "description": "Default: the default branch."
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CandidateType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CandidateStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Kind api name.",
+              "title": "Kind"
+            },
+            "description": "Kind api name."
+          },
+          {
+            "name": "attribute",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Attribute api name (with kind).",
+              "title": "Attribute"
+            },
+            "description": "Attribute api name (with kind)."
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Source identity of a claim, e.g. `source:src_...`.",
+              "title": "Source"
+            },
+            "description": "Source identity of a claim, e.g. `source:src_...`."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size.",
+              "title": "Limit"
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque page cursor.",
+              "title": "Cursor"
+            },
+            "description": "Opaque page cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ReconciliationCandidateOut_"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}": {
+      "get": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Get a reconciliation candidate",
+        "description": "One candidate with its claims and last decision.",
+        "operationId": "get_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationCandidateOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/resolution": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Resolve a candidate",
+        "description": "Decide a candidate: the value is written by `update_{kind}` on its branch (proposed\nfrom `reconcile/{candidate}` when the branch needs review); `keep_current` writes nothing.\n`dry_run` reports the edits without deciding.",
+        "operationId": "resolve_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__resolution_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationResolveIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationDecisionOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/dismissal": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Dismiss a candidate",
+        "description": "Dismiss an open candidate; nothing is written. It can be reopened.",
+        "operationId": "dismiss_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__dismissal_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationReasonIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationDecisionOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation/{candidate_id}/reopen": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Reopen a dismissed candidate",
+        "description": "Open a dismissed candidate again.",
+        "operationId": "reopen_candidate_api_v1_domains__domain_id__reconciliation__candidate_id__reopen_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          },
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationReasonIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationDecisionOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation:resolve": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Resolve candidates in bulk",
+        "description": "Apply a policy, or dismiss, over at most `keeper.reconciliation.bulk_max` open\ncandidates; each is decided and audited on its own, and one that fails does not stop the\nothers.",
+        "operationId": "resolve_candidates_api_v1_domains__domain_id__reconciliation_resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationBulkIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationBulkOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain_id}/reconciliation/sweeps": {
+      "post": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Queue a reconciliation sweep",
+        "description": "Queue a sweep of a branch for Scribe (job `reconcile_sweep`); an identical sweep that\nis queued or running is returned instead of a new one.",
+        "operationId": "queue_sweep_api_v1_domains__domain_id__reconciliation_sweeps_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReconciliationSweepIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationSweepOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing permission or clearance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch or candidate not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The candidate is not open (`candidate-not-open`), or the write needs review and its Proposal cannot be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, or the value is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The branch is locked by another writer.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12074,6 +12995,27 @@
         ],
         "title": "BudgetOut"
       },
+      "CandidateStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "resolved",
+          "dismissed",
+          "obsolete"
+        ],
+        "title": "CandidateStatus",
+        "description": "``open`` until a person decides; only the pipeline sets ``obsolete`` (AC-33)."
+      },
+      "CandidateType": {
+        "type": "string",
+        "enum": [
+          "duplicate",
+          "contradiction",
+          "superseded",
+          "stale"
+        ],
+        "title": "CandidateType"
+      },
       "ChangeKind": {
         "type": "string",
         "enum": [
@@ -12377,6 +13319,21 @@
               }
             ],
             "title": "Message"
+          },
+          "candidates": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidates",
+            "description": "`reconciliation`: ids of the first open candidates of the Proposal."
           }
         },
         "type": "object",
@@ -17249,6 +18206,33 @@
         ],
         "title": "Page[ProposalOut]"
       },
+      "Page_ReconciliationCandidateOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationCandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "Page[ReconciliationCandidateOut]"
+      },
       "Page_SourceRunOut_": {
         "properties": {
           "items": {
@@ -18487,6 +19471,739 @@
         "type": "object",
         "title": "RebaseTagsRequest",
         "description": "A tag rebase of one branch."
+      },
+      "ReconciliationBulkIn": {
+        "properties": {
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationFilterIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "choice": {
+            "type": "string",
+            "enum": [
+              "policy",
+              "dismiss"
+            ],
+            "title": "Choice"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "choice",
+          "reason"
+        ],
+        "title": "ReconciliationBulkIn",
+        "description": "One choice over open candidates: the `ids` given, or those matching `filter`."
+      },
+      "ReconciliationBulkItemOut": {
+        "properties": {
+          "candidate": {
+            "type": "string",
+            "title": "Candidate"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "As a single decision, or `failed`."
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "status"
+        ],
+        "title": "ReconciliationBulkItemOut"
+      },
+      "ReconciliationBulkOut": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts",
+            "description": "Candidates per status."
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationBulkItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "counts",
+          "items"
+        ],
+        "title": "ReconciliationBulkOut"
+      },
+      "ReconciliationCandidateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "type": {
+            "$ref": "#/components/schemas/CandidateType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CandidateStatus"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "description": "Kind api name (null when the schema lost it)."
+          },
+          "kind_id": {
+            "type": "string",
+            "title": "Kind Id"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Attribute api name; null for duplicates."
+          },
+          "attribute_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Id"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationClaimOut"
+            },
+            "type": "array",
+            "title": "Claims"
+          },
+          "claim_count": {
+            "type": "integer",
+            "title": "Claim Count",
+            "description": "Every distinct claim seen; the newest are listed."
+          },
+          "signals": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Signals"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id",
+            "description": "The Proposal that raised the candidate, or that a decision opened."
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision",
+            "description": "The last decision: choice, claim, policy, reason and the claims then."
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "branch",
+          "type",
+          "status",
+          "kind",
+          "kind_id",
+          "keys",
+          "attribute",
+          "attribute_id",
+          "claims",
+          "claim_count",
+          "signals",
+          "proposal_id",
+          "decision",
+          "decided_by",
+          "decided_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ReconciliationCandidateOut",
+        "description": "A reconciliation candidate and its claims."
+      },
+      "ReconciliationChoice": {
+        "type": "string",
+        "enum": [
+          "claim",
+          "keep_current",
+          "custom",
+          "policy",
+          "merge"
+        ],
+        "title": "ReconciliationChoice"
+      },
+      "ReconciliationClaimOut": {
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "title": "Claim Id"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Masked when the caller is not cleared for it."
+          },
+          "value_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Hash"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Source identity: `source:`, `document:`, `principal:`..."
+          },
+          "provenance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Id"
+          },
+          "proposal_item": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Item"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence",
+            "description": "Document, chunk, offsets and quote of an extracted value."
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "claim_id",
+          "value"
+        ],
+        "title": "ReconciliationClaimOut",
+        "description": "One value and where it comes from (design 10.6)."
+      },
+      "ReconciliationDecisionOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "proposed",
+              "undecided",
+              "dry_run",
+              "dismissed",
+              "reopened"
+            ],
+            "title": "Status"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/ReconciliationCandidateOut"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id",
+            "description": "The claim chosen."
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision the write committed."
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal",
+            "description": "Proposal of a write that needs review (`proposed`)."
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Branch written."
+          },
+          "edits": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Edits"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "candidate"
+        ],
+        "title": "ReconciliationDecisionOut",
+        "description": "Where a decision left the candidate."
+      },
+      "ReconciliationFilterIn": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReconciliationFilterIn"
+      },
+      "ReconciliationPolicy": {
+        "type": "string",
+        "enum": [
+          "authority",
+          "newest_wins",
+          "prefer_current",
+          "prefer_incoming"
+        ],
+        "title": "ReconciliationPolicy"
+      },
+      "ReconciliationReasonIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReconciliationReasonIn"
+      },
+      "ReconciliationResolveIn": {
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/ReconciliationChoice"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "survivor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Survivor",
+            "description": "Key of the Record that stays."
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values",
+            "description": "Values to set on the survivor, by Attribute api name."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "choice",
+          "reason"
+        ],
+        "title": "ReconciliationResolveIn",
+        "description": "A decision (design 10.6): `claim` (`claim_id`), `keep_current`, `custom` (`value`),\n`policy` (`policy`) or, for duplicates, `merge` (`survivor`, `values`)."
+      },
+      "ReconciliationSweepIn": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch",
+            "description": "Default: the default branch."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReconciliationSweepIn"
+      },
+      "ReconciliationSweepOut": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "branch"
+        ],
+        "title": "ReconciliationSweepOut"
       },
       "RecordAddress": {
         "properties": {

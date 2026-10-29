@@ -28,7 +28,10 @@
 Every Revision has origin `operation` (or `import` for bulk imports) with the invocation id as
 reference; every changed Attribute is attributed to a provenance entry naming the invocation,
 the Operation and the principal. The parameters hash is kept in the invocation record and in
-the audit entry.
+the audit entry. Values given a validity period (`valid` of `update_{kind}`) get an entry of
+their own carrying it. A decision of the reconciliation queue (design 10.6) runs with
+`ExecutionRequest.reconciliation`: its entries have that `reconciliation` origin instead, which
+only Keeper builds; `within` lets it record the decision in the transaction of the write.
 """
 
 from __future__ import annotations
@@ -85,6 +88,7 @@ from lorebase_core.model import (
     OperationOrigin,
     OperationStep,
     ProvenanceEntry,
+    ReconciliationOrigin,
     Relation,
     ReviewMode,
     Schema,
@@ -123,6 +127,7 @@ from lorebase_keeper.services.operation_catalog import (
     Action,
     BuiltinOperation,
     Parameter,
+    Period,
     RecordReader,
     batches,
     bind,
@@ -193,6 +198,13 @@ class ExecutionRequest:
     reviewed_by_proposal: bool = False
     """The edits go to a task branch whose Proposal is their review (agent writes): the
     review policy and the protection of the branch no longer refuse the execution."""
+    reconciliation: ReconciliationOrigin | None = None
+    """Set by Keeper for a decision of the reconciliation queue, never from a request: the
+    provenance entries of the execution have this origin (module doc)."""
+
+
+Within = Callable[[AsyncSession, "ExecutionOutcome"], Awaitable[None]]
+"""Called in the transaction of the last Revision, before it commits (not for dry runs)."""
 
 
 @dataclass
@@ -369,10 +381,18 @@ def _is_import(resolved: _Resolved) -> bool:
 
 
 def _provenance(
-    resolved: _Resolved, invocation_id: str, principal: Principal, at: Any
+    resolved: _Resolved,
+    invocation_id: str,
+    principal: Principal,
+    at: Any,
+    *,
+    reconciliation: ReconciliationOrigin | None = None,
+    period: Period = (None, None),
 ) -> ProvenanceEntry:
-    origin: ImportOrigin | OperationOrigin
-    if _is_import(resolved):
+    origin: ImportOrigin | OperationOrigin | ReconciliationOrigin
+    if reconciliation is not None:
+        origin = reconciliation
+    elif _is_import(resolved):
         origin = ImportOrigin(batch_id=invocation_id)
     else:
         origin = OperationOrigin(
@@ -381,7 +401,36 @@ def _provenance(
             operation_id=None if resolved.custom is None else resolved.custom.id,
             principal=principal.id,
         )
-    return ProvenanceEntry(id=new_id(IdPrefix.PROVENANCE), origin=origin, actor=principal.id, at=at)
+    return ProvenanceEntry(
+        id=new_id(IdPrefix.PROVENANCE),
+        origin=origin,
+        actor=principal.id,
+        at=at,
+        valid_from=period[0],
+        valid_to=period[1],
+    )
+
+
+def _attributed(
+    changes: Sequence[DataChange],
+    entry: ProvenanceEntry,
+    periods: Mapping[str, ProvenanceEntry],
+) -> list[Change]:
+    """`changes` attributed to `entry`, and the values given a period to the entry of their
+    period (`periods`, by Attribute id)."""
+    if not periods:
+        return [Change(c, provenance=entry.id) for c in changes]
+    out: list[Change] = []
+    for change in changes:
+        if isinstance(change, RecordUpsert):
+            mapping = {
+                attribute_id: periods[attribute_id].id if attribute_id in periods else entry.id
+                for attribute_id in change.record.values
+            }
+            out.append(Change(change, provenance=mapping))
+        else:
+            out.append(Change(change, provenance=entry.id))
+    return out
 
 
 def _permission(
@@ -462,6 +511,7 @@ async def execute(
     check: Check,
     proposals_path: str,
     reveal: Reveal | None = None,
+    within: Within | None = None,
 ) -> ExecutionOutcome:
     """Run an Operation on a branch (default: the Domain's default branch). Edits in the
     outcome are masked for the caller's clearance (`reveal`; without it, as for a caller
@@ -486,6 +536,7 @@ async def execute(
                 proposals_path,
                 started,
                 reveal,
+                within,
             )
         finally:
             if session.in_transaction():
@@ -503,6 +554,7 @@ async def _execute(
     proposals_path: str,
     started: float,
     reveal: Reveal | None,
+    within: Within | None = None,
 ) -> ExecutionOutcome:
     domain = await require_domain(session, domain_id)
     branch = request.branch or domain.default_branch
@@ -618,7 +670,23 @@ async def _execute(
             raise _precondition_problem(resolved.name, findings, limit=settings.max_issues)
         raise rejected(findings, limit=settings.max_issues, edits=outcome.edits)
 
-    entry = _provenance(resolved, invocation_id, principal, store.clock())
+    at = store.clock()
+    entry = _provenance(
+        resolved, invocation_id, principal, at, reconciliation=request.reconciliation
+    )
+    by_period: dict[Period, ProvenanceEntry] = {}
+    for period in planned.periods.values():
+        if period not in by_period:
+            by_period[period] = _provenance(
+                resolved,
+                invocation_id,
+                principal,
+                at,
+                reconciliation=request.reconciliation,
+                period=period,
+            )
+    periods = {attribute: by_period[period] for attribute, period in planned.periods.items()}
+    entries = [entry, *by_period.values()]
     origin = _origin(resolved, invocation_id)
     message = request.message or f"{resolved.name} ({invocation_id})"
     batch_size = settings.import_batch_rows if _is_import(resolved) else max(len(changes), 1)
@@ -635,11 +703,11 @@ async def _execute(
                 session,
                 domain_id,
                 branch,
-                [Change(c, provenance=entry.id) for c in batch],
+                _attributed(batch, entry, periods),
                 author=author_of(principal),
                 message=message,
                 origin=origin,
-                provenance=[entry],
+                provenance=entries,
                 expected_head=head,
                 runtime=store.runtime,
                 clock=store.clock,
@@ -667,6 +735,8 @@ async def _execute(
         await _record(
             session, domain_id, request, principal, outcome, resolved, store, started, head
         )
+        if within is not None:
+            await within(session, outcome)
         if resolved.custom is not None:
             events = await write_side_effects(
                 session,
@@ -895,7 +965,11 @@ async def _plan(
     else:
         plan = await plan_edits(builtin, bound.values, read)
     return PlannedEdits(
-        changes=plan.changes, findings=plan.findings, units=plan.units, warnings=plan.warnings
+        changes=plan.changes,
+        findings=plan.findings,
+        units=plan.units,
+        warnings=plan.warnings,
+        periods=plan.periods,
     )
 
 
@@ -915,6 +989,8 @@ class PlannedEdits:
     preconditions_failed: bool = False
     units: list[int] = field(default_factory=list)
     warnings: list[Finding] = field(default_factory=list)
+    periods: dict[str, Period] = field(default_factory=dict)
+    """Validity periods of values, by Attribute id (`operation_catalog.Plan.periods`)."""
 
 
 def _false_precondition(program: CompiledExpression, index: int, message: str) -> Finding:

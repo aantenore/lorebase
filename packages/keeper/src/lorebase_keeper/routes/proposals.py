@@ -103,8 +103,9 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
     409: {
         "model": Problem,
         "description": "Proposal not open (`proposal-not-open`), approvals missing "
-        "(`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), a "
-        "branch is gone (`proposal-branch-missing`), duplicate or idempotency conflict.",
+        "(`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open "
+        "contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone "
+        "(`proposal-branch-missing`), duplicate or idempotency conflict.",
     },
     422: {"model": ValidationProblem, "description": "Invalid request or resolution."},
     503: {"model": Problem, "description": "The target branch is locked by another writer."},
@@ -138,6 +139,10 @@ class CheckOut(BaseModel):
     name: str
     status: Literal["passed", "failed", "pending"]
     message: str | None = None
+    candidates: list[str] | None = Field(
+        default=None,
+        description="`reconciliation`: ids of the first open candidates of the Proposal.",
+    )
 
 
 class ProposalOut(BaseModel):
@@ -313,6 +318,31 @@ def _checks(
                     if pending
                     else "Items reviewed."
                 ),
+            )
+        )
+    reconciliation = (row.checks or {}).get("reconciliation")
+    if isinstance(reconciliation, dict):
+        opened = int(reconciliation.get("open") or 0)
+        blocking = int(reconciliation.get("blocking") or 0)
+        rstatus: Literal["passed", "failed", "pending"] = (
+            "failed" if blocking else "pending" if opened else "passed"
+        )
+        if not opened:
+            text = "No open reconciliation candidates."
+        elif counted:
+            text = f"{opened} open reconciliation candidate(s)" + (
+                f", {blocking} contradiction(s) blocking the merge." if blocking else "."
+            )
+        else:
+            text = "Open reconciliation candidates."
+        checks.append(
+            CheckOut(
+                name="reconciliation",
+                status=rstatus,
+                message=text,
+                candidates=[str(i) for i in reconciliation.get("candidates") or []]
+                if counted
+                else None,
             )
         )
     if approval is not None and approval.protected:
@@ -684,6 +714,7 @@ async def create_proposal(
         principal,
         keeper.proposals,
         idempotency_key=idempotency_key,
+        reconciliation_check=keeper.reconciliation.merge_check,
     )
     proposal = created.view.proposal
     annotate(
@@ -906,6 +937,7 @@ async def merge_proposal(
             schema_guard=lambda old, new: require_schema_change(
                 auth.authorizer, principal, domain_id, old, new
             ),
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
     except CommitError as error:
         raise await _store_problem(
@@ -982,6 +1014,7 @@ async def list_conflicts(
                 after=after,
                 scope=scope,
             ),
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
     except CommitError as error:
         raise await _store_problem(
@@ -1033,6 +1066,7 @@ async def resolve_conflict(
             rerun=False,
             page_limit=keeper.pagination.default_limit,
             scope=scope,
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
     except CommitError as error:
         raise await _store_problem(
@@ -1089,6 +1123,7 @@ async def resolve_conflicts(
             rerun=True,
             page_limit=keeper.pagination.default_limit,
             scope=scope,
+            reconciliation_check=keeper.reconciliation.merge_check,
         )
     except CommitError as error:
         raise await _store_problem(

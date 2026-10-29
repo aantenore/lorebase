@@ -14,8 +14,15 @@ candidate obsolete, always with a reason.
 **Sensitive values.** Claim values of an Attribute with sensitivity tags are stored wrapped as
 outbox payloads wrap them (`{"$sensitive": {"tags": [...], "value": ...}}`, a vault Attribute's
 value being its vault reference); a value of an untagged Attribute whose JSON holds `$sensitive`
-or `$vault` keys is wrapped with every tag, so it cannot pose as a wrapper. Readers mask them by
-clearance.
+or `$vault` keys is wrapped with every tag, so it cannot pose as a wrapper. The evidence of such
+a claim quotes the value: its members other than the locators (`EVIDENCE_LOCATORS`) are wrapped
+the same way, and left out for a vault Attribute (the document and offsets stay). Values a
+decision records (`value`, `values`) are wrapped like claim values (`wrap_decision`), and its
+snapshot of the claims is the stored, wrapped one. Readers mask all of them by clearance.
+
+`proposal_checks` counts the open candidates of a Proposal for the `reconciliation` merge check
+(design 10.3): those it raised (`proposal_id`) and those found on its source branch, except
+those whose decision it carries.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, and_, or_, select, update
+from sqlalchemy import Table, and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,6 +100,20 @@ class CandidateFilter:
     kind_id: str | None = None
     attribute_id: str | None = None
     source: str | None = None
+    kind_ids: frozenset[str] | None = None
+    """The Kinds a caller may read (grants narrowed to Kinds); `None` for every Kind."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalChecks:
+    """Open candidates of a Proposal by type, and the first ids (oldest first)."""
+
+    counts: dict[str, int]
+    ids: list[str]
+
+    @property
+    def open(self) -> int:
+        return sum(self.counts.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,18 +125,56 @@ class UpsertOutcome:
     claims_added: int
 
 
-def wrap_claim(claim: Mapping[str, Any], tags: Collection[Sensitivity]) -> dict[str, Any]:
-    """`claim` with its value wrapped for storage (module doc); other members unchanged."""
+#: Evidence members that locate a passage without quoting it: kept as they are.
+EVIDENCE_LOCATORS = frozenset({"document_id", "chunk", "start", "end", "page", "offsets"})
+
+
+def _wrap_value(value: Any, tags: Collection[Sensitivity]) -> Any:
     # Imported here: `outbox_events` reaches the commit pipeline, which imports repositories.
     from lorebase_store.outbox_events import carries_markers, sensitive_value
 
-    out = dict(claim)
-    if "value" not in out:
-        return out
     if tags:
-        out["value"] = sensitive_value(tags, out["value"])
-    elif carries_markers(out["value"]):
-        out["value"] = sensitive_value(EVERY_TAG, out["value"])
+        return sensitive_value(tags, value)
+    if carries_markers(value):
+        return sensitive_value(EVERY_TAG, value)
+    return value
+
+
+def _wrap_evidence(
+    evidence: Mapping[str, Any], tags: Collection[Sensitivity], *, vault: bool
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, item in evidence.items():
+        if name in EVIDENCE_LOCATORS:
+            out[name] = item
+        elif not vault:
+            out[name] = _wrap_value(item, tags) if tags else item
+    return out
+
+
+def wrap_claim(
+    claim: Mapping[str, Any], tags: Collection[Sensitivity], *, vault: bool = False
+) -> dict[str, Any]:
+    """`claim` with its value and the quoting members of its evidence wrapped for storage
+    (module doc); `vault` leaves the evidence quote out. Other members unchanged."""
+    out = dict(claim)
+    if "value" in out:
+        out["value"] = _wrap_value(out["value"], tags)
+    evidence = out.get("evidence")
+    if isinstance(evidence, Mapping) and (tags or vault):
+        out["evidence"] = _wrap_evidence(evidence, tags, vault=vault)
+    return out
+
+
+def wrap_decision(decision: Mapping[str, Any], tags: Collection[Sensitivity]) -> dict[str, Any]:
+    """`decision` with the values it names (`value`, and each of `values`) wrapped like claim
+    values; other members unchanged."""
+    out = dict(decision)
+    if out.get("value") is not None:
+        out["value"] = _wrap_value(out["value"], tags)
+    values = out.get("values")
+    if isinstance(values, Mapping):
+        out["values"] = {name: _wrap_value(item, tags) for name, item in values.items()}
     return out
 
 
@@ -154,14 +213,16 @@ class ReconciliationCandidateRepository:
         draft: CandidateDraft,
         *,
         sensitivity: Collection[Sensitivity] = (),
+        vault: bool = False,
         max_claims: int,
         now: datetime,
         new_id: Callable[[], str],
     ) -> UpsertOutcome:
-        """Store `draft`, or fold it into the candidate of its fingerprint (module doc)."""
+        """Store `draft`, or fold it into the candidate of its fingerprint (module doc).
+        `sensitivity` and `vault` describe the candidate's Attribute (`wrap_claim`)."""
         table = CANDIDATES
         fingerprint = draft.fingerprint
-        incoming = [wrap_claim(c.document(), sensitivity) for c in draft.claims]
+        incoming = [wrap_claim(c.document(), sensitivity, vault=vault) for c in draft.claims]
         merged = merge_claims([], incoming, stored_count=0, max_claims=max_claims)
         inserted = (
             (
@@ -233,6 +294,8 @@ class ReconciliationCandidateRepository:
                 query = query.where(column == value)
         if filters.source is not None:
             query = query.where(table.c.claims.contains([{"source": filters.source}]))
+        if filters.kind_ids is not None:
+            query = query.where(table.c.kind_id.in_(sorted(filters.kind_ids)))
         if after is not None:
             at, last_id = after
             query = query.where(
@@ -258,6 +321,93 @@ class ReconciliationCandidateRepository:
             query = query.where(table.c.status.in_(wanted))
         result = await self._session.execute(query.order_by(table.c.created_at, table.c.id))
         return [_row(found) for found in result.mappings()]
+
+    async def proposal_checks(
+        self,
+        proposal_id: str,
+        source_ref: str,
+        *,
+        types: Iterable[CandidateType] = (),
+        limit: int = 20,
+    ) -> ProposalChecks:
+        """Open candidates raised by the Proposal or found on its source branch (module doc),
+        of `types` (every type when empty). Candidates whose pending decision the Proposal
+        carries (`set_pending`) are left out: its merge resolves them."""
+        table = CANDIDATES
+        resolving = and_(
+            table.c.proposal_id == proposal_id,
+            table.c.decision["pending"].as_boolean().is_(True),
+        )
+        query = select(table.c.id, table.c.type).where(
+            self._scoped(),
+            table.c.status == CandidateStatus.OPEN.value,
+            or_(table.c.proposal_id == proposal_id, table.c.branch == source_ref),
+            ~func.coalesce(resolving, False),
+        )
+        wanted = [t.value for t in types]
+        if wanted:
+            query = query.where(table.c.type.in_(wanted))
+        rows = (await self._session.execute(query.order_by(table.c.created_at, table.c.id))).all()
+        counts: dict[str, int] = {}
+        for _id, kind in rows:
+            counts[kind] = counts.get(kind, 0) + 1
+        return ProposalChecks(counts, [row[0] for row in rows[:limit]])
+
+    async def pending_for(self, proposal_id: str) -> list[CandidateRow]:
+        """Open candidates waiting for the merge of the Proposal a decision opened
+        (`set_pending`)."""
+        table = CANDIDATES
+        query = (
+            select(table)
+            .where(
+                self._scoped(),
+                table.c.status == CandidateStatus.OPEN.value,
+                table.c.proposal_id == proposal_id,
+                table.c.decision["pending"].as_boolean().is_(True),
+            )
+            .order_by(table.c.created_at, table.c.id)
+            .with_for_update()
+        )
+        result = await self._session.execute(query)
+        return [_row(found) for found in result.mappings()]
+
+    async def set_pending(
+        self,
+        candidate_id: str,
+        proposal_id: str,
+        *,
+        decision: Mapping[str, Any],
+        reason: str,
+        by: str,
+        at: datetime,
+    ) -> CandidateRow | None:
+        """Record a decision whose write became the Proposal `proposal_id` (protected branch):
+        the candidate stays open, linked to it, until it merges (`pending_for`)."""
+        if not reason.strip():
+            raise ValueError("resolve needs a reason")
+        current = await self.get(candidate_id, for_update=True)
+        if current is None:
+            return None
+        if current.status != CandidateStatus.OPEN.value:
+            raise CandidateStateError(candidate_id, current.status, DecisionAction.RESOLVE)
+        pending = {
+            **decision,
+            "action": DecisionAction.RESOLVE.value,
+            "reason": reason,
+            "claims": current.claims,
+            "pending": True,
+            "proposal": proposal_id,
+        }
+        return await self._update(
+            candidate_id,
+            {
+                "proposal_id": proposal_id,
+                "decision": pending,
+                "decided_by": by,
+                "decided_at": at,
+                "updated_at": at,
+            },
+        )
 
     async def link_proposal(
         self, candidate_id: str, proposal_id: str, *, now: datetime

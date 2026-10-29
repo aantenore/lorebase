@@ -302,8 +302,8 @@ class ReconciliationSettings(SectionModel):
     merge_check: Literal["off", "warn", "block"] = Field(
         default="warn",
         description="Proposal check of open candidates: off, warn (the Proposal lists them) "
-        "or block (open contradictions stop the merge); a Domain overrides it in its "
-        "reconciliation setting.",
+        "or block (open contradictions stop the merge, automatic Source merges included); "
+        "a Domain overrides it with its reconciliation_check setting.",
     )
 
     @model_validator(mode="after")

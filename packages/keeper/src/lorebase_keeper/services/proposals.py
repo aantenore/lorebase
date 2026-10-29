@@ -9,7 +9,12 @@ review policy:
   `keeper.proposals.required_approvals`, overridden by the Domain setting of the same name):
   the latest approve or request-changes verdict of each reviewer counts, the author's only
   when self-approval is allowed, and an outstanding request for changes blocks the merge;
-- the merge policy of a Proposal is the Domain's `merge_policy` setting when it is created.
+- the merge policy of a Proposal is the Domain's `merge_policy` setting when it is created;
+- the `reconciliation` check (`keeper.reconciliation.merge_check`, overridden by the Domain
+  setting `reconciliation_check`) lists the open reconciliation candidates of a Proposal and,
+  in `block` mode, refuses its merge while contradictions are open (409
+  `reconciliation-open`); a merge that commits resolves the candidates whose decision opened
+  the Proposal (`reconciliation_settle`).
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from lorebase_keeper.services.proposal_reads import (
     unknown_conflict,
     visible_partitions,
 )
+from lorebase_keeper.services.reconciliation_settle import settle_merged
 from lorebase_keeper.services.schema import SchemaGuard, schema_at
 from lorebase_store.merging import (
     AttemptResult,
@@ -81,6 +87,9 @@ APPROVALS_REQUIRED = ProblemType("approvals-required", 409, "Approvals required"
 MERGE_CONFLICTS = ProblemType("merge-conflicts", 409, "Merge has Conflicts")
 SELF_APPROVAL = ProblemType("self-approval", 403, "Self-approval is not allowed")
 BRANCH_MISSING = ProblemType("proposal-branch-missing", 409, "Proposal branch missing")
+RECONCILIATION_OPEN = ProblemType(
+    "reconciliation-open", 409, "Open contradictions between Sources block the merge"
+)
 
 
 @dataclass(frozen=True)
@@ -302,6 +311,7 @@ async def create(
     settings: ProposalSettings,
     *,
     idempotency_key: str | None,
+    reconciliation_check: str | None = None,
 ) -> CreatedProposal:
     """Open a Proposal to merge `source_ref` into `target_ref`, with its merge preview.
 
@@ -355,7 +365,7 @@ async def create(
             await proposals.insert(row)
             if settings.preview_on_create:
                 await _service(store, session, domain_id, settings).recompute(
-                    _request(row, principal.id)
+                    _request(row, principal.id, reconciliation_check=reconciliation_check)
                 )
             created = await _proposal(session, domain_id, row.id)
             return CreatedProposal(await _view(session, domain, created, settings))
@@ -519,6 +529,7 @@ async def merge(
     page_limit: int,
     scope: ConflictScope = FULL_SCOPE,
     schema_guard: SchemaGuard | None = None,
+    reconciliation_check: str | None = None,
 ) -> MergeOutcome:
     """Run (or re-run) the merge of an open Proposal and commit it when no Conflict remains.
 
@@ -577,12 +588,26 @@ async def merge(
                     idempotency_key=idempotency_key,
                     delete_source=delete_source,
                     schema_guard=schema_guard,
+                    reconciliation_check=reconciliation_check,
                 )
             )
         except ProposalBranchMissingError as error:
             raise _branch_missing(error) from None
         except ResolutionError as error:
             raise _invalid("/body", str(error)) from None
+        if result.reconciliation_blocked:
+            checks = (await _proposal(session, domain_id, proposal_id)).checks or {}
+            found = dict(checks.get("reconciliation") or {})
+            raise ProblemError(
+                RECONCILIATION_OPEN,
+                f"{found.get('blocking', 0)} open contradiction(s) between Sources are raised by "
+                "the changes of this Proposal; decide them in the reconciliation queue first.",
+                extensions={"candidates": list(found.get("candidates") or [])},
+            )
+        if result.head is not None:
+            await settle_merged(
+                session, domain_id, proposal_id, revision=result.head, at=store.clock()
+            )
         updated = await _proposal(session, domain_id, proposal_id)
         query = ConflictQuery(resolved=None if result.merged else False, limit=page_limit)
         view = await _attempt_view(
@@ -611,6 +636,8 @@ async def conflicts(
     principal: Principal,
     settings: ProposalSettings,
     query: ConflictQuery,
+    *,
+    reconciliation_check: str | None = None,
 ) -> AttemptView:
     """The current attempt of a Proposal with a page of its Conflicts.
 
@@ -623,7 +650,7 @@ async def conflicts(
         if proposal.status is ProposalStatus.OPEN:
             try:
                 result = await _service(store, session, domain_id, settings).current(
-                    _request(proposal, principal.id)
+                    _request(proposal, principal.id, reconciliation_check=reconciliation_check)
                 )
             except ProposalBranchMissingError as error:
                 raise _branch_missing(error) from None
@@ -685,6 +712,7 @@ async def resolve(
     rerun: bool,
     page_limit: int,
     scope: ConflictScope = FULL_SCOPE,
+    reconciliation_check: str | None = None,
 ) -> tuple[list[ResolutionRow], AttemptView | None]:
     """Store resolutions of Conflicts of the current attempt; with `rerun`, merge again.
 
@@ -700,7 +728,9 @@ async def resolve(
             raise _not_open(proposal)
         service = _service(store, session, domain_id, settings)
         try:
-            current = await service.current(_request(proposal, principal.id))
+            current = await service.current(
+                _request(proposal, principal.id, reconciliation_check=reconciliation_check)
+            )
         except ProposalBranchMissingError as error:
             raise _branch_missing(error) from None
         partitions = await _partitions(store, session, domain_id, current.attempt, scope)
@@ -734,7 +764,9 @@ async def resolve(
         if not rerun:
             return rows, None
         try:
-            result = await service.recompute(_request(proposal, principal.id))
+            result = await service.recompute(
+                _request(proposal, principal.id, reconciliation_check=reconciliation_check)
+            )
         except ResolutionError as error:
             raise _invalid("/body", str(error)) from None
         proposal = await _proposal(session, domain_id, proposal_id)

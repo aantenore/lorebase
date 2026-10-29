@@ -9,7 +9,7 @@ schema, so a definition always matches the Revision it is read from:
 | Operation | Parameters |
 |-----------|------------|
 | `create_{kind}` | one per stored Attribute; `key` for Kinds without a natural key |
-| `update_{kind}` | `key`, then every stored Attribute as optional; `null` removes a value |
+| `update_{kind}` | `key`, every stored Attribute as optional (`null` removes it); `valid` |
 | `delete_{kind}` | `key` |
 | `link_{relation}` | `from`, `to` (Record keys), then the link Attributes |
 | `unlink_{relation}` | `from`, `to` |
@@ -31,6 +31,12 @@ Revision (it is not an import: no batching). Keys that do not exist fail the cal
 `skip_missing` are left out and reported as warnings. Links of the deleted Records follow each
 Relation's `on_delete` policy as for `delete_{kind}`. A `delete_{kind}` of a Kind whose snake
 case name is `records` takes precedence over the bulk delete.
+
+`update_{kind}` of a Kind with `valid_time` Attributes (design 10.6) also takes `valid`, an
+object giving the validity period of the values it sets, per Attribute api name:
+`{"price": {"from": "2026-01-01T00:00:00Z", "to": null}}`. Either end may be open. The period
+lands on the provenance entry of that value (`Plan.periods`), not in content. A Kind with an
+Attribute named `valid` keeps that Attribute's parameter and has no periods.
 
 Everything here is pure: reads of existing Records go through `RecordReader`.
 """
@@ -84,6 +90,9 @@ TO = "to"
 LINKS = "links"
 KIND = "kind"
 RELATION = "relation"
+VALID = "valid"
+VALID_FROM = "from"
+VALID_TO = "to"
 
 PARAMETER_UNKNOWN = "parameter.unknown"
 PARAMETER_REQUIRED = "parameter.required"
@@ -172,6 +181,12 @@ def _attribute_parameters(
     ]
 
 
+def _periods_offered(kind: Kind) -> bool:
+    """Whether `update_{kind}` takes `valid` (module doc)."""
+    stored = _stored(kind.attributes)
+    return any(a.has_valid_time for a in stored) and all(a.api_name != VALID for a in stored)
+
+
 def builtin_definition(schema: Schema, name: str) -> BuiltinOperation | None:
     """The built-in Operation called `name` in `schema`, if any."""
     if name == IMPORT_RECORDS:
@@ -222,6 +237,16 @@ def builtin_definition(schema: Schema, name: str) -> BuiltinOperation | None:
         elif action is Action.UPDATE:
             parameters = [key, *_attribute_parameters(kind.attributes, required=False)]
             text = f"Change Attributes of a {kind.api_name} Record; null removes a value."
+            if _periods_offered(kind):
+                parameters.append(
+                    Parameter(
+                        VALID,
+                        None,
+                        False,
+                        "Validity periods of the values set, per valid_time Attribute api "
+                        'name: {"from": timestamp, "to": timestamp}, either end open.',
+                    )
+                )
         else:
             parameters = [key]
             text = f"Delete a {kind.api_name} Record and, per Relation policy, its Links."
@@ -335,6 +360,62 @@ class Plan:
     findings: list[Finding] = field(default_factory=list)
     units: list[int] = field(default_factory=list)
     warnings: list[Finding] = field(default_factory=list)
+    periods: dict[str, Period] = field(default_factory=dict)
+    """Validity period per Attribute id of the values set (`valid`, module doc)."""
+
+
+Period = tuple[str | None, str | None]
+"""A validity period: canonical timestamps `(from, to)`, `None` for an open end."""
+
+_TIMESTAMP = TypeSpec.of(AttributeType.TIMESTAMP)
+
+
+def _periods(
+    kind: Kind, given: JsonValue, values: Mapping[str, JsonValue], plan: Plan
+) -> dict[str, Period]:
+    """The periods of `valid` for the values set by the call (`values`, by Attribute id)."""
+    if given is None:
+        return {}
+    path: tuple[str | int, ...] = ("parameters", VALID)
+    if not isinstance(given, dict):
+        plan.findings.append(Finding(PARAMETER_INVALID, "must be an object", path))
+        return {}
+    by_name = {a.api_name: a for a in _stored(kind.attributes)}
+    periods: dict[str, Period] = {}
+    for name, body in given.items():
+        where = (*path, name)
+        attribute = by_name.get(name)
+        if attribute is None or not attribute.has_valid_time:
+            plan.findings.append(
+                Finding(PARAMETER_INVALID, f"{name!r} is not a valid_time Attribute", where)
+            )
+            continue
+        if values.get(attribute.id) is None:
+            plan.findings.append(
+                Finding(PARAMETER_INVALID, f"a period needs a value of {name!r}", where)
+            )
+            continue
+        if not isinstance(body, dict) or not set(body) <= {VALID_FROM, VALID_TO}:
+            plan.findings.append(
+                Finding(PARAMETER_INVALID, 'must be an object with "from" and "to"', where)
+            )
+            continue
+        ends: list[str | None] = []
+        for end in (VALID_FROM, VALID_TO):
+            raw = body.get(end)
+            try:
+                ends.append(None if raw is None else str(encode_value(_TIMESTAMP, raw)))
+            except (TypeSystemError, ValueError) as error:
+                plan.findings.append(Finding(PARAMETER_INVALID, str(error), (*where, end)))
+                ends.append(None)
+        start, stop = ends
+        # Canonical timestamps are fixed-width UTC: they order as text.
+        if start is not None and stop is not None and stop < start:
+            plan.findings.append(Finding(PARAMETER_INVALID, '"to" must not precede "from"', where))
+            continue
+        if start is not None or stop is not None:
+            periods[attribute.id] = (start, stop)
+    return periods
 
 
 def _values(
@@ -412,6 +493,10 @@ async def _record_edit(
             )
         )
         return
+    if _periods_offered(kind):
+        plan.periods = _periods(kind, bound.get(VALID), values, plan)
+        if plan.findings:
+            return
     merged: dict[str, JsonValue] = dict(current)
     for attribute_id, value in values.items():
         if value is None:
