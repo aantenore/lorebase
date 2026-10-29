@@ -32,6 +32,9 @@ open, no other decision is taken (409 `reconciliation-pending`); once it is clos
 decision replaces the pending one. When proposing fails after the branch was created, the
 Proposal (if any) is closed, the branch deleted and the withdrawal audited, best effort.
 
+A candidate naming no Attribute (`source_unseen`, a Record its Source no longer sees) takes
+`keep_current` only (422 otherwise): deleting the Record is an Operation of its own.
+
 A `claim` or `policy` choice is refused (409 `reconciliation-stale`) when the Record's value
 changed since detection to one none of the claims holds: detection must run again. A decision
 that writes a value of an Attribute the caller may not read (a sensitive Attribute without the
@@ -618,6 +621,12 @@ async def resolve(ctx: Context, candidate_id: str, decision: DecisionInput) -> D
         raise _invalid("/body/choice", f"a {candidate.type} candidate takes {expected}")
     if decision.choice is ReconciliationChoice.MERGE:
         return await _merge_duplicates(ctx, candidate, target, decision, masking)
+    if candidate.attribute_id is None and decision.choice is not ReconciliationChoice.KEEP_CURRENT:
+        raise _invalid(
+            "/body/choice",
+            f"candidate {candidate.id} names no Attribute (a Record its Source no longer sees): "
+            "it takes keep_current; dismiss it, or delete the Record through an Operation",
+        )
 
     record: dict[str, Any] = {"choice": decision.choice.value}
     chosen: Mapping[str, Any] | None = None

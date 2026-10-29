@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from enum import StrEnum
 from typing import ClassVar, Self
 
@@ -9,6 +10,9 @@ from pydantic import Field, JsonValue, model_validator
 
 from lorebase_core.model.base import ElementStatus, Model, SchemaElement
 from lorebase_core.model.ids import AttributeId, KindId, RelationId, SourceId
+from lorebase_core.types import AttributeType, EncodingError, TypeSpec, decode_value, encode_value
+
+_DURATION = TypeSpec.of(AttributeType.DURATION)
 
 #: Prefix of secret references; connections are never literals (design 5.9, 13.4).
 SECRET_REFERENCE_PREFIX = "secret://"
@@ -233,9 +237,25 @@ class Source(SchemaElement):
     target_branch_policy: TargetBranchPolicy = Field(default_factory=TargetBranchPolicy)
     #: ``None`` means ``review``; left out of the content so existing Sources keep their hash.
     local_edits: LocalEdits | None = None
+    #: ``incremental`` Sources: ISO 8601 duration (``P30D``) after which a Record the Source
+    #: owns and no run has read upstream is raised as a ``stale`` candidate (``source_unseen``,
+    #: design 9.1); ``None`` (the default, left out of the content) turns the check off.
+    stale_after: str | None = None
     status: ElementStatus = ElementStatus.ACTIVE
 
     @property
     def local_edit_mode(self) -> LocalEdits:
         """The effective ``local_edits`` setting."""
         return self.local_edits or LocalEdits.REVIEW
+
+    @property
+    def stale_after_delta(self) -> timedelta | None:
+        """``stale_after`` as a duration; ``None`` when unset or not a valid duration (schema
+        validation reports the latter)."""
+        if self.stale_after is None:
+            return None
+        try:
+            delta = decode_value(_DURATION, encode_value(_DURATION, self.stale_after))
+        except (EncodingError, ValueError):
+            return None
+        return delta if isinstance(delta, timedelta) else None

@@ -25,6 +25,9 @@
    and `auto_with_authority` also writes the Attributes whose `authority` is the Source over
    local edits and resolves their value Conflicts in the Source's favor. Every local edit
    is audited as `source.local_edit_conflict`.
+6. Incremental Sources: record that the run read each mapped Record upstream
+   (`source_written.last_seen_run`), so the reconciliation sweep can raise `source_unseen`
+   candidates for Records not seen within the Source's `stale_after` (design 9.1).
 
 A dry run reads, maps and computes the delta against the state step 3 would produce, then
 records the counts (local edits and seeding included) without writing to any branch.
@@ -36,7 +39,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -508,6 +511,34 @@ class SourceSync:
             previous = await self._previous_watermark(domain.id, source)
             report.watermark = previous
         await self._propose(domain, schema, source, report, (mapper, delta))
+        if source.sync_mode is SyncMode.INCREMENTAL:
+            await self._seen(domain.id, source, report, mapper, read.rows)
+
+    async def _seen(
+        self,
+        domain_id: str,
+        source: Source,
+        report: SyncReport,
+        mapper: RowMapper,
+        rows: Sequence[MappedRow],
+    ) -> None:
+        """Record that the run read these Records upstream (`last_seen_run`, design 9.1
+        "Incremental Sources"), changed or not; tombstoned rows are deletions, not sightings."""
+        keys = [row.key for row in rows if not row.tombstone]
+        if not keys:
+            return
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain_id)
+            await SourceWrittenRepository(
+                session, domain_id, writes=self._runtime.settings.writes
+            ).seen(
+                source.id,
+                report.target,
+                mapper.kind.id,
+                keys,
+                run_id=report.run_id,
+                at=self._clock(),
+            )
 
     # Reading --------------------------------------------------------------------------------
 
@@ -898,7 +929,7 @@ class SourceSync:
         keep = None if proposal is None else proposal.id
         await repository.discard_others(source.id, report.target, keep)
         if proposal is None:
-            await repository.record(source.id, report.target, rows)
+            await repository.record(source.id, report.target, rows, seen_at=self._clock())
         else:
             await repository.stage(proposal.id, source.id, report.target, rows)
 

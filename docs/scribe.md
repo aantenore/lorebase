@@ -434,13 +434,44 @@ synchronized before this change have no state: the first run seeds it (`seeded` 
 stats). A value whose Lineage is this Source counts as last written; any other value is
 compare-only for that run, so an equal one seeds the state and a different one is a local edit.
 
+### Incremental Sources and upstream deletions
+
+An incremental Source reads only the rows past its watermark, so it cannot tell a row removed
+upstream (without a tombstone) from one that did not change. Each run of an incremental Source
+records, per Record it read, the run and the time (`source_written.last_seen_run` and
+`last_seen_at`, migration `0043`), changed or not; a Record whose state advances through a merge
+counts as seen by the run that staged it. Set `stale_after` on the Source (ISO 8601 duration,
+days to seconds; default null: off; incremental Sources only) to have the reconciliation sweep
+raise a `stale` candidate with signal `source_unseen` for each Record the Source last wrote to
+the branch, not deleted and still there, that no run has read for longer than that (before the
+first run after the upgrade, the time of the Record's last state advance stands in):
+
+```yaml
+sources:
+  erp.purchase_orders:
+    sync_mode: incremental
+    watermark_column: updated_at
+    stale_after: P30D             # a Record no run read for 30 days is raised for review
+```
+
+Nothing is deleted on that signal. The candidate names the Source, the last run that saw the
+Record and when, and no Attribute: a reviewer keeps it (`keep_current`), dismisses it, or
+deletes the Record through an Operation. Its fingerprint holds the Source and that run, so a
+dismissal holds while the Record stays unseen, and a Record seen again and later lost again is
+raised anew. The sweep marks it `obsolete` when a run sees the Record again (`source_seen`), the
+Record is deleted (`record_deleted`) or the check no longer applies to the Source
+(`source_unseen_off`: `stale_after` removed, the Source no longer incremental or gone, or
+`stale.source_unseen: false`). The operator or a Domain turns the check off with
+`scribe.reconciliation.stale.source_unseen: false`. The sweep pages these Records in key order
+within its work budget, like the others.
+
 ## Reconciliation
 
 Scribe detects contradictions between Sources ([design 10.6](design.md#106-reconciliation-of-source-contradictions))
 and stores them as reconciliation candidates for review; it never changes a value because of
 one. Settings are `scribe.reconciliation` ([configuration](reference/configuration.md)). A
 Domain overrides some of them in its `reconciliation` setting: `enabled`, `triggers`,
-`hold_auto_accept`, `stale.max_age`, `normalize.numeric_tolerance` and `negation_words`,
+`hold_auto_accept`, `stale.max_age`, `stale.source_unseen`, `normalize.numeric_tolerance` and `negation_words`,
 `duplicates.trigram_threshold`, `stages` (to leave stages out, never to add one) and, when the
 operator turned the semantic stage on, the members of `semantic` except `judge`. Files, work
 limits and model spend (`normalize.units_file`, `sweep_*`, `max_claims_per_candidate`,
@@ -478,8 +509,9 @@ and the Proposal stays open for review ([design 10.6](design.md#106-reconciliati
   under the current options, stale value replaced); then walks the Records of each Kind for
   values in the branch history that replaced a value of another source identity, values older
   than `stale.max_age` or whose period ended, and duplicates (equal folded unique or title
-  values, similar titles, and stored Record vectors with the semantic stage). It stops after `sweep_max_changes_per_job` units of work and queues
-  its continuation.
+  values, similar titles, and stored Record vectors with the semantic stage); last, the
+  Records incremental Sources have not seen ([below](#incremental-sources-and-upstream-deletions)).
+  It stops after `sweep_max_changes_per_job` units of work and queues its continuation.
 
 Values of derived and vault Attributes are not compared, and claims whose source identity
 cannot be told (a merge resolution, a schema migration) are left out. The values written by a

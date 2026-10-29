@@ -1829,3 +1829,4 @@ Embeddings of competing text values (needs inference.embeddings)
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `scribe.reconciliation.stale.max_age` | `null` | ISO 8601 duration (e.g. P30D); null: off. Per Kind and Attribute in the Domain settings |
+| `scribe.reconciliation.stale.source_unseen` | `true` | raise Records an incremental Source has not read within its stale_after (a Source setting in the schema; null there: off) |

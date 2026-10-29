@@ -86,8 +86,11 @@ def candidate_fingerprint(
     keys: Iterable[str],
     attribute_id: str | None,
     value_hashes: Iterable[str],
+    scope: str | None = None,
 ) -> bytes:
-    """``sha256(type, branch, kind_id, keys, attribute_id, sorted distinct value hashes)``.
+    """``sha256(type, branch, kind_id, keys, attribute_id, sorted distinct value hashes)``,
+    with ``scope`` appended when set (candidates without claims that one cause raises per
+    subject, such as ``source_unseen`` per Source and sighting).
 
     Keys are sorted (a duplicate pair is the same pair either way round)."""
     head: list[object] = [
@@ -98,6 +101,8 @@ def candidate_fingerprint(
         attribute_id,
         sorted(set(value_hashes)),
     ]
+    if scope is not None:
+        head.append(scope)
     return hashlib.sha256(canonical_bytes(head)).digest()
 
 
@@ -114,6 +119,8 @@ class CandidateDraft(BaseModel):
     claims: tuple[Claim, ...] = ()
     signals: dict[str, JsonValue] = Field(default_factory=dict)
     proposal_id: str | None = None
+    #: Part of the fingerprint only (`candidate_fingerprint`); not stored.
+    scope: str | None = None
 
     @field_validator("keys")
     @classmethod
@@ -129,6 +136,7 @@ class CandidateDraft(BaseModel):
             self.keys,
             self.attribute_id,
             (c.value_hash for c in self.claims),
+            self.scope,
         )
 
 

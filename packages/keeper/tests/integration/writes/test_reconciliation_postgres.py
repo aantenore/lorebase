@@ -16,7 +16,13 @@ from typing import Any
 import pytest
 
 from lorebase_core.model import Sensitivity
-from lorebase_core.reconcile import CandidateDraft, CandidateType, Claim, DecisionAction
+from lorebase_core.reconcile import (
+    CandidateDraft,
+    CandidateType,
+    Claim,
+    DecisionAction,
+    source_unseen_verdict,
+)
 from lorebase_store import storage
 from lorebase_store.db import create_engine
 from lorebase_store.repositories import (
@@ -563,3 +569,48 @@ async def test_stale_candidates_and_values_the_caller_may_not_read_are_refused(
             assert refused.status_code == 422, refused.text
             assert refused.json()["errors"][0]["pointer"] == f"/body/values/{name}"
         assert await decision_branches(loader, pair) == 0
+
+
+async def test_a_record_its_source_no_longer_sees_takes_keep_current_only(
+    keeper: Any, installation_admin: Any, role_key: Any, loader: Loader
+) -> None:
+    admin = installation_admin.headers
+    async with keeper() as http:
+        await setup_domain(http, admin, loader, "side")
+        maintainer = await role_key(http, "supply", "maintainer")
+        key = next(iter(loader.rows))
+        verdict = source_unseen_verdict(
+            branch="side",
+            kind_id=SUPPLIER.id,
+            key=key,
+            source_id="src_erp",
+            last_seen_run="run_1",
+            last_seen_at=T0,
+            stale_after="P1D",
+            now=T0 + timedelta(days=3),
+            max_age=timedelta(days=1),
+        )
+        assert verdict.draft is not None
+        async with loader.session() as session, session.begin():
+            await scope_to_domain(session, "supply")
+            outcome = await ReconciliationCandidateRepository(session, "supply").upsert(
+                verdict.draft,
+                sensitivity=(),
+                max_claims=20,
+                now=T0,
+                new_id=lambda: f"rcn_{next(IDS):026d}",
+            )
+        url = f"{QUEUE}/{outcome.row.id}/resolution"
+        shown = await http.get(f"{QUEUE}/{outcome.row.id}", headers=maintainer)
+        assert shown.status_code == 200, shown.text
+        assert shown.json()["signals"]["stale"] == ["source_unseen"]
+        refused = await http.post(
+            url, json={"choice": "custom", "value": "x", "reason": "gone"}, headers=maintainer
+        )
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["errors"][0]["pointer"] == "/body/choice"
+        kept = await http.post(
+            url, json={"choice": "keep_current", "reason": "still sold"}, headers=maintainer
+        )
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["status"] == "resolved"

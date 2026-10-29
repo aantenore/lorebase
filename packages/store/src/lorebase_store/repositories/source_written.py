@@ -5,15 +5,21 @@ id for Records, a Relation id for Links) and key: the hash of each value, never 
 `source_written_pending` holds the state a run carries in its open Proposal; `promote` moves
 it to `source_written` in the transaction that merges the Proposal, so the state advances only
 with a merge. Rows are bookkeeping for syncs: they are not content and not provenance.
+
+`last_seen_run` and `last_seen_at` record the run that last read an element upstream (`seen`,
+incremental Sources) apart from the merge-gated state: an element read and unchanged advances
+no state but is still seen. A state advance counts as seen by the run that staged it; `unseen`
+pages the Records not seen since a time (`updated_at` standing in while nothing was recorded).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, delete, select, text
+from sqlalchemy import Table, delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.bulk import OnConflict, bulk_write, chunks
@@ -25,20 +31,25 @@ PENDING: Table = metadata.tables["source_written_pending"]
 
 #: Columns an upsert replaces; `updated_at` takes its default (`now()`).
 _STATE_COLUMNS = ("written", "revision_id", "value_revisions", "deleted", "run_id", "updated_at")
+#: Columns `record` also replaces: the run recording the state saw the element.
+_SEEN_COLUMNS = ("last_seen_run", "last_seen_at")
 
 _PROMOTE = text(
     """
     INSERT INTO source_written AS w
         (domain_id, source_id, target_branch, element, key, written, revision_id,
-         value_revisions, deleted, run_id, updated_at)
+         value_revisions, deleted, run_id, updated_at, last_seen_run, last_seen_at)
     SELECT domain_id, source_id, target_branch, element, key, written, revision_id,
-           value_revisions, deleted, run_id, now()
+           value_revisions, deleted, run_id, now(), run_id, updated_at
     FROM source_written_pending
     WHERE domain_id = :domain AND proposal_id = :proposal
     ON CONFLICT (domain_id, source_id, target_branch, element, key) DO UPDATE SET
         written = excluded.written, revision_id = excluded.revision_id,
         value_revisions = excluded.value_revisions, deleted = excluded.deleted,
-        run_id = excluded.run_id, updated_at = excluded.updated_at
+        run_id = excluded.run_id, updated_at = excluded.updated_at,
+        last_seen_run = CASE WHEN w.last_seen_at IS NULL OR w.last_seen_at < excluded.last_seen_at
+            THEN excluded.last_seen_run ELSE w.last_seen_run END,
+        last_seen_at = GREATEST(w.last_seen_at, excluded.last_seen_at)
     """
 )
 
@@ -62,6 +73,16 @@ class WrittenRow:
     value_revisions: Mapping[str, str] = field(default_factory=dict)
     deleted: bool = False
     preserve: tuple[str, ...] = ()
+    #: The run that last read the element upstream and when (current rows only; None: not
+    #: recorded, `updated_at` stands in).
+    last_seen_run: str | None = None
+    last_seen_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def seen_at(self) -> datetime | None:
+        """When the element was last seen, or else last advanced."""
+        return self.last_seen_at or self.updated_at
 
     def revision_of(self, attribute: str) -> bytes | None:
         """The Revision holding the last-written value of `attribute`."""
@@ -89,6 +110,9 @@ def _row(found: Any) -> WrittenRow:
         value_revisions=dict(found["value_revisions"] or {}),
         deleted=bool(found["deleted"]),
         preserve=tuple(found.get("preserve") or ()),
+        last_seen_run=found.get("last_seen_run"),
+        last_seen_at=found.get("last_seen_at"),
+        updated_at=found.get("updated_at"),
     )
 
 
@@ -163,8 +187,16 @@ class SourceWrittenRepository:
             update_columns=(*_STATE_COLUMNS, "preserve"),
         )
 
-    async def record(self, source_id: str, target_branch: str, rows: Sequence[WrittenRow]) -> None:
-        """Write `rows` as the current state (a run whose state needs no merge)."""
+    async def record(
+        self,
+        source_id: str,
+        target_branch: str,
+        rows: Sequence[WrittenRow],
+        *,
+        seen_at: datetime | None = None,
+    ) -> None:
+        """Write `rows` as the current state (a run whose state needs no merge); with
+        `seen_at`, the run that recorded them also saw them then."""
         values = [
             {
                 "domain_id": self._domain,
@@ -173,6 +205,11 @@ class SourceWrittenRepository:
                 "element": row.element,
                 "key": row.key,
                 **self._state(row),
+                **(
+                    {}
+                    if seen_at is None
+                    else {"last_seen_run": row.run_id, "last_seen_at": seen_at}
+                ),
             }
             for row in rows
         ]
@@ -182,8 +219,68 @@ class SourceWrittenRepository:
             values,
             writes=self._writes,
             on_conflict=OnConflict.UPDATE,
-            update_columns=_STATE_COLUMNS,
+            update_columns=_STATE_COLUMNS if seen_at is None else (*_STATE_COLUMNS, *_SEEN_COLUMNS),
         )
+
+    async def seen(
+        self,
+        source_id: str,
+        target_branch: str,
+        element: str,
+        keys: Iterable[str],
+        *,
+        run_id: str,
+        at: datetime,
+    ) -> int:
+        """Record that run `run_id` read `keys` of `element` upstream at `at` (elements with a
+        state only; one never written is seen when its state advances). Returns the rows
+        touched."""
+        touched = 0
+        for chunk in chunks(list(dict.fromkeys(keys)), self._writes.insert_batch_rows):
+            result = await self._session.execute(
+                update(WRITTEN)
+                .where(
+                    WRITTEN.c.domain_id == self._domain,
+                    WRITTEN.c.source_id == source_id,
+                    WRITTEN.c.target_branch == target_branch,
+                    WRITTEN.c.element == element,
+                    WRITTEN.c.key.in_(chunk),
+                )
+                .values(last_seen_run=run_id, last_seen_at=at)
+            )
+            touched += int(getattr(result, "rowcount", 0) or 0)
+        return touched
+
+    async def unseen(
+        self,
+        source_id: str,
+        target_branch: str,
+        element: str,
+        *,
+        before: datetime,
+        after: str | None = None,
+        limit: int,
+    ) -> list[WrittenRow]:
+        """Elements not deleted whose last sight (`last_seen_at`, else `updated_at`) is before
+        `before`, in key order after `after`, at most `limit`."""
+        seen = func.coalesce(WRITTEN.c.last_seen_at, WRITTEN.c.updated_at)
+        query = (
+            select(WRITTEN)
+            .where(
+                WRITTEN.c.domain_id == self._domain,
+                WRITTEN.c.source_id == source_id,
+                WRITTEN.c.target_branch == target_branch,
+                WRITTEN.c.element == element,
+                WRITTEN.c.deleted.is_(False),
+                seen < before,
+            )
+            .order_by(WRITTEN.c.key)
+            .limit(limit)
+        )
+        if after is not None:
+            query = query.where(WRITTEN.c.key > after)
+        result = await self._session.execute(query)
+        return [_row(found) for found in result.mappings()]
 
     async def promote(self, proposal_id: str) -> int:
         """Move the state a merged Proposal carried to the current state; returns the number

@@ -124,7 +124,7 @@ export function signalBadges(signals: Record<string, JsonValue>): SignalBadge[] 
         tone: 'accent',
       });
     } else {
-      out.push({ key, label: text.signals.other(key), tone: 'neutral' });
+      out.push({ key, label: text.signals.other(key), tone: 'neutral', hint });
     }
   }
   return out;

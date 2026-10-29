@@ -207,6 +207,11 @@ export const modelerEditors = {
       watermarkUsed: 'Used by incremental runs.',
       tombstone: 'Tombstone column',
       tombstoneHint: 'Rows where it is set are deleted.',
+      staleAfter: 'Stale after',
+      staleAfterHint:
+        'ISO 8601 duration; a Record no run has read for longer is flagged for review, never deleted. Empty: off.',
+      staleAfterIncremental: 'Incremental Sources only.',
+      staleAfterPlaceholder: 'P30D',
       schedule: 'Schedule',
       scheduleHint: 'Cron expression; empty: manual runs only.',
       schedulePlaceholder: '0 2 * * *',

@@ -199,6 +199,16 @@ describe('Source editor', () => {
     expect(source(current())).not.toHaveProperty('local_edits');
   });
 
+  it('sets stale_after, an empty field leaving it out', async () => {
+    const user = userEvent.setup();
+    const { current } = renderForm(SourcesForm, document());
+    const staleAfter = screen.getByRole('textbox', { name: 'Stale after' });
+    await user.type(staleAfter, 'P30D');
+    expect(source(current())['stale_after']).toBe('P30D');
+    await user.clear(staleAfter);
+    expect(source(current())).not.toHaveProperty('stale_after');
+  });
+
   it('shows validation errors next to their fields', () => {
     renderForm(SourcesForm, document(), [
       {
