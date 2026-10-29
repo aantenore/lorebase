@@ -390,10 +390,10 @@ one. Settings are `scribe.reconciliation` ([configuration](reference/configurati
 Domain overrides some of them in its `reconciliation` setting: `enabled`, `triggers`,
 `hold_auto_accept`, `stale.max_age`, `normalize.numeric_tolerance` and `negation_words`,
 `duplicates.trigram_threshold`, `stages` (to leave stages out, never to add one) and, when the
-operator turned the semantic stage on, the members of `semantic`. Files and work limits
-(`normalize.units_file`, `sweep_*`, `max_claims_per_candidate`, `duplicates.max_pairs_per_kind`)
-are the operator's only; a member that is not allowed or not valid is logged and ignored, the
-rest of the setting still applies.
+operator turned the semantic stage on, the members of `semantic` except `judge`. Files, work
+limits and model spend (`normalize.units_file`, `sweep_*`, `max_claims_per_candidate`,
+`duplicates.max_pairs_per_kind`, `semantic.judge`) are the operator's only; a member that is
+not allowed or not valid is logged and ignored, the rest of the setting still applies.
 
 - **Extraction.** Value items whose value differs from the target's are compared with the
   claim of the current value (its provenance) while the items are assembled. With
@@ -421,7 +421,9 @@ plain commit count as their import batch's (`import:{ref}`) or their author's
 
 **Semantic stage** (optional, off). It runs when `semantic.enabled` is set, `semantic` is in
 `stages` and an embedding model is configured (`inference.embeddings`); otherwise it is off,
-logged once. It only adds signals and filters, and never decides a candidate:
+logged once. It only adds signals and filters, and never decides a candidate. Values of vault
+Attributes and of Attributes with any effective sensitivity tag (their own, the default
+branch's, or carried through Derivations, as extraction reads them) are never sent to a model.
 
 - competing values of `text` Attributes are embedded; the least similarity of two of them is
   the `similarity` signal; at `semantic.equivalent_similarity` (0.9) or more the candidate is

@@ -3,6 +3,8 @@
 It runs when `semantic.enabled` is set, the stage is listed, and an embedding provider is
 configured (`inference.embeddings`, 9.4); otherwise nothing here is built, or the stage reviews
 nothing (logged once per process). It only adds signals and filters; it never decides.
+Values of vault Attributes and of Attributes with any effective sensitivity tag are never sent
+to a model (the detector leaves them out, and the stage checks again).
 
 - **Competing `text` values.** The distinct values of a `contradiction` or `superseded` draft
   are embedded with the process's embedding model; the least cosine similarity of two of them
@@ -12,7 +14,9 @@ nothing (logged once per process). It only adds signals and filters; it never de
 - **Duplicates** of Kinds with an embedding template compare the Record vectors the embedding
   job stored (9.3), under the template fingerprint of the read branch's schema, without any
   model call: a pair at `semantic.duplicate_threshold` or more raises a `duplicate` with the
-  `semantic` rule and its similarity.
+  `semantic` rule and its similarity. Nothing is sent anywhere: the vectors hold what the Kind's
+  template embeds (sensitive Attributes only with `search.embedding_sensitive`, vault values
+  never), and the candidate holds the two keys and the score.
 - **Judge** (`semantic.judge`, off). The chat model (task `reconciliation`) is asked whether
   the two least similar values contradict; the answer is cached in the extraction cache (when
   `scribe.extraction.cache` is on) and the stage stops asking once it used
@@ -28,14 +32,15 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import combinations
 from typing import Any
 
 from pydantic import JsonValue
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Kind
+from lorebase_core.expr.sensitivity import Tags
+from lorebase_core.model import Attribute, Kind
 from lorebase_core.reconcile import (
     CandidateDraft,
     DuplicateRule,
@@ -46,7 +51,7 @@ from lorebase_core.reconcile import (
 from lorebase_inference import ChatModel, ChatOptions, EmbeddingModel, Message, Usage
 from lorebase_scribe.embeddings import EmbeddingModels
 from lorebase_scribe.extraction.tier2 import AnswerCache
-from lorebase_scribe.reconcile.detector import Raised
+from lorebase_scribe.reconcile.detector import Raised, shareable
 from lorebase_store.embeddings import similar_vectors, template_fingerprints
 
 log = logging.getLogger("lorebase.scribe.reconcile")
@@ -162,12 +167,24 @@ class EmbeddingSemanticStage:
     # Competing text values -------------------------------------------------------------------
 
     async def review(
-        self, drafts: Sequence[CandidateDraft], options: ReconcileOptions
+        self,
+        drafts: Sequence[CandidateDraft],
+        options: ReconcileOptions,
+        *,
+        attributes: Mapping[str, Attribute],
+        tags: Mapping[str, Tags],
     ) -> list[CandidateDraft]:
         """The drafts to store, with their signals; those above
-        `semantic.equivalence_threshold` left out (module doc)."""
+        `semantic.equivalence_threshold` left out (module doc). Drafts whose Attribute (by id
+        in `attributes`) is not `shareable` under `tags` go on unchanged: their values are sent
+        to no model."""
         semantic = options.semantic
-        texts = {d.fingerprint: _texts(d) for d in drafts}
+        texts = {
+            d.fingerprint: _texts(d)
+            if d.attribute_id is not None and shareable(attributes.get(d.attribute_id), tags)
+            else []
+            for d in drafts
+        }
         wanted = sorted({t for found in texts.values() if len(found) > 1 for t in found})
         if not wanted:
             return list(drafts)
@@ -328,7 +345,8 @@ def build_semantic_stage(
     max_tokens: int = 0,
 ) -> EmbeddingSemanticStage | None:
     """The stage when the operator turned it on (`semantic.enabled`) and an embedding model is
-    configured; None otherwise (logged once). `chat` is created only when the judge asks."""
+    configured; None otherwise (logged once). `chat` is kept only with `semantic.judge`, which is
+    the operator's only, and created when the judge first asks."""
     if not options.enabled or not options.semantic.enabled:
         return None
     if models is None:
@@ -336,7 +354,7 @@ def build_semantic_stage(
         return None
     return EmbeddingSemanticStage(
         models,
-        chat=chat,
+        chat=chat if options.semantic.judge else None,
         chat_model=chat_model,
         cache=cache,
         prompt_version=prompt_version,

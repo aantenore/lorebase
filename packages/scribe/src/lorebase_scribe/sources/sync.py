@@ -659,6 +659,7 @@ class SourceSync:
         self,
         session: AsyncSession,
         domain: DomainRow,
+        schema: Schema,
         source: Source,
         report: SyncReport,
         changes: tuple[RowMapper, Delta],
@@ -669,6 +670,9 @@ class SourceSync:
         mapper, delta = changes
         if detector is None or not report.revisions:
             return
+        await detector.load_tags(
+            session, schema, domain_id=domain.id, branch=report.target, runtime=self._runtime
+        )
         raised = await sync_disagreements(
             detector,
             session,
@@ -751,7 +755,7 @@ class SourceSync:
                 proposal = updated
             report.proposal_id = proposal.id
             if changes is not None:
-                await self._reconcile(session, domain, source, report, changes, proposal.id)
+                await self._reconcile(session, domain, schema, source, report, changes, proposal.id)
             if proposal.status is not ProposalStatus.OPEN:
                 report.proposal_status = proposal.status.value
                 return
