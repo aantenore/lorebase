@@ -8,6 +8,14 @@ Lorebase is pre-alpha. [v0.2.3](https://github.com/aantenore/lorebase/releases/t
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a shared laptop (M5).
 2. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
+3. A reconciliation queue for contradictions between Sources, separate from merge Conflicts ([design 10.6](design.md#106-reconciliation-of-source-contradictions)), in this order:
+   - [ ] data model: `reconciliation_candidates`, optional validity periods on provenance, the `valid_time` Attribute flag and the `reconciliation` origin type (migration `0038`);
+   - [ ] detection stages identity, values and normalization in Scribe, with the extraction and Source sync triggers and the sweep job;
+   - [ ] decisions written through Operations with provenance and audit, dismissal, duplicate merges as Proposals, and the Proposal merge check;
+   - [ ] REST routes, Python client and CLI;
+   - [ ] the Reconciliation screen in the web app;
+   - [ ] the optional semantic stage;
+   - [ ] documentation and configuration example.
 
 Everything else on this page is merged and covered by tests. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 

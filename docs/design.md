@@ -239,6 +239,7 @@ reserved name, choose another (e.g. `code`)"``; `kind` suggests `category`, `ref
 `revision` `version`. Relation Attributes may use them. Schema inference renames colliding
 columns on its own.
 | authority | optional Source id that owns this Attribute's values (used by merge policies) |
+| valid_time | optional boolean, absent when off: values carry a validity period on their provenance, and reconciliation tells superseded values from contradictions (10.6) |
 
 **Type system.** `string`, `text` (long, full-text), `integer` (int64), `decimal` (precision, scale), `float` (float64), `boolean`, `date`, `timestamp` (UTC, microseconds), `duration`, `enum` (closed value list), `json` (opaque, not filterable beyond existence), `geo_point` (lat, lon), `uri`, and `array<T>` of any scalar type. No nested structs in v1; model them as Kinds. **[Architect call AC-05]**
 
@@ -351,6 +352,7 @@ Lineage answers "where did this value come from". It is attached to changes, not
 - Each change in a Revision changeset carries a map `attribute_id -> provenance_id` for the Attributes it changed.
 - The materialized head keeps, per Record, the latest provenance per Attribute and the Revision of that change (`lineage_revisions`, revision `0032`, folded in the commit transaction like the provenance, and by rebuilds from the branch history, with the Revision that created the Record under `$created`). That Revision is the one on the branch's first-parent chain: for a value merged from another branch, the merge Revision, whose changeset attributes only the values the merge changes, so values it leaves keep their Revision (folds diff a merge step's values against the branch's previous value, so merges made before that restriction read the same). A fast-forward makes the source's first-parent chain the branch's, so a Record it writes takes the source row's lineage, lineage revisions and update Revision, as a rebuild folding that chain does, and the branch history gets one row per change of each fast-forwarded Revision, as a rebuild writes it, when the range is at most `store.materialize.fast_forward_history_max_revisions` (1000) Revisions of the source head's first-parent chain; a longer range, or one reached through a second parent, is recorded as one change per element at the source head, so the history endpoint and the change count of lineage show fewer changes there than after a rebuild. Rows materialized before `0032` are filled by the `store.lineage_backfill` job, queued once by a starting job worker (`"recompute": true`, or `python -m lorebase_store.jobs lineage-backfill --recompute`, also folds again the rows naming a merge Revision, and rewrites the history of earlier fast-forwards one Revision at a time within that bound, folding again the Records they updated and the lineage of the Links they wrote; a fast-forwarded Link takes the source row's lineage too); until then lineage reads the newest `read.history.lineage_scan_changes` changes of the Record for what they lack. Full per-value history is available from the branch history table.
 - Provenance is **not** part of content hashes. Two Sources writing the same value produce no diff; Lineage records which change set it last. **[Architect call AC-08]**
+- A provenance entry of a value of a `valid_time` Attribute may carry `valid_from` and `valid_to`. The origin type `reconciliation` (candidate id, claim id, resolver) marks a value written by a reconciliation decision (10.6).
 
 ### 5.12 Invariants
 
@@ -997,6 +999,8 @@ create table extraction_jobs (domain_id, id, documents jsonb, schema_hash bytea,
 create table extraction_cache (cache_key bytea primary key, model text, output jsonb, usage jsonb, created_at);
 create table vault (domain_id, id, kind_id, attribute_id, record_key, fingerprint bytea,
   value_ciphertext bytea, key_id text, created_at, erased_at);
+create table reconciliation_candidates (domain_id, id, branch, type, status, fingerprint bytea,
+  kind_id, keys jsonb, attribute_id, claims jsonb, signals jsonb, decision jsonb, ...);   -- 10.6
 ```
 
 ---
@@ -1310,6 +1314,107 @@ Operations declare named events. Events are written to the `outbox` in the commi
 
 **Masking.** Payloads never hold a sensitive value as such: the writer wraps each value of a tagged Attribute with its effective tags (`{"$sensitive": {"tags": [...], "value": ...}}`), a vault Attribute's value being its vault reference. The worker renders the body for each webhook when it sends it: values whose tags the webhook's `clearances` cover are shown (vault values opened then, `[erased]` once erased), others are `***`. Granting a webhook a clearance needs that clearance permission on the whole Domain; `PATCH` on the webhook replaces its clearances, needing the clearance permission only for those it adds, and is audited with the before and after sets (`webhook.update`). A wrapper without tags is never cleared, and JSON written by a caller that holds `$sensitive` or `$vault` keys is wrapped with every tag, so it cannot pose as a wrapper or a reference. Vault values are never in stored payloads; values of sensitive Attributes outside the vault are kept as committed until pruned, like the Revision objects holding them (erasure reaches vault values only, 13.5).
 
+### 10.6 Reconciliation of Source contradictions
+
+Merge Conflicts (6.9) answer "two branches changed the same value since their base". They do not see two Sources that disagree about one fact: a Source sync, or an accepted extraction item, that replaces a value set by another Source is a one-sided change, merges cleanly, and the newest write wins unnoticed. The reconciliation queue makes these disagreements visible. It is not a Conflict class: it has no merge attempt, it can concern values already on a protected branch, it compares any number of claims, and a candidate lives until a person decides, whatever happens to the Proposal that raised it. **[Architect call AC-31]**
+
+Nothing in it is decided by the system. Every candidate opens as `open` ("to review"); no value is changed, invalidated or hidden because a candidate exists. **[Architect call AC-33]**
+
+**Claims and candidates.**
+
+- A **claim** is one value for one `(kind, key, attribute)` and where it comes from: the provenance entry (5.11) when the value is or was on a branch, or the Proposal item with its evidence (document, offsets, quote) when it is only proposed. Its **source identity** follows from the origin: `source:{id}` for syncs, `document:{id}` for extraction, `principal:{id}` for Operations, `import:{batch}` for imports; `merge_resolution` and `reconciliation` origins carry the identity of the claim they chose.
+- A **candidate** groups claims that disagree:
+
+| Type | Raised when | Usual decision |
+|------|-------------|----------------|
+| `duplicate` | two Records of one Kind (different keys) probably describe the same entity | merge into one Record, or dismiss |
+| `contradiction` | one Record and Attribute, at least two distinct values from different source identities, periods overlapping or unknown | pick a claim, apply a policy, custom value, or dismiss |
+| `superseded` | as above on a `valid_time` Attribute, with periods that do not overlap | confirm the newer period as current (the older stays in history), or dismiss |
+| `stale` | the current value is older than the Attribute's maximum age, its period has ended, or its source identity has a newer claim pending | pick the newer claim, or dismiss |
+
+Statuses: `open`, `resolved`, `dismissed`, `obsolete`. Only the pipeline sets `obsolete`, and only when the disagreement no longer exists in the data: the Record was deleted, the claims converged, or the Proposal holding the only competing claim was closed or its item rejected. The reason is recorded. A score never makes a candidate obsolete.
+
+**Pipeline.** Detection runs in Scribe, the only service that may call models (AC-30). Pure functions in `lorebase_core.reconcile` (claims, source identity, normalization, classification, fingerprints) serve three triggers:
+
+1. **Extraction** (9.2 step 11). Value items whose `current` value differs are checked while items are assembled, before the auto-accept decision. With `hold_auto_accept` (default on) an item that raises a contradiction stays `pending` whatever its confidence.
+2. **Source syncs** (9.1 step 5). Before the merge policy is applied, the changes of the Source branch are compared with the target head and with the lineage of the values they replace.
+3. **Sweep** (job `reconcile_sweep`, on demand or every `sweep_interval_s`). Walks `mat_history` of a branch for values that replaced a value of another source identity, checks ages for `stale` and Records for `duplicate`. It resumes from a `(kind, key)` cursor and caps its work per job, like embedding passes (9.3).
+
+Stages run cheapest first; each sees only what the previous ones kept.
+
+- **a. Identity.** A claim belongs to a Record by key (AC-02) or by the entity resolution of extraction (9.2 step 9); nothing else attaches it. Duplicates come from Records equal on a unique or title Attribute once case and spacing are folded (the rule of the health report, moved from Keeper into `lorebase_store` so that Scribe can run it), titles above `duplicates.trigram_threshold` by trigram similarity (`lorebase_store.reads.similar_titles`), and extraction mentions left `ambiguous` between two existing Records. A fuzzy or semantic match only raises a `duplicate` candidate: it never attaches a claim to another Record and never merges Records.
+- **b. Values.** Same Record and Attribute, different canonical values (6.1), different source identities: a candidate. Equal canonical values from several identities are agreement. Arrays compare as whole values, as in merge.
+- **c. Normalization** (`string` and `text` Attributes; typed numbers, dates and durations already compare canonically). Quantities with units are read with a small table of units and factors (`normalize.units_file`; the default ships with `lorebase_core`, no new dependency): `5 km` and `5000 m` are equal and the candidate is dropped, `5 km` and `7 km` stay. Numbers within `normalize.numeric_tolerance` (relative, default 0) are equal. Values that differ only in case, spacing or punctuation are equal. Values equal once a negation word (`normalize.negation_words`, per Domain language) is removed are kept and marked `negation`, which ranks them first. Normalization filters and ranks; it never changes a stored value.
+- **d. Semantic** (optional; off unless `semantic.enabled` and an embedding provider is configured, 9.4). Embeddings of competing `text` values give a similarity: near-paraphrases are marked `equivalent` and ranked last (not raised above `semantic.equivalence_threshold`; default null, always raised). Duplicates of Kinds with an `embedding_template` compare the stored Record vectors (9.3) without any model call. An optional judge (`semantic.judge`, off) asks the chat model whether two texts contradict, through the extraction cache and budgets (9.2); it adds a label and a score, nothing else.
+
+**Fingerprint and idempotency.** A candidate's fingerprint is `sha256(type, branch, kind_id, keys, attribute_id, sorted distinct value hashes)`, the pattern of the Conflict fingerprint (6.10). It hashes values, not source identities: a new source repeating a known value adds a claim to the existing candidate instead of opening another, so a dismissed contradiction stays dismissed until a new value appears. Triggers and sweeps upsert on `(domain, branch, fingerprint)` and can be re-run at will. Claims per candidate are capped (`max_claims_per_candidate`; the newest are kept and the rest counted).
+
+**Valid time (opt-in).** An Attribute declares `valid_time: true` (5.4). Its claims may then carry `valid_from` and `valid_to`:
+
+- Source mappings name them per Attribute (`attribute_mapping.{attribute}.valid_from`, `valid_to`: a column or an expression);
+- extraction asks for an optional period per value of such Attributes in the tier 2 JSON Schema, kept only when its quote verifies like the value's;
+- the built-in `update_{kind}` accepts an optional `valid` member per value.
+
+Periods live on the provenance entry, not in content. `ProvenanceEntry` gains optional `valid_from` and `valid_to`, stored in two nullable `timestamptz` columns of `provenance` (migration `0038`: a metadata-only `ALTER TABLE`, no backfill). Content, hashes, merge and materialized values are untouched (AC-08); the materialized lineage already points at the latest provenance per Attribute, so the period of a current value is one join away, and `mat_history` holds the periods of earlier values. Attributes without the flag ignore periods; existing provenance reads as "no period". `Model.content()` drops `None` fields only, so the flag is `bool | None` (absent when off), like `vault`, and existing Attributes keep their hashes. A consequence of AC-08: a Source that repeats the current value with a new period writes no change and the period is not updated; the sweep raises `stale` once the stored period has ended.
+
+Classification: disjoint periods give `superseded` (the newer period should be current; when it is not, the candidate proposes it); overlapping or equal periods, or any claim without one, give `contradiction`. A value is never invalidated because a newer period exists: the older value stays in history and both are listed for confirmation. **[Architect call AC-32]** `stale` uses `stale.max_age` (Domain, Kind or Attribute; default null, off) on the provenance time, an ended `valid_to`, or a newer pending claim of the same source identity.
+
+**Resolution.** A decision is the only way a candidate changes data, and it takes the normal write path.
+
+- **Choices:** one claim; `keep_current`; a custom value (validated against the schema); or a policy over the claims: `authority` (the ranking of 6.10 over source identities, the Attribute's `authority` Source first) or `newest_wins` (by period when present, otherwise by provenance time). Both reuse `decide_authority` and `decide_newest` of `lorebase_core.merge.policies`, folded pairwise over the claims; `prefer` maps to `keep_current` or the incoming claim for two-claim candidates. A policy that cannot decide (equal ranks) leaves the candidate open.
+- **Write:** the chosen value is written by the Kind's built-in `update_{kind}` through the Operation pipeline (10.1) on the candidate's branch, so authorization, validation, review policies and branch protection apply unchanged. On a protected branch the write becomes a Proposal (the `task` flow) and the candidate stays `open`, linked to it, until it merges. The changed value gets a provenance entry of the new origin type `reconciliation` (`candidate_id`, `claim_id`, `resolver` `principal:{id}` or `policy:{name}`), which only Keeper sets, never a caller.
+- **No content change:** `keep_current` and dismissal write no Revision (Revisions record content changes, AC-08). They are recorded on the candidate (`decided_by`, `decided_at`, the chosen claim and a required `reason`) and in the audit log, like every decision (`reconciliation.resolve`, `reconciliation.dismiss`). A dismissed candidate can be reopened.
+- **Evidence:** each decision keeps the claims as they were when decided: value, source identity, provenance entry or Proposal item, and the evidence passage (document, offsets, quote).
+- **Duplicates:** the person picks the surviving Record and, per differing Attribute, the value to keep. Keeper writes on branch `reconcile/{candidate}` the update of the survivor, the Links of the absorbed Record re-created on the survivor, and the deletion of the absorbed Record (`on_delete` as usual), then opens a Proposal into the candidate's branch: review, Conflicts with concurrent changes and merge follow the normal Proposal path. The absorbed key disappears; outside references to it are not redirected (no key aliases in v1).
+- **Bulk:** one choice (a policy or a dismissal) over a filtered set of at most `keeper.reconciliation.bulk_max` candidates, each decided and audited on its own.
+
+**Merge check.** Proposal checks (10.3) gain `reconciliation`, a Domain setting: `off`, `warn` (default: the Proposal lists its open candidates) or `block` (a Proposal whose changes have open `contradiction` candidates cannot merge, automatic Source merges included).
+
+**Storage.**
+
+```sql
+create table reconciliation_candidates (
+  domain_id text, id text, branch text, type text, status text, fingerprint bytea,
+  kind_id text, keys jsonb, attribute_id text,
+  claims jsonb,     -- [{claim_id, value_hash, value, source, provenance_id | proposal_item, evidence, valid_from, valid_to, at}]
+  signals jsonb,    -- what the stages found: unit, negation, similarity, judge, periods
+  claim_count int, proposal_id text,
+  decision jsonb, decided_by text, decided_at timestamptz,
+  created_at timestamptz, updated_at timestamptz,
+  primary key (domain_id, id), unique (domain_id, branch, fingerprint)
+);
+```
+
+Indexed by `(domain_id, branch, status, type)` and by `(domain_id, branch, kind_id, keys)` for the Record page. Values of sensitive Attributes in claims are wrapped with their tags as in outbox payloads (10.5) and masked on read; vault Attributes keep the vault reference only. The table is under the Domain's row-level security like every other.
+
+**API** (Keeper, 11.1). List with filters `branch`, `type`, `status`, `kind`, `attribute`, `source` and a cursor; get one; resolve (`{choice, claim_id | value | policy, reason, dry_run}`); dismiss (`{reason}`); reopen; bulk resolve; queue a sweep. Reads need `data.read` on the branch and are scoped like Record reads: a Kind-narrowed grant sees the candidates of its Kinds only, and claim values are masked by clearance. Decisions need `conflict.resolve` (`reviewer`) plus whatever the write itself needs (10.1). Sweeps need `job.manage`. Herald exposes no governance tools (its tools are reads, `lorebase_execute` and branches), so none is added; the Python client and the CLI (`lorebase reconcile list|show|resolve|dismiss`) follow the REST routes.
+
+**UI** (12.3). A Reconciliation screen in Review (`/$domain/reconcile`): one queue, tabs per type, filters by status, Kind, Attribute, source and signal, counts per tab. A candidate shows every claim side by side with its source, time, period and evidence passage (the document viewer link of extraction items); `text` values reuse the text diff of the Conflict resolver. Actions: pick a claim, keep current, custom value, apply a policy, dismiss with a reason, merge duplicates (survivor and per-Attribute picker, then the Proposal). The Record page marks values with open candidates.
+
+**Configuration** (16). `scribe.reconciliation` drives detection, overridden per Domain by its `reconciliation` setting, as `agent_writes` is; `keeper.reconciliation` holds page sizes and the bulk limit.
+
+```yaml
+scribe:
+  reconciliation:
+    enabled: true
+    stages: [identity, values, normalize, semantic]   # fixed order; leave one out to disable it
+    triggers: {extraction: true, source_sync: true}
+    hold_auto_accept: true          # extraction items raising a contradiction stay pending
+    sweep_interval_s: 0             # scheduled sweep of every Domain; 0 disables
+    sweep_max_changes_per_job: 50000
+    max_claims_per_candidate: 20
+    duplicates: {trigram_threshold: 0.8, max_pairs_per_kind: 1000}
+    normalize: {units_file: null, numeric_tolerance: 0.0, negation_words: [not, no, never, without]}
+    semantic: {enabled: false, equivalence_threshold: null, duplicate_threshold: 0.92, judge: false}
+    stale: {max_age: null}          # ISO 8601 duration; per Kind and Attribute in Domain settings
+keeper:
+  reconciliation: {default_limit: 50, max_limit: 500, bulk_max: 1000}
+```
+
+**Metrics.** `lorebase.scribe.reconciliation.candidates` by type and outcome (`raised`, `filtered`, `claim_added`, `obsolete`), sweep duration, and open candidates per Domain and type.
+
+**Non-goals.** Automatic resolution or invalidation by any stage or score. Queries by valid time (periods classify claims; reads stay at Revisions). Key aliases after a duplicate merge. New dependencies: the unit table is in-house and similarity goes through the existing inference interfaces. Any model call in Keeper or Herald.
+
 ---
 
 ## 11. Agent interface: REST and MCP
@@ -1338,6 +1443,7 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 | Proposals | `GET/POST .../proposals`, `GET/PATCH .../proposals/{p}`, `GET .../proposals/{p}/diff`, `POST .../proposals/{p}/reviews`, `POST .../proposals/{p}/merge`, `POST .../proposals/{p}/close` | merge: 200 with the new target head, or 409 `merge-conflicts` carrying `attempt` |
 | Proposal items | `GET .../proposals/{p}/items`, `POST .../proposals/{p}/items:decide` | bulk accept/reject |
 | Conflicts | `GET .../proposals/{p}/conflicts`, `POST .../proposals/{p}/conflicts/{c}/resolution`, `POST .../proposals/{p}/conflicts:resolve` | `{c}` is the fingerprint; bulk re-runs the merge |
+| Reconciliation | `GET .../reconciliation`, `GET .../reconciliation/{id}`, `POST .../reconciliation/{id}/resolution`, `POST .../reconciliation/{id}/dismissal`, `POST .../reconciliation/{id}/reopen`, `POST .../reconciliation:resolve`, `POST .../reconciliation/sweeps` | contradictions between Sources (10.6); decisions write through Operations |
 | Sources | `GET/POST .../sources`, `POST .../sources/{s}/runs`, `GET .../sources/{s}/runs/{run}`, `POST /sources:infer` | |
 | Documents and extraction | `POST .../documents`, `GET .../documents/{doc}`, `POST .../extraction-jobs`, `GET .../extraction-jobs/{job}` | |
 | Admin | `GET .../audit`, `GET/POST /principals`, `POST /api-keys`, `GET/POST .../grants` | |
@@ -1459,6 +1565,7 @@ Design rules for tools:
 | Review | Proposal detail | Summary, checks, reviewers, schema diff, data diff by Kind with counts, Record-level side-by-side diff, comments, merge button |
 | Review | Extraction items | Item list with confidence, match status and evidence; document viewer with highlighted spans; accept or reject per item, bulk by threshold or filter; ambiguous match picker |
 | Review | Conflict resolver | Conflict list by code; base, ours, theirs panes; choices and custom value editor; grouped Conflicts with bulk actions; policy application; progress; re-validation status |
+| Review | Reconciliation | One queue with tabs for duplicates, contradictions, stale and superseded values; every claim with its source and evidence passage; pick a claim, keep current, custom value, apply a policy, dismiss with a reason, merge duplicates (10.6) |
 | Sources | Source list and detail | Status, schedule, last runs, stats, errors, mapping link, run now |
 | Sources | Documents and extraction jobs | Library, upload, jobs with progress, token usage and cost estimate, link to Proposal |
 | History | Log and compare | Branch log, Revision detail with diff, compare any two refs, tags |
@@ -1764,6 +1871,9 @@ Acceptance:
 | OpenAI-compatible endpoints differ in JSON schema support | Extraction failures on some servers | JSON mode fallback with validation and one repair attempt; compatibility matrix; contract tests against a mock server |
 | CPU-only inference is slow on large document sets | Long extraction jobs on laptops | Budgets, progress and resumable jobs; GPU or hosted endpoint by configuration |
 | Scope creep toward a full data platform | Delay | Non-goals in section 2; Sources map, they do not transform |
+| Reconciliation raises too many candidates | Reviewer fatigue; the queue is ignored | Cheap stages first; normalization drops unit and formatting differences; fingerprints on values keep dismissals; thresholds and stages per Domain; candidates ranked by signal (10.6) |
+| Cost of the semantic reconciliation stage | Model spend, slow sweeps | Off by default; duplicates compare stored vectors without model calls; the judge is off; extraction cache and job budgets; sweeps paced and resumable |
+| Entity resolution errors cascade into reconciliation | False contradictions on the wrong Record; wrong duplicate merges | Claims attach only to exact or resolved matches; fuzzy and semantic matches only raise `duplicate` candidates; duplicate merges are reviewed Proposals; candidates become `obsolete` when their claims go |
 | Name collision or trademark issue with "Lorebase" | Rename cost | Trademark and package name search before first public release |
 
 ---
@@ -1802,6 +1912,9 @@ Acceptance:
 | AC-28 | Local by default: compose ships an Ollama profile; small open models are first-class; the full demo needs zero API keys | Free to try, private by default | Never |
 | AC-29 | Deterministic fake provider for all model interfaces; tests and CI run without network | Reproducible, free, fast tests | Never |
 | AC-30 | Read path model-free by construction: Keeper and Herald cannot import the inference package | Enforced by the build, not by convention | Never |
+| AC-31 | Contradictions between Sources go to a reconciliation queue, separate from merge Conflicts | They concern values already merged, outlive the Proposal that raised them and compare N claims, not ours and theirs | Conflicts and candidates need one review flow |
+| AC-32 | Valid time is opt-in per Attribute and stored on provenance entries, not in content | No change to hashes, merge or materialized values; Attributes without it behave as before | Bitemporal queries become a goal |
+| AC-33 | Reconciliation never resolves, invalidates or hides a value on its own; every decision is a person's, or a policy a person applied, written through Operations | Overlapping facts are often both true; silent invalidation loses information | Never |
 
 ### Implementation status
 
