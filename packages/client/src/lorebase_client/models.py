@@ -42,6 +42,12 @@ ProposalStatus = Literal["open", "merged", "closed"]
 ProposalOrigin = Literal["manual", "source_sync", "extraction", "operation"]
 ReviewVerdict = Literal["approve", "request_changes", "comment"]
 ConflictStatus = Literal["open", "resolved"]
+CandidateType = Literal["duplicate", "contradiction", "superseded", "stale"]
+CandidateStatus = Literal["open", "resolved", "dismissed", "obsolete"]
+ReconcileChoice = Literal["claim", "keep_current", "custom", "policy", "merge"]
+ReconcilePolicy = Literal["authority", "newest_wins", "prefer_current", "prefer_incoming"]
+BulkChoice = Literal["policy", "dismiss"]
+DecisionStatus = Literal["resolved", "proposed", "undecided", "dry_run", "dismissed", "reopened"]
 CheckStatus = Literal["passed", "failed", "pending"]
 ContextFormat = Literal["json", "markdown"]
 ItemDecisionValue = Literal["pending", "accepted", "rejected"]
@@ -936,11 +942,13 @@ class ResolveManyIn(RequestModel):
 
 
 class Check(Model):
-    """One Proposal check."""
+    """One Proposal check; `candidates` lists open reconciliation candidates (check
+    `reconciliation`)."""
 
     name: str
     status: CheckStatus
     message: str | None = None
+    candidates: list[str] | None = None
 
 
 class Review(Model):
@@ -1061,6 +1069,130 @@ class MergeResult(Model):
     attempt: Conflicts
     source_deleted: bool
     replayed: bool
+
+
+# Reconciliation ---------------------------------------------------------------------------
+
+
+class ReconciliationClaim(Model):
+    """One value of a candidate and where it comes from."""
+
+    claim_id: str
+    value: JsonValue
+    value_hash: str | None = None
+    source: str | None = None
+    provenance_id: str | None = None
+    proposal_item: dict[str, str] | None = None
+    evidence: dict[str, JsonValue] | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+    at: str | None = None
+
+
+class ReconciliationCandidate(Model):
+    """An entry of the reconciliation queue: Sources that disagree, or Records that may be one."""
+
+    id: str
+    branch: str
+    type: CandidateType
+    status: CandidateStatus
+    kind: str | None
+    kind_id: str
+    keys: list[str]
+    attribute: str | None
+    attribute_id: str | None
+    claims: list[ReconciliationClaim]
+    claim_count: int
+    signals: dict[str, JsonValue]
+    proposal_id: str | None
+    decision: dict[str, Any] | None
+    decided_by: str | None
+    decided_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReconcileIn(RequestModel):
+    """A decision on a candidate: `claim` (`claim_id`), `keep_current`, `custom` (`value`),
+    `policy` (`policy`) or, for duplicates, `merge` (`survivor`, `values`)."""
+
+    choice: ReconcileChoice
+    claim_id: str | None = None
+    value: JsonValue = None
+    policy: ReconcilePolicy | None = None
+    survivor: str | None = None
+    values: dict[str, JsonValue] | None = None
+    reason: str = Field(min_length=1, max_length=2000)
+    dry_run: bool = False
+
+
+class ReasonIn(RequestModel):
+    """Why a candidate is dismissed or reopened."""
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ReconciliationDecision(Model):
+    """Where a decision left the candidate."""
+
+    status: DecisionStatus
+    candidate: ReconciliationCandidate
+    claim_id: str | None = None
+    revision: str | None = None
+    proposal: str | None = None
+    branch: str | None = None
+    edits: list[dict[str, Any]] = Field(default_factory=list)
+    detail: str | None = None
+
+
+class ReconcileFilter(RequestModel):
+    """The open candidates a bulk decision applies to."""
+
+    branch: str | None = None
+    type: CandidateType | None = None
+    kind: str | None = None
+    attribute: str | None = None
+    source: str | None = None
+
+
+class BulkReconcileIn(RequestModel):
+    """One choice over open candidates: the `ids` given, or those matching `filter`."""
+
+    ids: list[str] | None = Field(default=None, min_length=1)
+    filter: ReconcileFilter | None = None
+    choice: BulkChoice
+    policy: ReconcilePolicy | None = None
+    reason: str = Field(min_length=1, max_length=2000)
+    dry_run: bool = False
+
+
+class BulkItem(Model):
+    candidate: str
+    status: str
+    detail: str | None = None
+    proposal: str | None = None
+    revision: str | None = None
+
+
+class BulkDecision(Model):
+    """The outcome of a bulk decision: candidates per status and each one's result."""
+
+    count: int
+    counts: dict[str, int]
+    items: list[BulkItem]
+
+
+class SweepRequest(RequestModel):
+    """A reconciliation sweep of a branch (default: the default branch)."""
+
+    branch: str | None = None
+
+
+class SweepQueued(Model):
+    """The queued reconciliation sweep job."""
+
+    job_id: int
+    branch: str
 
 
 # Agents -----------------------------------------------------------------------------------

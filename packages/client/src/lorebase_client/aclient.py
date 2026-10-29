@@ -106,6 +106,7 @@ class AsyncLorebaseClient:
         self.proposals = Proposals(self)
         self.agents = Agents(self)
         self.webhooks = Webhooks(self)
+        self.reconciliation = Reconciliation(self)
         self.sources = Sources(self)
         self.documents = Documents(self)
 
@@ -1513,6 +1514,137 @@ class Webhooks(_Resource):
 
     async def delete(self, domain: str, webhook_id: str) -> None:
         await self._c.send(ep.delete_webhook(domain, webhook_id))
+
+
+class Reconciliation(_Resource):
+    async def list(
+        self,
+        domain: str,
+        *,
+        branch: str | None = None,
+        type: m.CandidateType | None = None,
+        status: m.CandidateStatus | None = None,
+        kind: str | None = None,
+        attribute: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> m.Page[m.ReconciliationCandidate]:
+        """One page of the candidates of a branch (default: the default branch), newest first.
+
+        `kind` and `attribute` are api names (`attribute` needs `kind`); `source` is a Source
+        identity such as `source:src_...`."""
+        return await self._c.send(
+            ep.list_reconciliation(
+                domain,
+                branch=branch,
+                type=type,
+                status=status,
+                kind=kind,
+                attribute=attribute,
+                source=source,
+                limit=limit,
+                cursor=cursor,
+            )
+        )
+
+    def iterate(
+        self,
+        domain: str,
+        *,
+        branch: str | None = None,
+        type: m.CandidateType | None = None,
+        status: m.CandidateStatus | None = None,
+        kind: str | None = None,
+        attribute: str | None = None,
+        source: str | None = None,
+        page_size: int | None = None,
+    ) -> AsyncIterator[m.ReconciliationCandidate]:
+        call = ep.list_reconciliation(
+            domain,
+            branch=branch,
+            type=type,
+            status=status,
+            kind=kind,
+            attribute=attribute,
+            source=source,
+            limit=page_size,
+        )
+        return self._c.iterate(call)
+
+    async def get(self, domain: str, candidate_id: str) -> m.ReconciliationCandidate:
+        return await self._c.send(ep.get_reconciliation_candidate(domain, candidate_id))
+
+    async def resolve(
+        self,
+        domain: str,
+        candidate_id: str,
+        choice: m.ReconcileChoice,
+        *,
+        reason: str,
+        claim_id: str | None = None,
+        value: JsonValue = None,
+        policy: m.ReconcilePolicy | None = None,
+        survivor: str | None = None,
+        values: JsonObject | None = None,
+        dry_run: bool = False,
+    ) -> m.ReconciliationDecision:
+        """Decide a candidate; `dry_run` reports the outcome without writing."""
+        body = m.ReconcileIn(
+            choice=choice,
+            claim_id=claim_id,
+            value=value,
+            policy=policy,
+            survivor=survivor,
+            values=None if values is None else dict(values),
+            reason=reason,
+            dry_run=dry_run,
+        )
+        return await self._c.send(ep.resolve_reconciliation(domain, candidate_id, body))
+
+    async def dismiss(
+        self, domain: str, candidate_id: str, *, reason: str
+    ) -> m.ReconciliationDecision:
+        return await self._c.send(
+            ep.dismiss_reconciliation(domain, candidate_id, m.ReasonIn(reason=reason))
+        )
+
+    async def reopen(
+        self, domain: str, candidate_id: str, *, reason: str
+    ) -> m.ReconciliationDecision:
+        """Reopen a dismissed candidate."""
+        return await self._c.send(
+            ep.reopen_reconciliation(domain, candidate_id, m.ReasonIn(reason=reason))
+        )
+
+    async def resolve_many(
+        self,
+        domain: str,
+        choice: m.BulkChoice,
+        *,
+        reason: str,
+        ids: Sequence[str] | None = None,
+        where: m.ReconcileFilter | None = None,
+        policy: m.ReconcilePolicy | None = None,
+        dry_run: bool = False,
+    ) -> m.BulkDecision:
+        """Apply a policy or a dismissal to the `ids` given, or to the open candidates
+        matching `where`."""
+        body = m.BulkReconcileIn(
+            ids=None if ids is None else list(ids),
+            filter=where,
+            choice=choice,
+            policy=policy,
+            reason=reason,
+            dry_run=dry_run,
+        )
+        return await self._c.send(ep.resolve_reconciliation_bulk(domain, body))
+
+    async def queue_sweep(self, domain: str, *, branch: str | None = None) -> m.SweepQueued:
+        """Queue a reconciliation sweep of a branch for Scribe."""
+        return await self._c.send(
+            ep.queue_reconciliation_sweep(domain, m.SweepRequest(branch=branch))
+        )
 
 
 class Sources(_Resource):

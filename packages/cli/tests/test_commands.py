@@ -2381,3 +2381,128 @@ def test_schema_suggestions_merge_reports_counts(http: respx.MockRouter) -> None
     assert route.called
     as_json = run("schema", "suggestions", "merge", "-d", "supply", "--json")
     assert json.loads(as_json.stdout) == {"merged": 3, "kept": 2}
+
+
+# Reconciliation -----------------------------------------------------------------------------
+
+
+def candidate_row(**extra: Any) -> dict[str, Any]:
+    return {
+        "id": "rcc_1",
+        "branch": "main",
+        "type": "contradiction",
+        "status": "open",
+        "kind": "Supplier",
+        "kind_id": "knd_1",
+        "keys": ["S-1"],
+        "attribute": "city",
+        "attribute_id": "att_1",
+        "claims": [
+            {"claim_id": "c1", "value": "Turin", "source": "source:src_1"},
+            {"claim_id": "c2", "value": "Milan"},
+        ],
+        "claim_count": 2,
+        "signals": {},
+        "proposal_id": None,
+        "decision": None,
+        "decided_by": None,
+        "decided_at": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+        **extra,
+    }
+
+
+def test_reconcile_list_and_show(http: respx.MockRouter) -> None:
+    listing = http.get("/domains/supply/reconciliation").respond(
+        200, json={"items": [candidate_row()], "next_cursor": None}
+    )
+    http.get("/domains/supply/reconciliation/rcc_1").respond(200, json=candidate_row())
+    listed = run(
+        "reconcile",
+        "list",
+        "--type",
+        "contradiction",
+        "--status",
+        "open",
+        "--kind",
+        "Supplier",
+        "--attribute",
+        "city",
+        "--source",
+        "source:src_1",
+        "-b",
+        "work",
+        "-d",
+        "supply",
+    )
+    assert listed.exit_code == 0, listed.output
+    assert "rcc_1" in listed.stdout
+    assert "S-1" in listed.stdout
+    params = listing.calls.last.request.url.params
+    assert {k: params[k] for k in ("branch", "type", "status", "kind", "attribute", "source")} == {
+        "branch": "work",
+        "type": "contradiction",
+        "status": "open",
+        "kind": "Supplier",
+        "attribute": "city",
+        "source": "source:src_1",
+    }
+    shown = run("reconcile", "show", "rcc_1", "-d", "supply")
+    assert shown.exit_code == 0, shown.output
+    assert "Turin" in shown.stdout
+    as_json = json.loads(run("reconcile", "show", "rcc_1", "-d", "supply", "--json").stdout)
+    assert as_json["claim_count"] == 2
+    bad = run("reconcile", "list", "--type", "other", "-d", "supply")
+    assert bad.exit_code == 1
+
+
+def test_reconcile_resolve_dismiss_and_reopen(http: respx.MockRouter) -> None:
+    decision = {"status": "dry_run", "candidate": candidate_row(), "claim_id": "c1"}
+    resolution = http.post("/domains/supply/reconciliation/rcc_1/resolution").respond(
+        200, json=decision
+    )
+    dismissal = http.post("/domains/supply/reconciliation/rcc_1/dismissal").respond(
+        200, json={**decision, "status": "dismissed"}
+    )
+    reopen = http.post("/domains/supply/reconciliation/rcc_1/reopen").respond(
+        200, json={**decision, "status": "reopened"}
+    )
+    resolved = run(
+        "reconcile",
+        "resolve",
+        "rcc_1",
+        "--choice",
+        "merge",
+        "--survivor",
+        "S-1",
+        "--values",
+        '{"city": "Turin"}',
+        "--value",
+        '"Turin"',
+        "--reason",
+        "checked",
+        "--dry-run",
+        "-d",
+        "supply",
+    )
+    assert resolved.exit_code == 0, resolved.output
+    assert "dry_run" in resolved.stdout
+    assert request_bodies(resolution) == [
+        {
+            "choice": "merge",
+            "value": "Turin",
+            "survivor": "S-1",
+            "values": {"city": "Turin"},
+            "reason": "checked",
+            "dry_run": True,
+        }
+    ]
+    assert run(
+        "reconcile", "resolve", "rcc_1", "--choice", "x", "-r", "r", "-d", "supply"
+    ).exit_code
+    assert run("reconcile", "resolve", "rcc_1", "--choice", "claim", "-d", "supply").exit_code == 1
+    assert run("reconcile", "dismiss", "rcc_1", "-r", "same city", "-d", "supply").exit_code == 0
+    assert request_bodies(dismissal) == [{"reason": "same city"}]
+    assert run("reconcile", "reopen", "rcc_1", "-r", "wrong", "-d", "supply").exit_code == 0
+    assert request_bodies(reopen) == [{"reason": "wrong"}]

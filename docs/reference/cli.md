@@ -60,6 +60,7 @@ Exit codes: 0 success, 1 usage or configuration error (also not found), 2 valida
 * `audit`: Check the audit log of a Domain.
 * `trace`: Inspect what agents did in a session.
 * `proposal`: Propose, review and merge changes between...
+* `reconcile`: Review contradictions and duplicates...
 * `sources`: Synchronize the Sources of a Domain.
 * `documents`: Upload documents and follow their extraction.
 
@@ -1725,6 +1726,142 @@ $ lorebase proposal decide [OPTIONS] {ID}
 * `--where-min-confidence <float range>`: Only items from this.  [0&lt;=x&lt;=1]
 * `--where-max-confidence <float range>`: Only items below this.  [0&lt;=x&lt;=1.01]
 * `--decision <str>`: pending, accepted or rejected, for the --where-* items.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+### `lorebase reconcile`
+
+Review contradictions and duplicates between Sources.
+
+**Usage**:
+
+```console
+$ lorebase reconcile [OPTIONS] COMMAND [ARGS]...
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+**Commands**:
+
+* `list`: List the candidates of a branch, newest...
+* `show`: Show a candidate with its claims and last...
+* `resolve`: Decide a candidate; a write that needs...
+* `dismiss`: Dismiss a candidate: the difference is...
+* `reopen`: Reopen a dismissed candidate.
+
+#### `lorebase reconcile list`
+
+List the candidates of a branch, newest first.
+
+**Usage**:
+
+```console
+$ lorebase reconcile list [OPTIONS]
+```
+
+**Options**:
+
+* `--type <str>`: duplicate, contradiction, superseded or stale.
+* `--status <str>`: open, resolved, dismissed or obsolete (default: all).
+* `--kind <str>`: Only this Kind (api name).
+* `--attribute <str>`: Only this Attribute (api name; needs --kind).
+* `--source <str>`: Only candidates with a claim of this Source identity.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--all`: Print every item, however many.
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase reconcile show`
+
+Show a candidate with its claims and last decision.
+
+**Usage**:
+
+```console
+$ lorebase reconcile show [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Candidate id.  [required]
+
+**Options**:
+
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase reconcile resolve`
+
+Decide a candidate; a write that needs review opens a Proposal.
+
+**Usage**:
+
+```console
+$ lorebase reconcile resolve [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Candidate id.  [required]
+
+**Options**:
+
+* `--choice <str>`: claim, keep_current, custom, policy or merge.  [required]
+* `-r, --reason <str>`: Why; kept in the audit log.  [required]
+* `--claim <str>`: Claim id to take (choice `claim`).
+* `--value <str>`: Value of a `custom` choice: inline JSON, @file or -.
+* `--policy <str>`: authority, newest_wins, prefer_current or prefer_incoming (choice `policy`).
+* `--survivor <str>`: Key of the Record that stays (`merge`).
+* `--values <str>`: Values to set on the survivor, by Attribute api name (`merge`): a JSON object, inline, @file or -.
+* `--dry-run`: Report the outcome without writing.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase reconcile dismiss`
+
+Dismiss a candidate: the difference is accepted as it is.
+
+**Usage**:
+
+```console
+$ lorebase reconcile dismiss [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Candidate id.  [required]
+
+**Options**:
+
+* `-r, --reason <str>`: Why; kept in the audit log.  [required]
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+#### `lorebase reconcile reopen`
+
+Reopen a dismissed candidate.
+
+**Usage**:
+
+```console
+$ lorebase reconcile reopen [OPTIONS] {ID}
+```
+
+**Arguments**:
+
+* `ID`: Candidate id.  [required]
+
+**Options**:
+
+* `-r, --reason <str>`: Why; kept in the audit log.  [required]
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `--json`: Print JSON instead of a table.
 * `--help`: Show this message and exit.

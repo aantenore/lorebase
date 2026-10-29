@@ -1153,6 +1153,100 @@ def delete_webhook(domain: str, webhook_id: str) -> Call[None]:
     return Call("DELETE", f"{_domain(domain)}/webhooks/{_seg(webhook_id)}", parse_none, safe=True)
 
 
+# Reconciliation ---------------------------------------------------------------------------
+
+
+def list_reconciliation(
+    domain: str,
+    *,
+    branch: str | None = None,
+    type: m.CandidateType | None = None,
+    status: m.CandidateStatus | None = None,
+    kind: str | None = None,
+    attribute: str | None = None,
+    source: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> Call[m.Page[m.ReconciliationCandidate]]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/reconciliation",
+        parse_model(m.Page[m.ReconciliationCandidate]),
+        params={
+            "branch": branch,
+            "type": type,
+            "status": status,
+            "kind": kind,
+            "attribute": attribute,
+            "source": source,
+            "limit": limit,
+            "cursor": cursor,
+        },
+        safe=True,
+    )
+
+
+def get_reconciliation_candidate(domain: str, candidate_id: str) -> Call[m.ReconciliationCandidate]:
+    return Call(
+        "GET",
+        f"{_domain(domain)}/reconciliation/{_seg(candidate_id)}",
+        parse_model(m.ReconciliationCandidate),
+        safe=True,
+    )
+
+
+def resolve_reconciliation(
+    domain: str, candidate_id: str, body: m.ReconcileIn
+) -> Call[m.ReconciliationDecision]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/reconciliation/{_seg(candidate_id)}/resolution",
+        parse_model(m.ReconciliationDecision),
+        body=body.payload(),
+    )
+
+
+def dismiss_reconciliation(
+    domain: str, candidate_id: str, body: m.ReasonIn
+) -> Call[m.ReconciliationDecision]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/reconciliation/{_seg(candidate_id)}/dismissal",
+        parse_model(m.ReconciliationDecision),
+        body=body.payload(),
+    )
+
+
+def reopen_reconciliation(
+    domain: str, candidate_id: str, body: m.ReasonIn
+) -> Call[m.ReconciliationDecision]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/reconciliation/{_seg(candidate_id)}/reopen",
+        parse_model(m.ReconciliationDecision),
+        body=body.payload(),
+    )
+
+
+def resolve_reconciliation_bulk(domain: str, body: m.BulkReconcileIn) -> Call[m.BulkDecision]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/reconciliation:resolve",
+        parse_model(m.BulkDecision),
+        body=body.payload(),
+    )
+
+
+def queue_reconciliation_sweep(domain: str, body: m.SweepRequest) -> Call[m.SweepQueued]:
+    """Not marked safe: a retry may queue a second sweep."""
+    return Call(
+        "POST",
+        f"{_domain(domain)}/reconciliation/sweeps",
+        parse_model(m.SweepQueued),
+        body=body.payload(),
+    )
+
+
 # Sources ----------------------------------------------------------------------------------
 
 
