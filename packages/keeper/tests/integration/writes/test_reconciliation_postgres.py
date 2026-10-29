@@ -555,4 +555,11 @@ async def test_stale_candidates_and_values_the_caller_may_not_read_are_refused(
         )
         assert masked.status_code == 422, masked.text
         assert masked.json()["errors"][0]["pointer"] == "/body/values/city"
+        # Nor anything but a stored Attribute: not the survivor key, nor an unknown name.
+        for name, value in (("key", third), ("valid", "2020-01-01"), ("nope", "x")):
+            refused = await http.post(
+                merge_url, json={**merge, "values": {name: value}}, headers=maintainer
+            )
+            assert refused.status_code == 422, refused.text
+            assert refused.json()["errors"][0]["pointer"] == f"/body/values/{name}"
         assert await decision_branches(loader, pair) == 0
