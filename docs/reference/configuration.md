@@ -508,7 +508,7 @@ Reconciliation queue endpoints (design 10.6); detection is set in scribe.reconci
 | `keeper.reconciliation.default_limit` | `50` | candidates listed per page |
 | `keeper.reconciliation.max_limit` | `500` | largest page a request may ask for |
 | `keeper.reconciliation.bulk_max` | `1000` | candidates one bulk resolution may decide |
-| `keeper.reconciliation.merge_check` | `warn` | Proposal check of open candidates: off, warn (listed) or block (open contradictions stop the merge); a Domain overrides it |
+| `keeper.reconciliation.merge_check` | `warn` | Proposal check of open candidates: off, warn (listed) or block (open contradictions stop the merge); the stricter of this and the Domain reconciliation_check applies (off &lt; warn &lt; block) |
 
 ### `keeper.documents`
 
@@ -1756,7 +1756,7 @@ Contradictions between Sources (design 10.6); a Domain overrides any member in i
 | `scribe.reconciliation.sweep_interval_s` | `0.0` | scheduled sweep of every Domain; 0 disables it |
 | `scribe.reconciliation.sweep_max_changes_per_job` | `50000` | history changes one sweep job reads; then a continuation |
 | `scribe.reconciliation.max_claims_per_candidate` | `20` | newest claims kept per candidate; the others are counted |
-| `scribe.reconciliation.merge_check` | `warn` | Proposal check of open candidates on the Proposals Scribe merges: off, warn or block; operator only (a Domain sets reconciliation_check instead) |
+| `scribe.reconciliation.merge_check` | `warn` | Proposal check of open candidates on the Proposals Scribe merges: off, warn or block; the stricter of this and the Domain reconciliation_check applies (off &lt; warn &lt; block), so a Domain can tighten it, never loosen it |
 
 #### `scribe.reconciliation.triggers`
 
