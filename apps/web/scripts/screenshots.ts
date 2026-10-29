@@ -252,7 +252,10 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
     steps: [
       { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
       { waitFor: '[role=group][aria-label^="Conflicting passage 1"]' },
-      { click: '[role=group][aria-label^="Conflicting passage 1"] label:has-text("Both, ours then theirs") input' },
+      {
+        click:
+          '[role=group][aria-label^="Conflicting passage 1"] label:has-text("Both, ours then theirs") input',
+      },
       { wait: 400 },
       { scrollToTop: 'text=Merge attempt', offset: 80 },
     ],
