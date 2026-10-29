@@ -21,7 +21,7 @@
  * same-origin proxy to that Keeper (`/api`) and guide service (`/guide`), and asks the guide one
  * question for the Explore picture. The pictures a demo stack cannot show (Start from data,
  * Source runs, a Proposal with Conflicts) come from the mock: `pnpm screenshots --only
- * modeler-start,modeler-source-mapping,sources,review-conflict`. docs/tour.md lists which is which.
+ * modeler-start,modeler-source-mapping,sources,review-conflict,review-passages`. docs/tour.md lists which is which.
  *
  * `--only documents,review-items` takes just the named pictures.
  *
@@ -241,6 +241,18 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
     ready: '[role=listbox][aria-label="Conflicts"] [role=option]',
     steps: [
       { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
+      { wait: 400 },
+      { scrollToTop: 'text=Merge attempt', offset: 80 },
+    ],
+  },
+  {
+    name: 'review-passages',
+    path: `/${domain}/review/45`,
+    ready: '[role=listbox][aria-label="Conflicts"] [role=option]',
+    steps: [
+      { click: '[role=listbox][aria-label="Conflicts"] [role=option]' },
+      { waitFor: '[role=group][aria-label^="Conflicting passage 1"]' },
+      { click: '[role=group][aria-label^="Conflicting passage 1"] label:has-text("Both, ours then theirs") input' },
       { wait: 400 },
       { scrollToTop: 'text=Merge attempt', offset: 80 },
     ],

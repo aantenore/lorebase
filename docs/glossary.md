@@ -72,7 +72,7 @@ A request to merge one Branch into another, with diff, checks, reviews and Confl
 Example: Proposal #42 "Contracts batch October" proposes 280 new `Contract` Records, each with a quoted evidence span from a PDF.
 
 ### Conflict
-A disagreement found while merging. Attribute-level Conflicts arise when both sides changed the same value differently; structural Conflicts arise when the merged schema and data would break a rule (removed Kind with new Records, failed type cast, cardinality violation, and others).
+A disagreement found while merging. Attribute-level Conflicts arise when both sides changed the same value differently; structural Conflicts arise when the merged schema and data would break a rule (removed Kind with new Records, failed type cast, cardinality violation, and others). A long text edited in different sentences on each side is merged, not a Conflict; when the same sentence changed on both sides, the resolver shows the text passage by passage.
 
 Example: on `cleanup/tiers` Sofia set `Supplier/S-1001.tier` to `"1"` while the nightly sync set it to `"3"` on `main`: Conflict `DV1`, resolved by taking the ERP value under the authority policy.
 
