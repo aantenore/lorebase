@@ -1,13 +1,15 @@
 """Three-way merge of long text values (design 6.8 step 3).
 
-A ``text`` value is cut into tokens (paragraphs, or sentences inside paragraphs) that keep
-their trailing whitespace, so the tokens of a value concatenate to the value byte for byte.
+A ``text`` value is cut into tokens (paragraphs, or sentences inside paragraphs) and the
+whitespace between them, which is a token of its own, so the tokens of a value concatenate to
+the value byte for byte and appending after the last sentence is a pure insertion.
 Both sides are aligned with the base (``difflib``) and the three token streams are merged as
 ``diff3`` does: a change made on one side takes that side, a change made the same way on both
 sides is taken once, and changes that overlap on the base (share a token), insertions at the
 same place and an insertion at the edge of the other side's change make a conflicting hunk.
 Non-empty changes that merely touch, such as two neighbouring sentences each rewritten on one
-side, merge.
+side, merge. A conflicting hunk is cut down to the passages that differ: text the three
+values share at its start and end (cut at whitespace) goes to the clean hunks around it.
 """
 
 from __future__ import annotations
@@ -47,8 +49,8 @@ MAX_COST: Final = 4_000_000
 _PARAGRAPH_BREAK = re.compile(r"(\n[ \t\r]*+\n(?:[ \t\r]*+\n)*+)")
 
 #: The end of a sentence: ``.``, ``!``, ``?`` or ``…`` (and closing quotes or brackets), then
-#: whitespace. A full stop inside a word or a number is not followed by whitespace.
-_SENTENCE_END = re.compile(r"(?<![.!?…])[.!?…]++[\"')\]»”\u2019]*+\s+")
+#: the whitespace group. A full stop inside a word or a number is not followed by whitespace.
+_SENTENCE_END = re.compile(r"(?<![.!?…])[.!?…]++[\"')\]»”\u2019]*+(\s+)")
 
 
 class TextGranularity(StrEnum):
@@ -118,23 +120,27 @@ class TextMerge:
 
 
 def tokenize(text: str, granularity: TextGranularity = TextGranularity.SENTENCE) -> list[str]:
-    """Paragraphs of ``text``, or its sentences; every token keeps the whitespace that follows
-    it, so ``"".join(tokenize(text)) == text``."""
+    """Paragraphs of ``text``, or its sentences, with the whitespace between them as tokens of
+    their own, so ``"".join(tokenize(text)) == text``."""
     parts = _PARAGRAPH_BREAK.split(text)
-    paragraphs = [
-        parts[i] + (parts[i + 1] if i + 1 < len(parts) else "") for i in range(0, len(parts), 2)
-    ]
-    paragraphs = [p for p in paragraphs if p]
     if granularity is TextGranularity.PARAGRAPH:
-        return paragraphs
+        return [p for p in parts if p]
     tokens: list[str] = []
-    for paragraph in paragraphs:
+    for index, part in enumerate(parts):
+        if index % 2:
+            tokens.append(part)
+            continue
         start = 0
-        for match in _SENTENCE_END.finditer(paragraph):
-            tokens.append(paragraph[start : match.end()])
+        for match in _SENTENCE_END.finditer(part):
+            tokens.append(part[start : match.start(1)])
+            tokens.append(match.group(1))
             start = match.end()
-        if start < len(paragraph):
-            tokens.append(paragraph[start:])
+        tail = part[start:]
+        kept = tail.rstrip()
+        if kept:
+            tokens.append(kept)
+        if tail[len(kept) :]:
+            tokens.append(tail[len(kept) :])
     return tokens
 
 
@@ -192,7 +198,10 @@ def merge_text(
             status, merged = HunkStatus.CLEAN, ours_text
         else:
             status, merged = HunkStatus.CONFLICT, None
-        hunks.append(TextHunk(status, base_text, ours_text, theirs_text, merged))
+        if status is HunkStatus.CONFLICT:
+            hunks.extend(_narrowed(base_text, ours_text, theirs_text))
+        else:
+            hunks.append(TextHunk(status, base_text, ours_text, theirs_text, merged))
         position = stop
     if position < len(b):
         kept = "".join(b[position:])
@@ -243,6 +252,36 @@ def _apply(base: list[str], start: int, stop: int, changes: list[_Change]) -> st
         cursor = change.stop
     out.append("".join(base[cursor:stop]))
     return "".join(out)
+
+
+def _shared_start(texts: tuple[str, str, str]) -> int:
+    """Length of the longest start the three texts share that ends at a word boundary."""
+    limit = 0
+    shortest = min(len(t) for t in texts)
+    while limit < shortest and texts[0][limit] == texts[1][limit] == texts[2][limit]:
+        limit += 1
+    for k in range(limit, 0, -1):
+        if texts[0][k - 1].isspace() or all(len(t) == k or t[k].isspace() for t in texts):
+            return k
+    return 0
+
+
+def _narrowed(base: str, ours: str, theirs: str) -> list[TextHunk]:
+    """A conflicting hunk reduced to the passages that differ, between clean hunks holding the
+    text the three values share at its start and end; words are never split."""
+    texts = (base, ours, theirs)
+    head = _shared_start(texts)
+    rest = tuple(t[head:] for t in texts)
+    tail = _shared_start((rest[0][::-1], rest[1][::-1], rest[2][::-1]))
+    hunks: list[TextHunk] = []
+    if head:
+        hunks.append(TextHunk(HunkStatus.CLEAN, base[:head], base[:head], base[:head], base[:head]))
+    cut = tuple(r[: len(r) - tail] for r in rest)
+    hunks.append(TextHunk(HunkStatus.CONFLICT, cut[0], cut[1], cut[2], None))
+    if tail:
+        end = rest[0][len(rest[0]) - tail :]
+        hunks.append(TextHunk(HunkStatus.CLEAN, end, end, end, end))
+    return hunks
 
 
 def _coalesce(hunks: list[TextHunk]) -> tuple[TextHunk, ...]:

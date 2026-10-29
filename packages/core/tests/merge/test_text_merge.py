@@ -105,20 +105,27 @@ def test_merging_a_long_punctuation_run_is_fast() -> None:
 
 def test_sentence_ends_after_a_closer_still_split() -> None:
     assert tokenize("Wait...) ok. Next.) Done.  End", SENTENCE) == [
-        "Wait...) ",
-        "ok. ",
-        "Next.) ",
-        "Done.  ",
+        "Wait...)",
+        " ",
+        "ok.",
+        " ",
+        "Next.)",
+        " ",
+        "Done.",
+        "  ",
         "End",
     ]
-    assert tokenize("a.). b", SENTENCE) == ["a.). ", "b"]
+    assert tokenize("a.). b", SENTENCE) == ["a.).", " ", "b"]
 
 
-def test_sentences_keep_their_trailing_whitespace() -> None:
+def test_whitespace_between_sentences_is_a_token_of_its_own() -> None:
     assert tokenize("One. Two!  Three?\n\nFour", SENTENCE) == [
-        "One. ",
-        "Two!  ",
-        "Three?\n\n",
+        "One.",
+        " ",
+        "Two!",
+        "  ",
+        "Three?",
+        "\n\n",
         "Four",
     ]
 
@@ -128,7 +135,7 @@ def test_a_full_stop_inside_a_number_does_not_split() -> None:
 
 
 def test_paragraphs_split_on_blank_lines() -> None:
-    assert tokenize("a. b.\n\nc.\n \nd", PARAGRAPH) == ["a. b.\n\n", "c.\n \n", "d"]
+    assert tokenize("a. b.\n\nc.\n \nd", PARAGRAPH) == ["a. b.", "\n\n", "c.", "\n \n", "d"]
 
 
 def test_a_single_line_break_stays_in_the_paragraph() -> None:
@@ -176,11 +183,12 @@ def test_the_same_sentence_changed_differently_conflicts() -> None:
     assert len(conflicts) == 1
     hunk = conflicts[0]
     assert (hunk.base, hunk.ours, hunk.theirs, hunk.merged) == (
-        "Two is second. ",
-        "Two is 2nd. ",
-        "Two is the second one. ",
+        "second.",
+        "2nd.",
+        "the second one.",
         None,
     )
+    assert sides(result) == (BASE, ours, theirs)
 
 
 def test_the_same_change_on_both_sides_is_taken_once() -> None:
@@ -220,14 +228,46 @@ def test_identical_insertions_at_the_same_place_collapse() -> None:
 
 
 def test_an_insertion_at_the_edge_of_the_other_sides_change_conflicts() -> None:
-    inserted = BASE.replace("One is first. ", "One is first. Ours adds this. ")
-    for edge in ("One is first.", "Two is second."):
-        rewritten = BASE.replace(edge, edge[:-1] + " again.")
-        assert not run(BASE, inserted, rewritten).clean
-        assert not run(BASE, rewritten, inserted).clean
-    # Two tokens away from the insertion, the same rewrite merges.
+    appended = BASE + " Ours adds this."
+    rewritten_last = BASE.replace("Five ends it.", "Five ends it again.")
+    assert not run(BASE, appended, rewritten_last).clean
+    assert not run(BASE, rewritten_last, appended).clean
+    prepended = "Ours adds this. " + BASE
+    rewritten_first = BASE.replace("One is first.", "One is 1st.")
+    assert not run(BASE, prepended, rewritten_first).clean
+    assert not run(BASE, rewritten_first, prepended).clean
+    # Away from the insertion, the same rewrite merges.
     far = BASE.replace("Three is third.", "Three is 3rd.")
-    assert run(BASE, inserted, far).clean
+    assert run(BASE, appended, far).clean
+
+
+def test_appending_after_the_last_sentence_conflicts_on_the_insertion_only() -> None:
+    result = run("S1.", "S1. A.", "S1. B.")
+    assert [(h.status, h.base, h.ours, h.theirs, h.merged) for h in result.hunks] == [
+        (HunkStatus.CLEAN, "S1.", "S1.", "S1.", "S1."),
+        (HunkStatus.CONFLICT, "", " A.", " B.", None),
+    ]
+
+
+def test_a_conflict_hunk_drops_the_text_all_sides_share() -> None:
+    base = "Intro. The delay was long today. Outro."
+    ours = base.replace("was long", "was short")
+    theirs = base.replace("was long", "was very long indeed")
+    result = run(base, ours, theirs)
+    hunks = [(h.status.value, h.base, h.ours, h.theirs) for h in result.hunks]
+    assert hunks == [
+        ("clean", "Intro. The delay was ", "Intro. The delay was ", "Intro. The delay was "),
+        ("conflict", "long", "short", "very long indeed"),
+        ("clean", " today. Outro.", " today. Outro.", " today. Outro."),
+    ]
+    assert sides(result) == (base, ours, theirs)
+
+
+def test_shared_text_is_never_cut_inside_a_word() -> None:
+    result = run("The cat sat.", "The cart sat.", "The cast sat.")
+    (conflict,) = [h for h in result.hunks if h.status is HunkStatus.CONFLICT]
+    assert (conflict.base, conflict.ours, conflict.theirs) == ("cat", "cart", "cast")
+    assert sides(result) == ("The cat sat.", "The cart sat.", "The cast sat.")
 
 
 def test_one_side_deleting_and_the_other_editing_the_same_sentence_conflicts() -> None:
@@ -261,7 +301,7 @@ def test_unchanged_stretches_form_one_hunk() -> None:
     result = run(BASE, ours, BASE)
     assert [h.status for h in result.hunks] == [HunkStatus.CLEAN] * len(result.hunks)
     assert len(result.hunks) == 2
-    assert result.hunks[1].merged == BASE[len("One is first. ") :]
+    assert result.hunks[1].merged == BASE[len("One is first.") :]
 
 
 def test_paragraph_granularity_merges_by_paragraph() -> None:
