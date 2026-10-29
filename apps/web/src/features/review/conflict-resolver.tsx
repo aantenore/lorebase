@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Conflict, JsonValue, Resolution, ResolutionChoice } from '@/api/types';
 import { validateValue, type ValueSpec } from '@/api/values';
 import { Button } from '@/ui/button';
@@ -15,9 +15,12 @@ import {
   messageOf,
   type Names,
 } from './conflict-meta';
+import { PICK_KEYS, TextHunks } from './hunk-view';
 import { SideBySide, type SideBranches } from './side-by-side';
+import { composeHunks, textHunks, type HunkPick } from './text-hunks';
 
 const text = reviewMessages.resolver;
+const hunkText = reviewMessages.hunks;
 
 export interface ConflictResolverProps {
   conflict: Conflict;
@@ -293,6 +296,22 @@ export function ConflictResolver({
   onNext,
   onDirtyChange,
 }: ConflictResolverProps) {
+  // Passages of a text value that changed on both sides, and the person's pick for each.
+  // Only offered when the Conflict takes a custom value, which is how the composed text is saved.
+  const hunks = useMemo(
+    () => (conflict.choices.includes('custom') ? textHunks(conflict) : null),
+    [conflict],
+  );
+  const [picks, setPicks] = useState<Record<number, HunkPick>>({});
+  const composed = useMemo(
+    () => (hunks === null ? null : composeHunks(hunks, picks)),
+    [hunks, picks],
+  );
+  const merging = hunks !== null && Object.keys(picks).length > 0;
+  const storedText =
+    resolution?.choice === 'custom' && typeof resolution.value === 'string'
+      ? resolution.value
+      : null;
   const [choice, setChoice] = useState<ResolutionChoice | null>(resolution?.choice ?? null);
   const [single, setSingle] = useState<Typed | undefined>(() => initialSingle(resolution));
   const [members, setMembers] = useState<Record<string, Typed>>(() => initialMembers(resolution));
@@ -302,29 +321,50 @@ export function ConflictResolver({
   const stored = storedKey(resolution);
   if (seen !== stored) {
     setSeen(stored);
-    if (!touched) {
+    // Composed text that came back stored is the draft, whatever was touched before.
+    if (!touched || (merging && composed !== null && storedText === composed)) {
       setChoice(resolution?.choice ?? null);
       setSingle(initialSingle(resolution));
       setMembers(initialMembers(resolution));
     }
   }
   const grouped = isGrouped(conflict);
+  const [activeHunk, setActiveHunk] = useState(
+    () => hunks?.findIndex((h) => h.status === 'conflict') ?? -1,
+  );
   const rejected = conflict.details['rejected'];
 
-  const draft =
-    choice === null
+  // With picks the draft is the composed text, and the whole-value choices are not in play.
+  const draft = merging
+    ? {
+        resolution:
+          composed === null
+            ? null
+            : { fingerprint: conflict.fingerprint, choice: 'custom' as const, value: composed },
+        problem: text.pickPassages,
+      }
+    : choice === null
       ? { resolution: null, problem: text.pickChoice }
       : buildResolution(conflict, choice, single, members, spec);
   const canSave = !readOnly && !saving && draft.resolution !== null;
   const dirty =
     !readOnly &&
-    touched &&
-    (resolution === undefined
-      ? choice !== null
-      : draft.resolution === null || !sameResolution(draft.resolution, resolution));
+    (merging
+      ? composed === null || composed !== storedText
+      : touched &&
+        (resolution === undefined
+          ? choice !== null
+          : draft.resolution === null || !sameResolution(draft.resolution, resolution)));
 
   const save = () => {
     if (!readOnly && !saving && draft.resolution !== null) onSave(draft.resolution);
+  };
+
+  // A whole-value choice replaces the passage picks; the two never both apply.
+  const chooseWhole = (next: ResolutionChoice) => {
+    setPicks({});
+    setTouched(true);
+    setChoice(next);
   };
 
   const sectionRef = useRef<HTMLElement>(null);
@@ -339,6 +379,20 @@ export function ConflictResolver({
   useEffect(() => {
     if (focusEditor.current) focusInEditor();
   });
+  const pickHunk = (index: number, pick: HunkPick) => {
+    setPicks((current) => ({ ...current, [index]: pick }));
+    setChoice(null);
+    setTouched(true);
+  };
+  // Moves between the conflicting passages, wrapping at both ends.
+  const moveHunk = (step: 1 | -1) => {
+    const indexes = (hunks ?? []).flatMap((h, i) => (h.status === 'conflict' ? [i] : []));
+    if (indexes.length === 0) return;
+    const at = indexes.indexOf(activeHunk);
+    const next = indexes[(at + step + indexes.length) % indexes.length] ?? indexes[0] ?? 0;
+    setActiveHunk(next);
+    sectionRef.current?.querySelector<HTMLElement>(`[data-hunk="${next.toString()}"]`)?.focus();
+  };
 
   // The latest handlers are read through refs so the listeners attach once.
   const reportDirty = useRef(onDirtyChange);
@@ -358,10 +412,15 @@ export function ConflictResolver({
           el.closest(OWN_ENTER) === null);
       const key = event.key.toLowerCase();
       const picked = SHORTCUT_CHOICES[key];
-      if (picked !== undefined) {
+      const hunkPick = PICK_KEYS[key];
+      if (hunks !== null && (key === '[' || key === ']')) {
+        moveHunk(key === ']' ? 1 : -1);
+      } else if (hunks !== null && hunkPick !== undefined) {
+        if (hunks[activeHunk]?.status !== 'conflict') return;
+        pickHunk(activeHunk, { kind: hunkPick });
+      } else if (picked !== undefined) {
         if (!conflict.choices.includes(picked)) return;
-        setTouched(true);
-        setChoice(picked);
+        chooseWhole(picked);
         if (picked === 'custom') {
           focusEditor.current = true;
           if (choice === 'custom') focusInEditor();
@@ -422,7 +481,33 @@ export function ConflictResolver({
         </p>
       )}
 
-      <SideBySide conflict={conflict} names={names} branches={branches} />
+      {hunks === null ? (
+        <SideBySide conflict={conflict} names={names} branches={branches} />
+      ) : (
+        <>
+          <TextHunks
+            hunks={hunks}
+            picks={picks}
+            composed={composed}
+            active={activeHunk}
+            groupId={`hunk-${conflict.fingerprint}`}
+            branches={branches}
+            storedText={storedText}
+            spec={spec}
+            readOnly={readOnly}
+            saving={saving}
+            onPick={pickHunk}
+            onActive={setActiveHunk}
+            onUse={(value) => {
+              onSave({ fingerprint: conflict.fingerprint, choice: 'custom', value });
+            }}
+          />
+          <details className="text-sm">
+            <summary className="cursor-pointer">{hunkText.wholeText}</summary>
+            <SideBySide conflict={conflict} names={names} branches={branches} />
+          </details>
+        </>
+      )}
 
       <fieldset className="flex flex-col gap-2" disabled={readOnly}>
         <legend className="mb-1 text-xs font-medium text-muted">{text.legend}</legend>
@@ -436,8 +521,7 @@ export function ConflictResolver({
                 className="mt-1"
                 checked={choice === option}
                 onChange={() => {
-                  setTouched(true);
-                  setChoice(option);
+                  chooseWhole(option);
                 }}
               />
               <span>
