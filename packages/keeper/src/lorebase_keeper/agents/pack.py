@@ -56,11 +56,28 @@ class ContextRequest(BaseModel):
     depth: int | None = Field(default=None, ge=0, description="Neighborhood depth (0: none).")
     relations: list[str] | None = Field(
         default=None,
-        description="Relation api names to follow (forward or inverse); default: all.",
+        description="Relation api names to follow (forward or inverse); default: all, or the "
+        "Relations of `lens`.",
     )
-    include_schema: bool = True
-    include_recent_changes: bool = True
-    include_lineage: bool = True
+    traits: list[str] | None = Field(
+        default=None,
+        description="Trait api names: with `search` or `query` seeds, only Records of the "
+        "Kinds implementing them (that the caller may read) become seeds, and only Records of "
+        "those Kinds are neighbors. Seeds named by `refs` are always kept.",
+    )
+    lens: str | None = Field(
+        default=None,
+        description="Lens api name (a read preset of the schema): its Relations, depth, "
+        "sections and budget are the defaults of this request, its Kinds and Traits limit "
+        "neighbors and `search` and `query` seeds like `traits`. Members given here win.",
+    )
+    include_schema: bool | None = Field(default=None, description="Default: the lens's, else true.")
+    include_recent_changes: bool | None = Field(
+        default=None, description="Default: the lens's, else true."
+    )
+    include_lineage: bool | None = Field(
+        default=None, description="Default: the lens's, else true."
+    )
     since: str | None = Field(
         default=None,
         description="Revision id or tag: recent changes after it; default: the latest changes.",
@@ -167,7 +184,10 @@ class BudgetOut(_Out):
     trimmed: list[TrimOut]
     omitted: dict[str, int] = Field(description="Entries removed to fit, per section.")
     over_budget: bool = Field(description="True when even the seed Records exceed the budget.")
-    capped: bool = Field(description="True when graph caps cut the neighborhood.")
+    capped: bool = Field(
+        description="True when graph caps cut the neighborhood, or a depth or budget of the "
+        "lens was served at the configured cap."
+    )
 
 
 class ContextPackOut(_Out):

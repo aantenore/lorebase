@@ -45,6 +45,7 @@ from lorebase_keeper.readiness import (
     ReadinessCheck,
     ReplicaCheck,
     SearchBackendCheck,
+    VectorSearchCheck,
     default_checks,
     packaged_heads,
     run_checks,
@@ -187,6 +188,8 @@ def create_app(
         search_check = SearchBackendCheck(database.sessions, definer=definer)
         if readiness_checks is None:
             checks.append(search_check)
+    if database is not None and readiness_checks is None:
+        checks.append(VectorSearchCheck(database.sessions, search_settings(settings).semantic))
     store = auth_store or (database.auth_store if database else None)
     if keeper.auth.mode != "none" and store is None:
         raise ConfigError(

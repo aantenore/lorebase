@@ -57,6 +57,20 @@ def context_command(
         list[str] | None,
         typer.Option("--relation", help="Follow only this Relation. Repeatable."),
     ] = None,
+    trait: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--trait",
+            help="Limit --search and --query seeds and neighbors to the Kinds implementing "
+            "this Trait. Repeatable.",
+        ),
+    ] = None,
+    lens: Annotated[
+        str | None,
+        typer.Option(
+            "--lens", help="Apply this lens: its Relations, depth, budget and Kinds are defaults."
+        ),
+    ] = None,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
     at: AtOpt = None,
@@ -80,6 +94,8 @@ def context_command(
         budget_tokens=budget,
         depth=depth,
         relations=relation or None,
+        traits=trait or None,
+        lens=lens,
     )
     agents = app.client().agents
     name = app.domain(domain)

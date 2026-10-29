@@ -21,9 +21,11 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lorebase_keeper.reading.settings import SemanticSettings
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store import bm25
+from lorebase_store.embeddings import ITERATIVE_SCAN_MIN_VERSION, pgvector_version
 from lorebase_store.migrations import head_revisions
 from lorebase_store.replicas import ReplicaState
 
@@ -214,6 +216,38 @@ class SearchBackendCheck:
         return CheckResult(
             CheckStatus.DEGRADED,
             f"search.backend is bm25 but {reason}; lexical search ranks with postgres",
+        )
+
+
+class VectorSearchCheck:
+    """How filtered vector search is served (design 8.8): iterative HNSW scans with pgvector
+    0.8 or later and `search.semantic.iterative_scan: auto`, over-fetching otherwise. Never
+    takes the service out of rotation; the detail names the installed pgvector version."""
+
+    name = "vector_search"
+
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], semantic: SemanticSettings
+    ) -> None:
+        self._sessions = sessions
+        self._semantic = semantic
+
+    async def __call__(self) -> CheckResult:
+        async with self._sessions() as session:
+            version = await pgvector_version(session)
+        if version is None:
+            return CheckResult(CheckStatus.DEGRADED, "pgvector is not installed")
+        installed = ".".join(str(part) for part in version)
+        if self._semantic.iterative_scan == "auto" and version >= ITERATIVE_SCAN_MIN_VERSION:
+            return CheckResult(
+                CheckStatus.OK,
+                f"pgvector {installed}: filtered vector search uses iterative scans "
+                f"(up to {self._semantic.max_scan_tuples} tuples)",
+            )
+        return CheckResult(
+            CheckStatus.OK,
+            f"pgvector {installed}: filtered vector search over-fetches "
+            f"{self._semantic.overfetch_factor}x",
         )
 
 

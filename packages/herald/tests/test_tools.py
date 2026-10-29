@@ -350,9 +350,6 @@ async def test_context_uses_keepers_context_endpoint(connect: Connect, fake: Fak
         "depth": 2,
         "budget_tokens": 800,
         "format": "markdown",
-        "include_schema": True,
-        "include_recent_changes": True,
-        "include_lineage": True,
         "relations": ["purchase_orders"],
         "branch": "agent/a",
     }
@@ -771,6 +768,7 @@ async def test_resources_and_prompt(connect: Connect, fake: FakeKeeper, fmt: str
         prompt = await client.get_prompt("lorebase_guide", {"task": "check S-1001"})
     assert {t.uri_template for t in templates.resource_templates} == {
         "lorebase://{domain}/schema",
+        "lorebase://{domain}/lenses/{lens}",
         "lorebase://{domain}/{kind}/{key}",
     }
     assert schema.contents[0].text.startswith("schema supply@main")  # type: ignore[union-attr]

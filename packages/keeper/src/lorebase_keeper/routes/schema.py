@@ -68,7 +68,7 @@ router = APIRouter(tags=["schema"])
 
 YAML_MEDIA_TYPES = ("text/yaml", "application/yaml", "application/x-yaml")
 REVISION_HEADER = "Lorebase-Revision"
-Section = Literal["kinds", "relations", "traits", "operations", "derivations", "sources"]
+Section = Literal["kinds", "relations", "traits", "operations", "derivations", "sources", "lenses"]
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks the permission named in the body."},
@@ -427,7 +427,7 @@ async def get_element(
     branch: Annotated[str | None, Query(description="Default: the default branch.")] = None,
     at: Annotated[str | None, Query(description="Revision id, tag or branch name.")] = None,
 ) -> dict[str, Any]:
-    """A Kind, Relation, Trait, Operation, Derivation or Source by api name or id.
+    """A Kind, Relation, Trait, Operation, Derivation, Source or Lens by api name or id.
 
     Built-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are
     described with the parameters derived from the schema.

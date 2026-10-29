@@ -5,6 +5,38 @@ of a branch (or a snapshot of a Revision). How each mode works is in
 [design 8.4](design.md#84-search); the budgets and measurements are in
 [performance](performance.md). This page covers the choice of ranking for lexical search.
 
+## Traits, lenses and filtered vector search
+
+Beside `kinds`, `POST /search` takes `traits` and `lens` ([design 8.8](design.md#88-read-presets-and-filtered-vector-search)):
+
+- `traits: ["Located"]` searches the Kinds that implement the Trait (`Supplier` and `Plant`)
+  that the caller may read; hits keep their concrete `kind`. `kinds` and `traits` together
+  search the union. A Trait the caller cannot see is an unknown Trait (422 `unknown_trait`).
+- `lens: "supplier_risk"` searches the Kinds and Traits of that [lens](agents.md#lenses-and-traits)
+  when the request names neither `kinds` nor `traits`. An unknown lens is 422 `lens_unknown`.
+- A lens and a Trait never widen a search: grants and `where` apply as to the same request
+  written out, and `where` still needs exactly one Kind among those searched.
+- CLI: `lorebase search TEXT --trait Located --lens supplier_risk`.
+
+**Filters before the limit.** The semantic list (semantic and hybrid search) keeps the Domain,
+branch, readable Kinds, `kinds`, `traits`, `lens` and `where` in the same statement and before
+its `LIMIT`, so it never holds a Record the caller may not read. An approximate HNSW index
+returns its nearest neighbours first and applies the filters after, so a selective filter could
+leave fewer than `search.candidates` rows, or none. Keeper handles that in one of two ways:
+
+| Case | What runs |
+|------|-----------|
+| pgvector 0.8 or later and `search.semantic.iterative_scan: auto` (default) | `SET LOCAL hnsw.iterative_scan = relaxed_order` and `hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction; the index scan goes on until the filters leave enough rows. The nearest rows are a materialized subquery that the outer query orders again by exact distance, so the relaxed order never reaches the response |
+| older pgvector, or `iterative_scan: off` | the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows; the outer query filters and keeps `search.candidates` |
+
+The pgvector version is read once per process (`pg_extension.extversion`) and `/readyz` reports
+it in the `vector_search` check, with the case in use. When the list is still shorter than
+`search.candidates` because the scan bound was reached while more Records match the filters,
+the response says `semantic_truncated: true` (`truncated` in Herald): narrow the Kinds or the
+filter, or raise `max_scan_tuples` or `overfetch_factor`. A list short because fewer Records
+match is not flagged. The check behind the flag counts at most `search.candidates` matches
+without the index, only for a short list.
+
 ## Default ranking
 
 Lexical search matches `search @@ websearch_to_tsquery(q)` on the GIN index of the search

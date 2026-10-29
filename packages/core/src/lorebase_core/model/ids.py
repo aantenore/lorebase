@@ -25,6 +25,7 @@ class IdPrefix(StrEnum):
     DERIVATION = "drv"
     SOURCE = "src"
     PROVENANCE = "prv"
+    LENS = "lns"
 
 
 KindId = Annotated[str, StringConstraints(pattern=rf"^knd_{ULID_REGEX}$")]
@@ -34,6 +35,7 @@ TraitId = Annotated[str, StringConstraints(pattern=rf"^trt_{ULID_REGEX}$")]
 OperationId = Annotated[str, StringConstraints(pattern=rf"^opr_{ULID_REGEX}$")]
 DerivationId = Annotated[str, StringConstraints(pattern=rf"^drv_{ULID_REGEX}$")]
 SourceId = Annotated[str, StringConstraints(pattern=rf"^src_{ULID_REGEX}$")]
+LensId = Annotated[str, StringConstraints(pattern=rf"^lns_{ULID_REGEX}$")]
 ProvenanceId = Annotated[str, StringConstraints(pattern=rf"^prv_{ULID_REGEX}$")]
 
 

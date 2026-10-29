@@ -43,6 +43,7 @@ from lorebase_core.model.derivation import (
     PathDerivation,
 )
 from lorebase_core.model.kind import Kind
+from lorebase_core.model.lens import Lens
 from lorebase_core.model.operation import CreateLinkStep, DeleteLinkStep, Operation
 from lorebase_core.model.relation import Relation
 from lorebase_core.model.schema import Schema
@@ -126,8 +127,30 @@ def visible_schema(
                 d: schema.derivations[d] for d in schema.derivations if d in derivations
             },
             "sources": {s: schema.sources[s] for s in schema.sources if s in sources},
+            "lenses": _lenses(schema, shown, traits, relations | paths),
         }
     )
+
+
+def _lenses(
+    schema: Schema, kinds: Collection[str], traits: Collection[str], relations: Collection[str]
+) -> dict[str, Lens]:
+    """The lenses as the reader sees them: members left out of the projection are dropped; a
+    lens that named Kinds or Traits and keeps none answers like an unknown one (design 8.8)."""
+    kept: dict[str, Lens] = {}
+    for lens_id, lens in schema.lenses.items():
+        shown_kinds = tuple(k for k in lens.kinds if k in kinds)
+        shown_traits = tuple(t for t in lens.traits if t in traits)
+        if (lens.kinds or lens.traits) and not (shown_kinds or shown_traits):
+            continue
+        kept[lens_id] = lens.model_copy(
+            update={
+                "kinds": shown_kinds,
+                "traits": shown_traits,
+                "relations": tuple(r for r in lens.relations if r in relations),
+            }
+        )
+    return kept
 
 
 def _project(

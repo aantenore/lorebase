@@ -1167,6 +1167,9 @@ Partial matching: when q as written (every term) finds fewer than min_results Re
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `search.semantic.model` | `BAAI/bge-small-en-v1.5` | embedding model searched: the name Scribe stores vectors under (inference.embeddings.model; `fake:<model>` for the fake provider) |
+| `search.semantic.iterative_scan` | `auto` | Vector search under filters (Kinds, Traits, lens, where) keeps its limit (design 8.8): auto: hnsw.iterative_scan = relaxed_order with pgvector &gt;= 0.8 (see /readyz); off: over-fetch by overfetch_factor instead |
+| `search.semantic.max_scan_tuples` | `20000` | hnsw.max_scan_tuples of an iterative scan; past it the response says semantic_truncated |
+| `search.semantic.overfetch_factor` | `4` | without iterative scans: candidates \* factor nearest rows are fetched before the filters apply |
 
 ### `search.hybrid`
 

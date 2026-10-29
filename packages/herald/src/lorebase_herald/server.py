@@ -50,6 +50,21 @@ RefArg = Annotated[
     str, Field(min_length=3, description="Record ref `Kind/key`, e.g. Supplier/S-1001.")
 ]
 NamesArg = Annotated[list[str] | None, Field(description="Api names.")]
+TraitsArg = Annotated[
+    list[str] | None,
+    Field(
+        description="Trait api names: each stands for the Kinds implementing it that you may "
+        "read (LENSES and TRAITS: lorebase_schema)."
+    ),
+]
+LensArg = Annotated[
+    str | None,
+    Field(
+        description="Lens api name, a read preset of the schema (see LENSES in "
+        "lorebase_schema): its Kinds and Traits are the default of `kinds`/`traits`; "
+        "what you pass wins."
+    ),
+]
 CursorArg = Annotated[
     str | None, Field(description="`next_cursor` from the previous page of this call.")
 ]
@@ -208,9 +223,11 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
             str | None, Field(description="Words to look for (web search syntax).")
         ] = None,
         kinds: NamesArg = None,
+        traits: TraitsArg = None,
+        lens: LensArg = None,
         where: Annotated[
             dict[str, Any] | None,
-            Field(description="DSL predicate; needs exactly one Kind in `kinds`."),
+            Field(description="DSL predicate; needs exactly one Kind among those searched."),
         ] = None,
         query_vector: Annotated[
             list[float] | None, Field(description="Query embedding for semantic search.")
@@ -227,6 +244,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
             credential(ctx, "lorebase_search"),
             query=query,
             kinds=kinds,
+            traits=traits,
+            lens=lens,
             where=where,
             query_vector=query_vector,
             limit=limit,
@@ -303,6 +322,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         ] = None,
         depth: Annotated[int | None, Field(ge=1, le=hood.max_depth)] = None,
         relations: NamesArg = None,
+        traits: TraitsArg = None,
+        lens: LensArg = None,
         token_budget: Annotated[
             int | None,
             Field(
@@ -322,6 +343,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
             question=question,
             depth=depth,
             relations=relations,
+            traits=traits,
+            lens=lens,
             token_budget=token_budget,
             at=at,
             domain=domain,
@@ -596,6 +619,21 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
                 kinds=None,
                 detail="summary",
                 fmt="text",
+            )
+        except ToolError as error:
+            raise ResourceError(str(error)) from None
+
+    @server.resource(
+        "lorebase://{domain}/lenses/{lens}",
+        name="lorebase_lens",
+        description="A lens: the read preset (Kinds, Traits, Relations, depth, sections, "
+        "budget) that `lens` of lorebase_search and lorebase_context applies.",
+        mime_type="text/plain",
+    )
+    async def lens_resource(domain: str, lens: str, ctx: Context) -> str:
+        try:
+            return await tools.lens(
+                credential(ctx, "lorebase_lens"), domain=domain, lens=lens, fmt="text"
             )
         except ToolError as error:
             raise ResourceError(str(error)) from None

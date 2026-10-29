@@ -691,6 +691,18 @@ def search_command(
     kind: Annotated[
         list[str] | None, typer.Option("--kind", help="Only this Kind. Repeatable.")
     ] = None,
+    trait: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--trait", help="Only the Kinds that implement this Trait. Repeatable; adds to --kind."
+        ),
+    ] = None,
+    lens: Annotated[
+        str | None,
+        typer.Option(
+            "--lens", help="Search the Kinds and Traits of this lens unless --kind or --trait."
+        ),
+    ] = None,
     mode: Annotated[
         str | None,
         typer.Option(
@@ -719,6 +731,8 @@ def search_command(
         {
             "q": text,
             "kinds": kind,
+            "traits": trait,
+            "lens": lens,
             "mode": mode,
             "query_vector": vector,
             "branch": app.branch(branch),
@@ -740,3 +754,5 @@ def search_command(
             ],
         ),
     )
+    if result.semantic_truncated:
+        app.out.info("the vector list is short: the index scan stopped at its bound; narrow --kind")

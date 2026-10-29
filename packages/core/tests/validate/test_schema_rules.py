@@ -17,6 +17,7 @@ from lorebase_core.model import (
     ElementStatus,
     HttpOptions,
     KindSearch,
+    Lens,
     LinkDirection,
     OperationParameter,
     OperationStep,
@@ -152,6 +153,11 @@ def path_derivation(*steps: PathStep, name: str = "supplier_plants") -> Derivati
 
 def set_source(schema: Schema, **changes: object) -> Schema:
     return replace_element(schema, "sources", ERP_VENDORS, **changes)
+
+
+def with_lens(schema: Schema, **members: object) -> Schema:
+    lens = Lens(id=ident("lns", 1), api_name="supplier_risk", **members)  # type: ignore[arg-type]
+    return schema.model_copy(update={"lenses": {lens.id: lens}})
 
 
 # Positive cases -------------------------------------------------------------------
@@ -810,7 +816,45 @@ NEGATIVE: list[tuple[str, Mutation, set[IssueCode], SchemaRules | None]] = [
         {C.SCHEMA_SOURCE_REFERENCE_UNKNOWN},
         None,
     ),
+    # Lenses
+    (
+        "lens-unknown-kind",
+        lambda s: with_lens(s, kinds=(ident("knd", 99),)),
+        {C.SCHEMA_LENS_REFERENCE_UNKNOWN},
+        None,
+    ),
+    (
+        "lens-unknown-trait",
+        lambda s: with_lens(s, traits=(ident("trt", 99),)),
+        {C.SCHEMA_LENS_REFERENCE_UNKNOWN},
+        None,
+    ),
+    (
+        "lens-unknown-relation",
+        lambda s: with_lens(s, relations=(ident("rel", 99),)),
+        {C.SCHEMA_LENS_REFERENCE_UNKNOWN},
+        None,
+    ),
+    (
+        "lens-negative-depth",
+        lambda s: with_lens(s, depth=-1),
+        {C.SCHEMA_LENS_INVALID},
+        None,
+    ),
+    (
+        "lens-empty-budget",
+        lambda s: with_lens(s, budget_tokens=0),
+        {C.SCHEMA_LENS_INVALID},
+        None,
+    ),
 ]
+
+
+def test_a_lens_of_known_elements_is_valid() -> None:
+    schema = with_lens(
+        supply_schema(), kinds=(SUPPLIER,), traits=(LOCATED,), relations=(SUPPLIED_BY,), depth=0
+    )
+    assert validate_schema(schema) == []
 
 
 @pytest.mark.parametrize(

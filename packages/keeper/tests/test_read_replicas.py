@@ -83,9 +83,16 @@ async def test_no_usable_replica_fails_only_when_replicas_are_required() -> None
 
 def test_replica_check_exists_only_with_replicas(make_app: Callable[..., FastAPI]) -> None:
     plain = make_app(sections={"database": {"dsn": DSN}})
-    assert [c.name for c in plain.state.readiness_checks] == ["database"]
+    assert [c.name for c in plain.state.readiness_checks] == [
+        "database",
+        "vector_search",
+    ]
     replicated = make_app(sections={"database": {"dsn": DSN, "read_dsn": [REPLICA_DSN]}})
-    assert [c.name for c in replicated.state.readiness_checks] == ["database", "database_replicas"]
+    assert [c.name for c in replicated.state.readiness_checks] == [
+        "database",
+        "database_replicas",
+        "vector_search",
+    ]
 
 
 def test_replica_check_is_required_without_fallback(make_app: Callable[..., FastAPI]) -> None:

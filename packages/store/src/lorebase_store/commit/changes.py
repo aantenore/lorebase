@@ -10,6 +10,7 @@ from lorebase_core.model import (
     Derivation,
     Domain,
     Kind,
+    Lens,
     Operation,
     Relation,
     Source,
@@ -18,7 +19,7 @@ from lorebase_core.model import (
 from lorebase_core.revision import ChangesetEntry
 from lorebase_core.validate import DataChange
 
-SchemaElementModel = Domain | Kind | Relation | Trait | Operation | Derivation | Source
+SchemaElementModel = Domain | Kind | Relation | Trait | Operation | Derivation | Source | Lens
 """Anything stored in the `schema` partition."""
 
 

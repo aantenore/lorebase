@@ -20,6 +20,7 @@ in the Domain's row-level security scope (`scope_to_domain`).
 from __future__ import annotations
 
 import hashlib
+import itertools
 import time
 from collections import OrderedDict
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -513,3 +514,57 @@ async def index_precision(session: AsyncSession, dims: int) -> Precision:
     precision: Precision = "half" if newest == half else "full"
     _precision[dims] = (now, precision)
     return precision
+
+
+# Iterative index scans --------------------------------------------------------------------------
+
+ITERATIVE_SCAN_MIN_VERSION = (0, 8)
+"""First pgvector release with `hnsw.iterative_scan`."""
+
+_EXTENSION_VERSION = sql_text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+_pgvector: tuple[int, ...] | None = None
+
+
+def parse_version(text: str) -> tuple[int, ...]:
+    """`0.8.0` -> `(0, 8, 0)`; a part that is not a plain number (`0-rc1`) ends the version."""
+    parts: list[int] = []
+    for part in text.strip().split("."):
+        digits = "".join(itertools.takewhile(str.isdigit, part))
+        if not digits:
+            break
+        parts.append(int(digits))
+        if digits != part:
+            break
+    return tuple(parts)
+
+
+async def pgvector_version(session: AsyncSession) -> tuple[int, ...] | None:
+    """The installed pgvector version (`pg_extension.extversion`), read once per process;
+    `None` when the extension is not installed (not remembered)."""
+    global _pgvector
+    if _pgvector is None:
+        found = (await session.execute(_EXTENSION_VERSION)).scalar()
+        if found is None:
+            return None
+        _pgvector = parse_version(str(found))
+    return _pgvector
+
+
+async def iterative_scans(session: AsyncSession) -> bool:
+    """Whether the database's pgvector has iterative HNSW scans (0.8 or later)."""
+    version = await pgvector_version(session)
+    return version is not None and version >= ITERATIVE_SCAN_MIN_VERSION
+
+
+async def use_iterative_scan(session: AsyncSession, max_scan_tuples: int) -> None:
+    """Turn on relaxed-order iterative HNSW scans for the rest of the transaction
+    (`SET LOCAL`), bounded to `max_scan_tuples` tuples per scan: the filters of a statement
+    then no longer leave its index scan with fewer rows than asked for, short of the bound.
+    Relaxed order is approximate: callers order the rows again by exact distance."""
+    await session.execute(
+        sql_text(
+            "SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true), "
+            "set_config('hnsw.max_scan_tuples', :tuples, true)"
+        ),
+        {"tuples": str(max_scan_tuples)},
+    )

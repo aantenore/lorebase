@@ -14,6 +14,7 @@ from lorebase_core.model import (
     Derivation,
     Domain,
     Kind,
+    Lens,
     Operation,
     Relation,
     Schema,
@@ -31,6 +32,7 @@ ELEMENT_MODELS: Mapping[ObjectType, type[SchemaElementModel]] = {
     ObjectType.SCHEMA_OPERATION: Operation,
     ObjectType.SCHEMA_DERIVATION: Derivation,
     ObjectType.SCHEMA_SOURCE: Source,
+    ObjectType.SCHEMA_LENS: Lens,
 }
 
 _COLLECTIONS: Mapping[ObjectType, str] = {
@@ -40,6 +42,7 @@ _COLLECTIONS: Mapping[ObjectType, str] = {
     ObjectType.SCHEMA_OPERATION: "operations",
     ObjectType.SCHEMA_DERIVATION: "derivations",
     ObjectType.SCHEMA_SOURCE: "sources",
+    ObjectType.SCHEMA_LENS: "lenses",
 }
 
 

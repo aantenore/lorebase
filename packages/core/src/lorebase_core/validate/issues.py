@@ -47,7 +47,7 @@ class IssueCode(StrEnum):
     SCHEMA_TRAIT_MAPPING_INVALID = "schema.trait_mapping_invalid"
     SCHEMA_TRAIT_MAPPING_TYPE = "schema.trait_mapping_type"
     SCHEMA_TRAIT_MAPPING_REQUIRED = "schema.trait_mapping_required"
-    # Schema: Operations, Derivations, Sources
+    # Schema: Operations, Derivations, Sources, Lenses
     SCHEMA_EXPRESSIONS_DISABLED = "schema.expressions_disabled"
     SCHEMA_EXPRESSION_INVALID = "schema.expression_invalid"
     SCHEMA_OPERATION_REFERENCE_UNKNOWN = "schema.operation_reference_unknown"
@@ -57,6 +57,8 @@ class IssueCode(StrEnum):
     SCHEMA_DERIVATION_CYCLE = "schema.derivation_cycle"
     SCHEMA_SOURCE_REFERENCE_UNKNOWN = "schema.source_reference_unknown"
     SCHEMA_SOURCE_INVALID = "schema.source_invalid"
+    SCHEMA_LENS_REFERENCE_UNKNOWN = "schema.lens_reference_unknown"
+    SCHEMA_LENS_INVALID = "schema.lens_invalid"
 
     # Data: values (Records and Links)
     VALUE_ATTRIBUTE_UNKNOWN = "value.attribute_unknown"

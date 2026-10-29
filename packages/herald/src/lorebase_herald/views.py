@@ -156,6 +156,7 @@ def schema_view(document: m.SchemaDocument, *, kinds: Sequence[str] | None, deta
         if full and (operation.get("review_policy") or {}).get("expression"):
             view["review_when"] = operation["review_policy"]["expression"]
         operation_views.append(view)
+    lens_views = [lens_view(lens, names) for lens in (content.get("lenses") or {}).values()]
     return {
         "domain": document.domain,
         "branch": document.branch,
@@ -164,6 +165,7 @@ def schema_view(document: m.SchemaDocument, *, kinds: Sequence[str] | None, deta
         "relations": relation_views,
         "operations": operation_views,
         "generic_operations": list(GENERIC_OPERATIONS),
+        **({"lenses": lens_views} if lens_views else {}),
         "search": {
             "modes": list(document.search.modes),
             "embedding": (
@@ -176,6 +178,35 @@ def schema_view(document: m.SchemaDocument, *, kinds: Sequence[str] | None, deta
             ),
         },
     }
+
+
+def lens_view(lens: Mapping[str, Any], names: Mapping[str, str]) -> View:
+    """A lens of a schema document with its references written as api names."""
+    view: View = {"name": lens["api_name"], "description": lens.get("description") or ""}
+    for section in ("kinds", "traits", "relations"):
+        if lens.get(section):
+            view[section] = [names.get(element_id, element_id) for element_id in lens[section]]
+    for member in (
+        "depth",
+        "include_schema",
+        "include_recent_changes",
+        "include_lineage",
+        "budget_tokens",
+    ):
+        if lens.get(member) is not None:
+            view[member] = lens[member]
+    return view
+
+
+def lens_text(view: Mapping[str, Any]) -> str:
+    """One line per member of a lens, for the lens resource and the schema summary."""
+    lines = [f"{view['name']} - {view['description']}".rstrip(" -")]
+    for member, value in view.items():
+        if member in ("name", "description"):
+            continue
+        shown = ", ".join(value) if isinstance(value, list) else value
+        lines.append(f"  {member}: {shown}")
+    return "\n".join(lines)
 
 
 def _attribute_line(attribute: Mapping[str, Any]) -> str:
@@ -236,6 +267,16 @@ def schema_text(view: Mapping[str, Any], *, detail: str, output: OutputSettings)
         "built-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, "
         + ", ".join(view["generic_operations"])
     )
+    if view.get("lenses"):
+        lines.append("LENSES (read presets; pass `lens` to lorebase_search or lorebase_context)")
+        for lens in view["lenses"]:
+            members = [
+                f"{member} {', '.join(lens[member])}"
+                for member in ("kinds", "traits", "relations")
+                if lens.get(member)
+            ]
+            scope = f" [{'; '.join(members)}]" if members else ""
+            lines.append(f"{lens['name']}{scope} - {value_text(lens['description'], limit)}")
     search = view["search"]
     lines.append(f"SEARCH modes {', '.join(search['modes'])}")
     if search["embedding"]:
@@ -403,6 +444,8 @@ def search_view(body: m.SearchResult, output: OutputSettings) -> View:
         ]
     if body.truncated_candidates:
         view["truncated_candidates"] = True
+    if body.semantic_truncated:
+        view["truncated"] = True
     if omitted:
         view["omitted"] = omitted
     return view
@@ -418,6 +461,11 @@ def search_text(view: Mapping[str, Any], output: OutputSettings) -> str:
         lines.append(
             "truncated: every term is very common, only a sample of the matches was ranked; "
             "add a rarer term or narrow `kinds`"
+        )
+    if view.get("truncated"):
+        lines.append(
+            "truncated: the vector search stopped before filling its list; "
+            "narrow `kinds`, `traits` or `where`"
         )
     for index, hit in enumerate(view["items"], start=1):
         snippet = hit.get("snippet")

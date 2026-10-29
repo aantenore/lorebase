@@ -2272,7 +2272,7 @@
           "schema"
         ],
         "summary": "Get a schema element",
-        "description": "A Kind, Relation, Trait, Operation, Derivation or Source by api name or id.\n\nBuilt-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are\ndescribed with the parameters derived from the schema.",
+        "description": "A Kind, Relation, Trait, Operation, Derivation, Source or Lens by api name or id.\n\nBuilt-in Operations (`create_supplier`, `link_supplied_by`, `import_records`, ...) are\ndescribed with the parameters derived from the schema.",
         "operationId": "get_element_api_v1_domains__domain_id__schema__section___name__get",
         "security": [
           {
@@ -2300,7 +2300,8 @@
                 "traits",
                 "operations",
                 "derivations",
-                "sources"
+                "sources",
+                "lenses"
               ],
               "type": "string",
               "title": "Section"
@@ -12979,7 +12980,7 @@
           "capped": {
             "type": "boolean",
             "title": "Capped",
-            "description": "True when graph caps cut the neighborhood."
+            "description": "True when graph caps cut the neighborhood, or a depth or budget of the lens was served at the configured cap."
           }
         },
         "type": "object",
@@ -13804,22 +13805,70 @@
               }
             ],
             "title": "Relations",
-            "description": "Relation api names to follow (forward or inverse); default: all."
+            "description": "Relation api names to follow (forward or inverse); default: all, or the Relations of `lens`."
+          },
+          "traits": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traits",
+            "description": "Trait api names: with `search` or `query` seeds, only Records of the Kinds implementing them (that the caller may read) become seeds, and only Records of those Kinds are neighbors. Seeds named by `refs` are always kept."
+          },
+          "lens": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lens",
+            "description": "Lens api name (a read preset of the schema): its Relations, depth, sections and budget are the defaults of this request, its Kinds and Traits limit neighbors and `search` and `query` seeds like `traits`. Members given here win."
           },
           "include_schema": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Include Schema",
-            "default": true
+            "description": "Default: the lens's, else true."
           },
           "include_recent_changes": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Include Recent Changes",
-            "default": true
+            "description": "Default: the lens's, else true."
           },
           "include_lineage": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Include Lineage",
-            "default": true
+            "description": "Default: the lens's, else true."
           },
           "since": {
             "anyOf": [
@@ -15151,7 +15200,8 @@
               "traits",
               "operations",
               "derivations",
-              "sources"
+              "sources",
+              "lenses"
             ],
             "title": "Section"
           },
@@ -21793,6 +21843,33 @@
             "title": "Kinds",
             "description": "Kind api names; default: all."
           },
+          "traits": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Traits",
+            "description": "Trait api names: each stands for the Kinds implementing it that the caller may read. With `kinds`, the union is searched."
+          },
+          "lens": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lens",
+            "description": "Lens api name: its Kinds and Traits are searched when the request names neither `kinds` nor `traits`."
+          },
           "where": {
             "anyOf": [
               {
@@ -21828,7 +21905,7 @@
               }
             ],
             "title": "Where",
-            "description": "DSL filter; needs exactly one Kind in `kinds`."
+            "description": "DSL filter; needs exactly one Kind in the searched Kinds."
           },
           "mode": {
             "anyOf": [
@@ -21924,6 +22001,12 @@
             "type": "boolean",
             "title": "Truncated Candidates",
             "description": "Only a sample of the matches of q (the first ones in index order) was ranked, as happens when every term of q is very common: better matches may exist. Add a rarer term, a Kind or a filter to narrow q.",
+            "default": false
+          },
+          "semantic_truncated": {
+            "type": "boolean",
+            "title": "Semantic Truncated",
+            "description": "The vector list is shorter than asked for because the index scan reached its bound (search.semantic.max_scan_tuples, or the over-fetched nearest rows) while more Records match the filters: narrow the Kinds or the filter, or raise the bound.",
             "default": false
           }
         },

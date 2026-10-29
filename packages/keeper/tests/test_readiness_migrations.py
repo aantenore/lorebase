@@ -41,7 +41,7 @@ def connector(revisions: list[str]) -> Callable[[str, float], Awaitable[Any]]:
 
 
 def default_check(app: FastAPI) -> DatabaseCheck:
-    [check] = app.state.readiness_checks
+    check = app.state.readiness_checks[0]
     assert isinstance(check, DatabaseCheck)
     return check
 

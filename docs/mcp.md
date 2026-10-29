@@ -183,11 +183,11 @@ example `Supplier/S-1001`.
 
 | Tool | Input (besides domain, branch, format) | Output | Keeper calls |
 |------|-----------------------------------------|--------|--------------|
-| `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
+| `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `traits?`, `lens?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
 | `lorebase_schema` | `kinds?`, `detail?: summary or full` | Kinds with attribute types (`!` = required), key, title, built-in Operations; Relations; custom Operations with parameters and review policy | `GET .../schema` |
 | `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation | `GET .../kinds/{kind}/records/{key}` |
 | `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate, `next_cursor` | `POST .../query` |
-| `lorebase_search` | `query?`, `kinds?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated` when every term was so common that only a sample of the matches was ranked | `POST .../search` |
+| `lorebase_search` | `query?`, `kinds?`, `traits?`, `lens?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated_candidates` when every term was so common that only a sample of the matches was ranked, `truncated` when the vector list stopped short of its size while more Records match the filters | `POST .../search` |
 | `lorebase_neighborhood` | `seeds: [ref]`, `depth`, `relations?`, `max_nodes?`, `max_edges?`, `values?` | nodes and edges, `truncated` when Keeper caps were reached; without `values` (the default) Keeper returns Record headers and Link endpoints only | `POST .../neighborhood` (`values: false` unless `values`) |
 | `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
 | `lorebase_history` | `ref`, `values?`, `limit?`, `cursor?` | changes of the Record newest first: Revision, time, author, created/updated/deleted, changed attributes (with before -> after when `values`), `next_cursor` | `GET .../records/{key}/history` |
@@ -208,7 +208,14 @@ the JSON format): the search modes of the
 Domain and, when a Kind has an `embedding_template`, the embedding model name and dimension to
 embed queries with. Without an embedding model the only mode is lexical.
 
-**Resources.** `lorebase://{domain}/schema` (schema summary) and
+`traits` are Trait api names (each stands for the Kinds implementing it that the agent may
+read) and `lens` is the api name of a read preset of the schema; the `LENSES` lines of
+`lorebase_schema` list them. A lens gives `lorebase_context` its Relations, depth, sections and
+budget unless the call passes them, and limits neighbors and searched Kinds
+([lenses and Traits](agents.md#lenses-and-traits)).
+
+**Resources.** `lorebase://{domain}/schema` (schema summary),
+`lorebase://{domain}/lenses/{lens}` (a lens with its resolved members) and
 `lorebase://{domain}/{kind}/{key}` (one Record), for hosts that attach resources to the context.
 
 **Prompt.** `lorebase_guide(domain?, task?)`: the workflow below as a template; it contains no

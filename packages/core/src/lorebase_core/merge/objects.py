@@ -18,6 +18,7 @@ from lorebase_core.model import (
     Domain,
     IdPrefix,
     Kind,
+    Lens,
     Model,
     Operation,
     Relation,
@@ -65,6 +66,7 @@ _ELEMENT_TYPES: dict[IdPrefix, tuple[ObjectType, type[Model], str]] = {
     IdPrefix.OPERATION: (ObjectType.SCHEMA_OPERATION, Operation, "operations"),
     IdPrefix.DERIVATION: (ObjectType.SCHEMA_DERIVATION, Derivation, "derivations"),
     IdPrefix.SOURCE: (ObjectType.SCHEMA_SOURCE, Source, "sources"),
+    IdPrefix.LENS: (ObjectType.SCHEMA_LENS, Lens, "lenses"),
 }
 
 SchemaLoader = Callable[[bytes], Schema]

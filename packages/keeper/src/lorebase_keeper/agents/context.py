@@ -45,6 +45,7 @@ from lorebase_keeper.agents.pack import (
 from lorebase_keeper.agents.settings import ContextSettings
 from lorebase_keeper.reading.compiler import record_columns
 from lorebase_keeper.reading.history import REVISIONS
+from lorebase_keeper.reading.lenses import resolve_lens, trait_kinds
 from lorebase_keeper.reading.points import ReadPoint, not_found
 from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.reading.records import plan_query, require_kind, run_query
@@ -74,28 +75,77 @@ def timestamp(value: datetime | None) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class PackSettings:
+    """What a request asks for once its lens is applied (design 8.8): members of the request
+    win over the lens's, which win over the settings."""
+
     budget_tokens: int
     depth: int
+    include_schema: bool = True
+    include_recent_changes: bool = True
+    include_lineage: bool = True
+    relations: tuple[str, ...] = ()
+    """Relation ids of the lens, followed in both directions when the request names none."""
+    kinds: frozenset[str] | None = None
+    """Ids of the Kinds that neighbors and `search` and `query` seeds are limited to, from the
+    request's `traits` or else the lens; `None`: no limit."""
+    capped: bool = False
+    """A budget or depth of the lens was over the configured bounds and is served at them."""
 
 
 def effective(
-    request: ContextRequest, settings: ContextSettings, runtime: ReadRuntime
+    request: ContextRequest,
+    settings: ContextSettings,
+    runtime: ReadRuntime,
+    point: ReadPoint,
 ) -> PackSettings:
-    """Budget and depth of a request, within the configured bounds (422 otherwise)."""
-    budget = request.budget_tokens or settings.default_budget_tokens
-    if budget > settings.max_budget_tokens:
+    """Budget, depth, sections and Kinds of a request: its own members, else those of its
+    lens, else the settings. Values of the request over the configured bounds are 422; those
+    of a lens are served at the bounds (the pack says `capped`)."""
+    resolved = None if request.lens is None else resolve_lens(point, request.lens, "/body/lens")
+    lens = None if resolved is None else resolved.lens
+    capped = False
+    budget = request.budget_tokens
+    if budget is None:
+        budget = (lens.budget_tokens if lens else None) or settings.default_budget_tokens
+        if budget > settings.max_budget_tokens:
+            budget, capped = settings.max_budget_tokens, True
+    elif budget > settings.max_budget_tokens:
         raise invalid(
             "/body/budget_tokens", f"must not exceed {settings.max_budget_tokens}", "limit_exceeded"
         )
-    depth = settings.default_depth if request.depth is None else request.depth
     deepest = min(
         settings.max_depth,
         runtime.read.traverse.max_depth,
         runtime.store_settings.traverse.max_depth,
     )
-    if depth > deepest:
+    depth = request.depth
+    if depth is None:
+        depth = settings.default_depth if lens is None or lens.depth is None else lens.depth
+        if depth > deepest:
+            depth, capped = deepest, True
+    elif depth > deepest:
         raise invalid("/body/depth", f"must not exceed {deepest}", "limit_exceeded")
-    return PackSettings(budget, depth)
+    kinds: frozenset[str] | None = None
+    if request.traits is not None:
+        kinds = frozenset(k.id for k in trait_kinds(point, request.traits, "/body/traits"))
+    elif resolved is not None and resolved.kinds is not None:
+        kinds = frozenset(k.id for k in resolved.kinds)
+
+    def section(asked: bool | None, preset: bool | None) -> bool:
+        return asked if asked is not None else True if preset is None else preset
+
+    return PackSettings(
+        budget,
+        depth,
+        include_schema=section(request.include_schema, lens.include_schema if lens else None),
+        include_recent_changes=section(
+            request.include_recent_changes, lens.include_recent_changes if lens else None
+        ),
+        include_lineage=section(request.include_lineage, lens.include_lineage if lens else None),
+        relations=lens.relations if lens else (),
+        kinds=kinds,
+        capped=capped,
+    )
 
 
 # Seeds ----------------------------------------------------------------------------------------
@@ -107,8 +157,10 @@ async def seed_addresses(
     point: ReadPoint,
     request: ContextRequest,
     settings: ContextSettings,
+    kinds: frozenset[str] | None = None,
 ) -> list[tuple[Kind, str]]:
-    """`(Kind, key)` of the seeds, in request, query or ranking order, without repeats."""
+    """`(Kind, key)` of the seeds, in request, query or ranking order, without repeats.
+    `kinds` (ids) limits the Kinds of `query` and `search` seeds, never those of `refs`."""
     cap = settings.max_seeds
     found: list[tuple[str, str]] = []
     if request.refs is not None:
@@ -129,11 +181,23 @@ async def seed_addresses(
             session, runtime, point, plan, shape="context", cursor_pointer="/body/query/cursor"
         )
         found = [(item.kind, item.key) for item in page.items]
+        if kinds is not None:
+            allowed = {point.schema.kinds[k].api_name for k in kinds if k in point.schema.kinds}
+            found = [(kind, key) for kind, key in found if kind in allowed]
     else:
         assert request.search is not None
         limit = min(cap, runtime.search.results.max_limit)
         hits = await search(
-            session, runtime, point, SearchRequest(q=request.search, mode="lexical", limit=limit)
+            session,
+            runtime,
+            point,
+            SearchRequest(
+                q=request.search,
+                mode="lexical",
+                limit=limit,
+                traits=request.traits,
+                lens=request.lens,
+            ),
         )
         found = [(hit.kind, hit.key) for hit in hits.items]
     unique = list(dict.fromkeys(found))
@@ -203,8 +267,9 @@ async def surroundings(
     seeds: Sequence[RecordOut],
     request: ContextRequest,
     settings: ContextSettings,
-    depth: int,
+    bounds: PackSettings,
 ) -> Surroundings:
+    depth = bounds.depth
     if depth == 0 or not seeds:
         return Surroundings((), (), False)
     caps, walk = runtime.read.traverse, runtime.store_settings.traverse
@@ -216,7 +281,7 @@ async def surroundings(
             point.schema,
             [(require_kind(point, s.kind).id, s.key) for s in seeds],
             depth=depth,
-            follow=_follow(point, request.relations),
+            follow=_follow(point, request.relations, bounds),
             max_nodes=min(len(seeds) + settings.max_neighbors, caps.max_nodes, walk.max_nodes),
             max_links=max(min(settings.max_links, caps.max_edges, walk.max_links), 1),
             runtime=runtime.store,
@@ -264,14 +329,20 @@ async def surroundings(
     return Surroundings(tuple(neighbors), ordered_links, found.truncated)
 
 
-def _follow(point: ReadPoint, names: list[str] | None) -> dict[str, Direction]:
+def _follow(
+    point: ReadPoint, names: list[str] | None, bounds: PackSettings | None = None
+) -> dict[str, Direction]:
     """Relations to walk (id to direction): those named (forward or inverse api name; default:
-    all), in the directions named, between Kinds the caller may read."""
+    those of the lens, else all), in the directions named, between Kinds the caller may read.
+    With `bounds.kinds`, a direction is walked only when it reaches a Kind of that set, so
+    other Kinds are neither returned nor walked through."""
     schema = point.schema
     wanted: dict[str, set[LinkDirection]] = defaultdict(set)
     if names is None:
+        lens_relations = () if bounds is None else bounds.relations
         for relation in schema.relations.values():
-            wanted[relation.id] = set(LinkDirection)
+            if not lens_relations or relation.id in lens_relations:
+                wanted[relation.id] = set(LinkDirection)
     else:
         for index, name in enumerate(names):
             found = schema.relation_by_api_name(name)
@@ -284,6 +355,14 @@ def _follow(point: ReadPoint, names: list[str] | None) -> dict[str, Direction]:
         ends = (schema.kinds.get(relation.from_kind), schema.kinds.get(relation.to_kind))
         if any(kind is None or not point.scope.allows(kind.api_name) for kind in ends):
             continue  # Kinds the caller may not read are neither returned nor walked through
+        if bounds is not None and bounds.kinds is not None:
+            reached = {
+                LinkDirection.FORWARD: relation.to_kind,
+                LinkDirection.INVERSE: relation.from_kind,
+            }
+            directions = {d for d in directions if reached[d] in bounds.kinds}
+            if not directions:
+                continue
         if len(directions) == 2:
             follow[relation_id] = Direction.BOTH
         else:
@@ -444,14 +523,14 @@ async def build_pack(
     settings: ContextSettings,
 ) -> tuple[bytes, str]:
     """The rendered pack and its media type."""
-    bounds = effective(request, settings, runtime)
+    bounds = effective(request, settings, runtime, context.point)
     point = await with_rows(session, runtime, context.point, "Context packs")
-    addresses = await seed_addresses(session, runtime, point, request, settings)
+    addresses = await seed_addresses(session, runtime, point, request, settings, bounds.kinds)
     rows = await fetch_rows(session, point, addresses)
     seeds = [record_out(point.schema, row, masking=point.masking) for row in rows]
-    around = await surroundings(session, runtime, point, seeds, request, settings, bounds.depth)
+    around = await surroundings(session, runtime, point, seeds, request, settings, bounds)
     changes = None
-    if request.include_recent_changes:
+    if bounds.include_recent_changes:
         records = list(addresses)
         for neighbor in around.neighbors:
             kind = point.schema.kind_by_api_name(neighbor.kind)
@@ -465,9 +544,7 @@ async def build_pack(
             floor=context.floor,
             limit=settings.recent_changes_max,
         )
-    lineage = (
-        await lineage_items(session, runtime, point, rows) if request.include_lineage else None
-    )
+    lineage = await lineage_items(session, runtime, point, rows) if bounds.include_lineage else None
     draft = Draft(
         seeds=tuple(
             SeedItem(
@@ -481,7 +558,7 @@ async def build_pack(
         ),
         neighbors=around.neighbors,
         links=around.links,
-        schema=request.include_schema,
+        schema=bounds.include_schema,
         changes=changes,
         lineage=lineage,
     )
@@ -499,7 +576,7 @@ async def build_pack(
         draft,
         budget_tokens=bounds.budget_tokens,
         chars_per_token=settings.chars_per_token,
-        capped=around.capped,
+        capped=around.capped or bounds.capped,
     )
     if markdown:
         # References are resolved when the pack is sent, from the envelope (never by

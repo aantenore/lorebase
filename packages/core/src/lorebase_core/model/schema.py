@@ -21,12 +21,14 @@ from lorebase_core.model.ids import (
     AttributeId,
     DerivationId,
     KindId,
+    LensId,
     OperationId,
     RelationId,
     SourceId,
     TraitId,
 )
 from lorebase_core.model.kind import Kind
+from lorebase_core.model.lens import Lens
 from lorebase_core.model.operation import Operation
 from lorebase_core.model.paths import PathRelation, path_relations
 from lorebase_core.model.record import parse_ref
@@ -42,6 +44,7 @@ _INDEXES = (
     "_operations_by_name",
     "_derivations_by_name",
     "_sources_by_name",
+    "_lenses_by_name",
     "_paths",
     "_paths_by_name",
 )
@@ -55,6 +58,7 @@ class Schema(Model):
     operations: dict[OperationId, Operation] = Field(default_factory=dict)
     derivations: dict[DerivationId, Derivation] = Field(default_factory=dict)
     sources: dict[SourceId, Source] = Field(default_factory=dict)
+    lenses: dict[LensId, Lens] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check_keys(self) -> Self:
@@ -65,6 +69,7 @@ class Schema(Model):
             ("operations", dict(self.operations)),
             ("derivations", dict(self.derivations)),
             ("sources", dict(self.sources)),
+            ("lenses", dict(self.lenses)),
         )
         for name, elements in collections:
             for key, element in elements.items():
@@ -89,6 +94,7 @@ class Schema(Model):
         yield from self.operations.values()
         yield from self.derivations.values()
         yield from self.sources.values()
+        yield from self.lenses.values()
 
     # Api name lookups ------------------------------------------------------------
 
@@ -119,6 +125,10 @@ class Schema(Model):
     @cached_property
     def _sources_by_name(self) -> dict[str, Source]:
         return {source.api_name: source for source in self.sources.values()}
+
+    @cached_property
+    def _lenses_by_name(self) -> dict[str, Lens]:
+        return {lens.api_name: lens for lens in self.lenses.values()}
 
     @cached_property
     def _paths(self) -> dict[str, PathRelation]:
@@ -177,6 +187,9 @@ class Schema(Model):
 
     def source_by_api_name(self, api_name: str) -> Source | None:
         return self._sources_by_name.get(api_name)
+
+    def lens_by_api_name(self, api_name: str) -> Lens | None:
+        return self._lenses_by_name.get(api_name)
 
     def attribute_by_api_name(self, kind_id: str, api_name: str) -> Attribute | None:
         kind = self.kinds.get(kind_id)
