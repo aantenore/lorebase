@@ -1282,6 +1282,7 @@ A job declares its tiers. Default: `[0, 1, 2]` when an LLM is configured, `[0, 1
 - **Tier cap (`direct`).** Only deterministic output may merge without a person: a job whose Proposal holds any item produced by tier 1 or tier 2 (accepted, pending or rejected) is capped at `doubts_only`, and its result says `mode_capped: tier`. Tier 0 rules read the document literally and cannot be steered by its prose, so AC-19 keeps its meaning: text a model read never reaches a branch without a person.
 - **Direct merge conditions.** Scribe merges the Proposal through the normal merge (6.8, Proposal checks of 10.3) only when the effective mode is `direct` after the cap, no item is pending (held for `local_edit`, reconciliation or ambiguity, below threshold or not yet decided), the merge attempt has no Conflict, and the `reconciliation` check is not `failed`. Into a protected branch only with `scribe.extraction.direct_merge_protected` (default `true`, as `scribe.sources.auto_merge_protected` for Source merges); otherwise the Proposal waits for its approvals. Schema suggestions never merge this way (they are schema changes with their own review). The merge is audited as `proposal.merge` with `mode: direct` and the job id; a capped or blocked job records why in its result (`direct_blocked: pending_items | conflicts | reconciliation | protected | tier`).
 - **Local edits.** Whatever the mode, an item over a value a person set is held (`local_edit`, 9.1).
+- **Implementation notes.** The resolution lives in `lorebase_store.extraction.modes`, used by Scribe (jobs) and Keeper (`ignored_settings`). A Domain's `settings.extraction` is written with `PATCH /domains/{d}` (`{"settings": {"extraction": {...} | null}}`; `extraction` is the only member that request replaces), validated for shape (unknown keys, types, ranges, a prefix given twice: 422) and audited as `domain.update` with `settings: [{member, before, after}]`. Keeper reports `ignored_settings` against the `scribe.extraction` values of its own configuration; Scribe applies its own when it runs a job and records what it ignored in the job result. A job over several documents takes the lowest `min_confidence` among them (fewest candidates dropped unseen). An item whose tier is not recorded counts as a model's for the cap. `direct_blocked` holds the first reason that applies, checked in the order `tier`, `pending_items`, `protected`, `reconciliation`, `conflicts`; the result also carries `mode` (after the cap), `direct_merged` and `merged_revision`. The merge Scribe runs keeps the extraction branch.
 
 **Document versions and lifecycle.** **[Architect call AC-35]**
 
@@ -1558,6 +1559,7 @@ Stewards say who looks after which part of a Domain, so Proposals and reconcilia
 - **Approvals.** `required_approvals_from_stewards` (protection rule, 10.3) counts approvals by assignees only. A Proposal whose Kinds declare no stewards satisfies it trivially; one that has steward roles but fewer assignees than required fails its approvals check with `stewards-unavailable`, so a missing steward is visible instead of silently skipped. Self-approval rules are unchanged.
 - **No stewards, no change.** A Domain whose schema declares none behaves exactly as before; `assigned=me` returns nothing and the protection rule defaults to 0.
 - **Audit.** Stewards change through schema change sets (audited as schema changes); assignment writes nothing, since it is derived.
+- **Implementation notes.** `lorebase_keeper.services.stewards`. Grants narrowed to a Kind name the Kind by api name, so assignees are checked against the api names of the touched Kinds; the permission to act is checked on the target branch (Proposals) or the candidate's branch, as the routes check it, so a principal whose only grants are narrowed to Kinds is not an assignee of Proposals. A listing of assignees reads the Domain's grants (at most `keeper.stewards.max_grants_scanned`) and expands groups through stored memberships; members known only from a provider's groups claim are assignees for their own `assigned=me` but are not listed. `proposals.kinds` (migration `0042`) is refreshed by every merge attempt from the partitions that differ between the merge base and the source head (Links name both ends; a virtual base uses the merged changes and Conflicts); rows from before it are null and count as schema-only until their next attempt. The `assigned` filter applies to each page read, so a page may hold fewer items while `next_cursor` is set, as for the other read filters of these listings. Unknown steward roles are reported as `warnings` by `schema:validate`. The web app shows the ingestion mode and the ignored settings on the Domain settings screen read-only: it has no signal yet of whether the caller holds `domain.settings`.
 
 **Non-goals.** Notifications and reminders (webhooks and the change feed carry events; delivery to people belongs to the tools that receive them). Workload balancing or round-robin assignment. Stewards as a permission: a steward role grants nothing beyond what its grants already give.
 
@@ -1571,7 +1573,7 @@ Base path `/api/v1`. JSON. OpenAPI 3.1 at `/api/v1/openapi.json`. Errors use RFC
 
 | Area | Method and path | Notes |
 |------|-----------------|-------|
-| Domains | `GET /domains`, `POST /domains`, `GET /domains/{d}` | |
+| Domains | `GET /domains`, `POST /domains`, `GET /domains/{d}`, `PATCH /domains/{d}` | `PATCH` changes display metadata and the `extraction` setting (9.2); `GET` reports `ignored_settings` |
 | Branches | `GET /domains/{d}/branches`, `POST .../branches`, `GET .../branches/{b}`, `DELETE .../branches/{b}` | branch names URL-encoded |
 | Revisions | `GET .../branches/{b}/log`, `GET .../revisions/{rev}`, `GET .../diff?from=&to=&kinds=` | |
 | Tags | `GET/POST .../tags` | |
@@ -1895,16 +1897,19 @@ network:
 ```yaml
 scribe:
   extraction:
-    mode: doubts_only              # review_all | doubts_only; direct is refused here (per Domain only)
-    domain_may_loosen: [mode]      # members a Domain may set looser than these; []: none
-    direct_merge_protected: true   # direct-mode merges may target protected branches
+    mode: doubts_only              # implemented; review_all | doubts_only; direct is refused here
+    domain_may_loosen: [mode]      # implemented; members a Domain may set looser; []: none
+    direct_merge_protected: true   # implemented; direct-mode merges may target protected branches
     versions:                      # implemented
       max_values_per_job: 5000     # values one document_version_check job looks at
 keeper:
   documents:
     max_source_key_chars: 1024     # implemented
-  stewards:
+  proposals:
+    required_approvals_from_stewards: 0  # implemented; Domain setting of the same name
+  stewards:                        # implemented
     max_assignees_listed: 50
+    max_grants_scanned: 10000      # grants of a Domain read to find assignees
 search:
   semantic:
     iterative_scan: auto           # auto: relaxed_order on pgvector >= 0.8; off: over-fetch
@@ -1912,7 +1917,7 @@ search:
     overfetch_factor: 4            # without iterative scans: search.candidates * factor
 ```
 
-Per Source (schema `sources.{name}`): `local_edits: review | keep | source_wins` (default `review`) and, as a follow-up, `stale_after` (ISO 8601 duration, default null). Per Domain (`settings.extraction`): `mode`, `auto_accept_threshold`, `min_confidence`, `rules: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]`. Per branch protection rule: `required_approvals_from_stewards` (default 0). In the schema: `domain.stewards`, `kinds.{Kind}.stewards`, `lenses`.
+Per Source (schema `sources.{name}`): `local_edits: review | keep | source_wins` (default `review`) and, as a follow-up, `stale_after` (ISO 8601 duration, default null). Per Domain (`settings.extraction`): `mode`, `auto_accept_threshold`, `min_confidence`, `rules: [{source_key_prefix, mode, auto_accept_threshold, min_confidence}]`. Per branch protection rule: `required_approvals_from_stewards` (default 0), implemented as `keeper.proposals.required_approvals_from_stewards` with a Domain setting of the same name, as `required_approvals` is. In the schema: `domain.stewards`, `kinds.{Kind}.stewards`, `lenses`.
 
 ---
 

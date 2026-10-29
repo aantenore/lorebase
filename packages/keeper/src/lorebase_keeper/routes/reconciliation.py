@@ -17,6 +17,9 @@ quotes and decided values are masked by clearance (`services.reconciliation`). D
 needs `operation.execute`, a write needing review `branch.create` and `proposal.create` on
 `reconcile/{candidate}-{random}`. Every decision is in the audit log (`reconciliation.resolve`,
 `reconciliation.dismiss`, `reconciliation.reopen`), written with the decision.
+
+Candidates carry the steward roles of their Kind and, for callers with `principal.read`, their
+assignees (`services.stewards`, design 10.7); `assigned=me|any|none` filters the listing.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from lorebase_keeper.services import reconciliation as service
 from lorebase_keeper.services.errors import BRANCH_BUSY, commit_problem
 from lorebase_keeper.services.reads import ReadGuard
 from lorebase_keeper.services.reconciliation_settle import SWEEP_ACTION
+from lorebase_keeper.services.stewards import Assigned, Stewards, candidate_subject
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError
 from lorebase_store.jobs import RECONCILE_SWEEP_JOB, enqueue_job, reconcile_sweep_payload
@@ -125,6 +129,15 @@ class ReconciliationCandidateOut(BaseModel):
     decided_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    steward_roles: list[str] = Field(
+        default_factory=list, description="Roles that look after its Kind (design 10.7)."
+    )
+    assignees: list[str] | None = Field(
+        default=None,
+        description="Principals who can decide it as stewards (callers with principal.read "
+        "only; at most keeper.stewards.max_assignees_listed).",
+    )
+    assignees_truncated: bool = False
 
 
 class ReconciliationResolveIn(BaseModel):
@@ -285,9 +298,13 @@ async def _readable(guard: ReadGuard, ctx: service.Context, candidate: Candidate
 
 
 async def _render(
-    ctx: service.Context, rows: list[CandidateRow]
+    ctx: service.Context,
+    rows: list[CandidateRow],
+    stewards: Stewards | None = None,
+    assigned: Assigned | None = None,
 ) -> list[ReconciliationCandidateOut]:
-    """`rows` as the caller may see them: masked, vault references opened when cleared."""
+    """`rows` as the caller may see them: masked, vault references opened when cleared; with
+    `stewards`, their steward roles and assignees, filtered by `assigned`."""
     out: list[ReconciliationCandidateOut] = []
     async with ctx.store.sessions() as session, session.begin():
         await require_domain(session, ctx.domain_id)
@@ -328,6 +345,15 @@ async def _render(
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
+            if stewards is not None:
+                subject = candidate_subject(schema, row.kind_id, row.branch)
+                mine = await stewards.is_assignee(ctx.principal, ctx.domain_id, subject)
+                if not subject.matches(assigned, mine):
+                    continue
+                listing = await stewards.listing(ctx.principal, ctx.domain_id, subject)
+                body["steward_roles"] = list(subject.roles)
+                body["assignees"] = None if listing.ids is None else list(listing.ids)
+                body["assignees_truncated"] = listing.truncated
             data: Any = {"claims": body["claims"], "decision": body["decision"]}
             await service.disclose(session, ctx, () if schema is None else (schema,), masking, data)
             body.update(data)
@@ -470,6 +496,14 @@ async def list_candidates(
     source: Annotated[
         str | None, Query(description="Source identity of a claim, e.g. `source:src_...`.")
     ] = None,
+    assigned: Annotated[
+        Assigned | None,
+        Query(
+            description="`me`: candidates the caller is an assignee of; `any`: with steward "
+            "roles; `none`: without (design 10.7). A page may then hold fewer items than asked "
+            "while `next_cursor` is set."
+        ),
+    ] = None,
     limit: Annotated[int | None, Query(ge=1, description="Page size.")] = None,
     cursor: Annotated[
         str | None, Query(max_length=MAX_CURSOR_LENGTH, description="Opaque page cursor.")
@@ -500,7 +534,8 @@ async def list_candidates(
         if more and rows
         else None
     )
-    return Page[ReconciliationCandidateOut](items=await _render(ctx, rows), next_cursor=next_cursor)
+    items = await _render(ctx, rows, Stewards(auth, keeper.stewards), assigned)
+    return Page[ReconciliationCandidateOut](items=items, next_cursor=next_cursor)
 
 
 @router.get(CANDIDATE, summary="Get a reconciliation candidate", responses=_ERRORS)
@@ -519,7 +554,7 @@ async def get_candidate(
     ctx = _context(request, store, domain_id, principal, auth, keeper)
     candidate = await service.get(ctx, candidate_id)
     await _readable(guard, ctx, candidate)
-    return (await _render(ctx, [candidate]))[0]
+    return (await _render(ctx, [candidate], Stewards(auth, keeper.stewards)))[0]
 
 
 @router.post(CANDIDATE + "/resolution", summary="Resolve a candidate", responses=_ERRORS)

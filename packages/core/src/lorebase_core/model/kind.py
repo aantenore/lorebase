@@ -5,10 +5,17 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import ClassVar, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from lorebase_core.model.attribute import Attribute
-from lorebase_core.model.base import ElementStatus, Model, SchemaElement
+from lorebase_core.model.base import (
+    MAX_STEWARD_ROLES,
+    ElementStatus,
+    Model,
+    SchemaElement,
+    steward_roles,
+)
+from lorebase_core.model.domain import StewardRole
 from lorebase_core.model.ids import AttributeId, KindId, TraitId
 
 
@@ -67,6 +74,14 @@ class Kind(SchemaElement):
         BuiltinOperation.UPDATE,
         BuiltinOperation.DELETE,
     )
+    #: Steward roles of work touching this Kind; they replace the Domain's (design 10.7).
+    #: Absent when none.
+    stewards: tuple[StewardRole, ...] | None = Field(default=None, max_length=MAX_STEWARD_ROLES)
+
+    @field_validator("stewards", mode="before")
+    @classmethod
+    def _empty_stewards_are_absent(cls, value: object) -> object:
+        return steward_roles(value)
 
     @model_validator(mode="after")
     def _check_keys(self) -> Self:

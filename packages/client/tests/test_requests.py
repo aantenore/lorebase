@@ -822,6 +822,63 @@ def test_list_proposals_filters_and_pages(http: respx.MockRouter, sleeps: Sleeps
     }
 
 
+def test_list_proposals_assigned_and_steward_fields(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.get("/domains/supply/proposals").respond(
+        200,
+        json={
+            "items": [
+                _proposal(steward_roles=["legal"], assignees=["usr_2"], assignees_truncated=True)
+            ],
+            "next_cursor": None,
+        },
+    )
+    with make(sleeps) as client:
+        result = client.proposals.list("supply", assigned="me")
+        ids = [p.id for p in client.proposals.iterate("supply", assigned="none")]
+    first = result.items[0]
+    assert (first.steward_roles, first.assignees, first.assignees_truncated) == (
+        ["legal"],
+        ["usr_2"],
+        True,
+    )
+    assert ids == ["prp_1"]
+    assert [c.request.url.params["assigned"] for c in route.calls] == ["me", "none"]
+
+
+def test_proposal_without_steward_members_uses_defaults() -> None:
+    proposal = m.Proposal.model_validate(_proposal())
+    assert (proposal.steward_roles, proposal.assignees, proposal.assignees_truncated) == (
+        [],
+        None,
+        False,
+    )
+
+
+def test_domain_update_sends_settings_and_clears_with_null(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    route = http.patch("/domains/supply").respond(
+        200,
+        json={
+            "id": "supply",
+            "display_name": "Supply",
+            "default_branch": "main",
+            "settings": {},
+            "ignored_settings": ["extraction"],
+            "created_at": "2026-10-01T08:00:00Z",
+            "created_by": "usr_1",
+        },
+    )
+    with make(sleeps) as client:
+        domain = client.domains.update("supply", settings={"extraction": None})
+        client.domains.update("supply", settings={"extraction": {"members": "doubts_only"}})
+    assert domain.ignored_settings == ["extraction"]
+    assert json.loads(route.calls[0].request.content) == {"settings": {"extraction": None}}
+    assert json.loads(route.calls[1].request.content) == {
+        "settings": {"extraction": {"members": "doubts_only"}}
+    }
+
+
 def test_proposal_reads_and_changes(http: respx.MockRouter, sleeps: Sleeps) -> None:
     get = http.get("/domains/supply/proposals/prp_1").respond(200, json=_detail())
     patch = http.patch("/domains/supply/proposals/prp_1").respond(200, json=_detail())
@@ -1562,6 +1619,9 @@ def _decision(status: str = "resolved") -> dict[str, Any]:
 
 def test_reconciliation_lists_reads_and_decides(http: respx.MockRouter, sleeps: Sleeps) -> None:
     def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("assigned"):
+            assert request.url.params["assigned"] == "me"
+            return httpx.Response(200, json={"items": [], "next_cursor": None})
         assert request.url.params["status"] == "open"
         assert request.url.params["type"] == "contradiction"
         assert request.url.params["source"] == "source:src_1"
@@ -1596,6 +1656,7 @@ def test_reconciliation_lists_reads_and_decides(http: respx.MockRouter, sleeps: 
         page = client.reconciliation.list(
             "supply", status="open", type="contradiction", source="source:src_1", limit=1
         )
+        mine = client.reconciliation.list("supply", assigned="me", limit=1)
         ids = [
             c.id
             for c in client.reconciliation.iterate(
@@ -1619,7 +1680,8 @@ def test_reconciliation_lists_reads_and_decides(http: respx.MockRouter, sleeps: 
         queued = client.reconciliation.queue_sweep("supply", branch="main")
     assert page.next_cursor == "c1"
     assert ids == ["rcc_1", "rcc_1"]
-    assert listing.call_count == 3
+    assert mine.items == []
+    assert listing.call_count == 4
     assert found.claims[0].source == "source:src_1"
     assert decided.revision == "aa"
     assert json.loads(resolution.calls.last.request.content) == {

@@ -54,3 +54,6 @@ LimitOpt = Annotated[
     typer.Option("--limit", "-n", min=1, help="Most items to print (default: list_limit setting)."),
 ]
 AllOpt = Annotated[bool, typer.Option("--all", help="Print every item, however many.")]
+MineOpt = Annotated[
+    bool, typer.Option("--mine", help="Only items assigned to you through a steward role.")
+]

@@ -13,7 +13,7 @@ import type {
   Revision,
   Schema,
 } from '../types';
-import { revision as buildRevision } from './builders';
+import { assignedTo, revision as buildRevision } from './builders';
 import {
   decodeCursor,
   diffBranches,
@@ -147,6 +147,9 @@ export function createMockApi(options: MockOptions): KeeperApi {
     updated_at: detail.updated_at,
     policy: detail.policy,
     checks: detail.checks,
+    steward_roles: detail.steward_roles,
+    assignees: detail.assignees,
+    assignees_truncated: detail.assignees_truncated,
   });
 
   const nextRevisionId = () => {
@@ -623,7 +626,8 @@ export function createMockApi(options: MockOptions): KeeperApi {
         const items = [...domainOf(id).proposals.values()]
           .map((p) => summary(p.detail))
           .filter((p) => params?.status === undefined || p.status === params.status)
-          .filter((p) => params?.origin === undefined || p.origin === params.origin);
+          .filter((p) => params?.origin === undefined || p.origin === params.origin)
+          .filter((p) => assignedTo(p.assignees ?? [], p.steward_roles ?? [], params?.assigned));
         return Promise.resolve(paginate(items, params?.limit, params?.cursor));
       },
       create: (id, input) => {
@@ -646,6 +650,9 @@ export function createMockApi(options: MockOptions): KeeperApi {
           policy: {},
           checks: [],
           reviews: [],
+          steward_roles: [],
+          assignees: null,
+          assignees_truncated: false,
           approval: {
             protected: false,
             required: 0,
@@ -653,6 +660,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
             approvers: [],
             changes_requested: [],
             satisfied: true,
+            stewards_unavailable: false,
           },
           attempt: null,
         };

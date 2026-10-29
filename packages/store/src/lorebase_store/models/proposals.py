@@ -12,9 +12,11 @@ from sqlalchemy import (
     Index,
     Integer,
     SmallInteger,
+    Text,
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import H32, Base, DomainKey, domain_fk
@@ -55,6 +57,7 @@ class Proposal(Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        Index("ix_proposals_kinds", "kinds", postgresql_using="gin"),
     )
 
     domain_id: Mapped[DomainKey]
@@ -72,6 +75,8 @@ class Proposal(Base):
     policies: Mapped[dict[str, Any] | None]
     idempotency_key: Mapped[str | None]
     updated_at: Mapped[datetime | None]
+    #: Ids of the Kinds the changes touch (design 10.7); null until the first merge attempt.
+    kinds: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
 
 class ProposalReview(Base):

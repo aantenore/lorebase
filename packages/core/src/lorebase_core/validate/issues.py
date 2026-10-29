@@ -59,6 +59,7 @@ class IssueCode(StrEnum):
     SCHEMA_SOURCE_INVALID = "schema.source_invalid"
     SCHEMA_LENS_REFERENCE_UNKNOWN = "schema.lens_reference_unknown"
     SCHEMA_LENS_INVALID = "schema.lens_invalid"
+    SCHEMA_STEWARD_ROLE_UNKNOWN = "schema.steward_role_unknown"
 
     # Data: values (Records and Links)
     VALUE_ATTRIBUTE_UNKNOWN = "value.attribute_unknown"

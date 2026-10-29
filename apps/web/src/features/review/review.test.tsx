@@ -406,3 +406,67 @@ describe('Review merge attempt', () => {
     expect(screen.queryByRole('button', { name: 'Apply resolutions' })).not.toBeInTheDocument();
   });
 });
+
+describe('Review stewards', () => {
+  it('shows steward roles and assignees and filters to the Proposals assigned to me', async () => {
+    const mock = asRemote(createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }), 0);
+    const assigned: (string | undefined)[] = [];
+    const api: KeeperApi = {
+      ...mock,
+      proposals: {
+        ...mock.proposals,
+        list: (domain, params) => {
+          assigned.push(params?.assigned);
+          return mock.proposals.list(domain, params);
+        },
+      },
+    };
+    const user = userEvent.setup();
+    renderApp('/supply/review', testConfig(), api);
+    const table = await screen.findByRole('table', { name: 'Proposals' });
+    const risk = within(table).getByRole('row', { name: /Risk model/ });
+    expect(within(risk).getByText('risk_steward')).toBeInTheDocument();
+    expect(within(risk).getByLabelText('Assignees')).toHaveTextContent(
+      'usr_mock, usr_elena and more',
+    );
+    expect(
+      within(table).getByRole('row', { name: /Contracts batch October/ }),
+    ).not.toHaveTextContent('risk_steward');
+
+    await user.click(screen.getByRole('checkbox', { name: 'Assigned to me' }));
+    await waitFor(() => {
+      expect(assigned).toContain('me');
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole('table', { name: 'Proposals' })).getAllByRole('row'),
+      ).toHaveLength(2);
+    });
+    expect(screen.getByRole('checkbox', { name: 'Assigned to me' })).toBeChecked();
+  });
+
+  it('shows the steward approval line and warns when stewards are unavailable', async () => {
+    const mock = asRemote(createMockApi({ pageSize: 50, searchLimit: 20, maxNodes: 200 }), 0);
+    const api: KeeperApi = {
+      ...mock,
+      proposals: {
+        ...mock.proposals,
+        get: async (...args) => {
+          const detail = await mock.proposals.get(...args);
+          return {
+            ...detail,
+            approval: {
+              ...detail.approval,
+              required_from_stewards: 1,
+              steward_approvals: 0,
+              stewards_unavailable: true,
+            },
+          };
+        },
+      },
+    };
+    renderApp('/supply/review/41', testConfig(), api);
+    expect(await screen.findByText('0 of 1 from stewards')).toBeInTheDocument();
+    expect(screen.getByText(/Not enough stewards can approve this Proposal/)).toBeInTheDocument();
+  });
+});

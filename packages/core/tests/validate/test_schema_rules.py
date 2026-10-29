@@ -905,11 +905,30 @@ def test_reserved_names_are_configurable() -> None:
     assert error_codes(schema, SchemaRules(reserved_attribute_names=frozenset())) == set()
 
 
+def test_unknown_steward_roles_are_warnings() -> None:
+    base = supply_schema()
+    supplier = base.kinds[SUPPLIER].model_copy(update={"stewards": ("risk-analyst",)})
+    schema = base.model_copy(
+        update={
+            "domain": base.domain.model_copy(update={"stewards": ("supply-steward",)}),
+            "kinds": {**base.kinds, SUPPLIER: supplier},
+        }
+    )
+    assert validate_schema(schema) == []
+    found = validate_schema(schema, SchemaRules(known_roles=frozenset({"risk-analyst"})))
+    assert [(i.code, i.path, i.severity) for i in found] == [
+        (C.SCHEMA_STEWARD_ROLE_UNKNOWN, ("domain", "stewards", 0), Severity.WARNING)
+    ]
+    known = frozenset({"risk-analyst", "supply-steward"})
+    assert validate_schema(schema, SchemaRules(known_roles=known)) == []
+
+
 def test_every_schema_code_is_exercised() -> None:
     exercised = {code for _, _, codes, _ in NEGATIVE for code in codes} | {
         C.SCHEMA_DEFAULT_CONFLICT,
         C.SCHEMA_SENSITIVE_ATTRIBUTE,  # test_vault_rules
         C.SCHEMA_SENSITIVITY_INHERITED,  # test_vault_rules
+        C.SCHEMA_STEWARD_ROLE_UNKNOWN,  # a warning: test_unknown_steward_roles_are_warnings
     }
     schema_codes = {code for code in IssueCode if code.value.startswith("schema.")}
     assert schema_codes == exercised

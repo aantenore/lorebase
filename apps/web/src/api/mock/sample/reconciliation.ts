@@ -58,6 +58,9 @@ function candidate(draft: Draft): ReconciliationCandidate {
     claim_count: claims.length,
     signals: {},
     proposal_id: null,
+    steward_roles: [],
+    assignees: null,
+    assignees_truncated: false,
     decision: null,
     decided_by: null,
     decided_at: null,
@@ -83,6 +86,8 @@ export function buildReconciliation(): Record<string, ReconciliationCandidate[]>
         attribute: 'risk_score',
         proposal_id: '44',
         created_at: '2026-10-20T08:01:30Z',
+        steward_roles: ['supplier_steward'],
+        assignees: ['usr_mock'],
         claims: [
           claim('clm_s1025_erp', 30, ERP, '2026-10-12T02:04:00Z'),
           claim('clm_s1025_review', 74, `document:${DOC_REVIEW}`, '2026-10-20T08:01:12Z', {

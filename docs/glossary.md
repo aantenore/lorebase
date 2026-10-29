@@ -106,6 +106,16 @@ A document uploaded under a stable `source_key` (a path, URL or external id) is 
 
 Example: `contracts/brevik-msa.pdf` version 2 no longer says "payment within 60 days": `Contract/C-2231.payment_terms_days = 60` gets a `stale` candidate with signal `evidence_gone`, and stays 60 until Sofia decides.
 
+### Ingestion mode
+How much of a document extraction a person sees, chosen per Domain (and per `source_key` prefix) within bounds the installation sets: `review_all` (nothing is accepted at once), `doubts_only` (the default: confident items are accepted, the doubts wait) or `direct` (Scribe merges the Proposal itself when every item came from deterministic rules and none is pending).
+
+Example: the Domain `supply` sets `direct` for documents keyed `feeds/erp/` and keeps `doubts_only` for everything else; a feed document whose job used a model is capped at `doubts_only`.
+
+### Steward
+A role that looks after part of a Domain: the schema names steward roles on the Domain and per Kind, and the Proposals and reconciliation candidates touching those Kinds are routed to the principals holding them (the assignees), who must also be able to read and act on the work. A steward role grants nothing by itself.
+
+Example: `Supplier` declares `stewards: [risk-analyst]`; a Proposal changing suppliers lists the risk analysts as assignees, `GET .../proposals?assigned=me` shows it to them, and a protected branch may require one of their approvals (`required_approvals_from_stewards`).
+
 ### Lineage
 Where a Record and each of its values came from: Source row, document span, Operation invocation, merge resolution or schema migration, with the Revision that introduced it.
 

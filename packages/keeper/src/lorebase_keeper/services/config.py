@@ -154,14 +154,21 @@ class OperationSettings(SectionModel):
 class ProposalSettings(SectionModel):
     """Proposals, reviews and merges (design 6.10, 10.3).
 
-    A Domain overrides `required_approvals` with its `required_approvals` setting; its
-    `merge_policy` setting holds the merge policy options of new Proposals.
+    A Domain overrides `required_approvals` and `required_approvals_from_stewards` with its
+    settings of the same names; its `merge_policy` setting holds the merge policy options of
+    new Proposals.
     """
 
     required_approvals: int = Field(
         default=1,
         ge=0,
         description="Approvals a Proposal needs before it merges into a protected branch.",
+    )
+    required_approvals_from_stewards: int = Field(
+        default=0,
+        ge=0,
+        description="Of those, approvals that must come from the Proposal's assignees (design "
+        "10.7); the Proposal needs the larger of the two in all. 0 turns the rule off.",
     )
     allow_self_approval: bool = Field(
         default=False,
@@ -457,4 +464,22 @@ class DocumentSettings(SectionModel):
         ge=1,
         description="Longest `source_key` of an upload (the stable identity whose new bytes "
         "are new versions), after trimming surrounding white space.",
+    )
+
+
+class StewardSettings(SectionModel):
+    """Stewards: who looks after which part of a Domain (design 10.7). Steward roles come
+    from the schema; assignees are computed from grants when read."""
+
+    max_assignees_listed: int = Field(
+        default=50,
+        ge=0,
+        description="Assignees listed per Proposal or reconciliation candidate (callers with "
+        "principal.read only); more are counted as assignees_truncated.",
+    )
+    max_grants_scanned: int = Field(
+        default=10000,
+        ge=1,
+        description="Grants of a Domain read to find assignees; beyond, the assignee list and "
+        "the steward approval count stop there.",
     )

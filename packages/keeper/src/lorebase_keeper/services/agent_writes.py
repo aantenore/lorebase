@@ -58,6 +58,7 @@ from lorebase_keeper.services.operations import (
     ExecutionRequest,
     ExecutionStatus,
 )
+from lorebase_keeper.services.stewards import Stewards
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import StaleHeadError
 from lorebase_store.digests import DigestKeys
@@ -677,6 +678,7 @@ async def run(
     check: Check,
     roles_of: Roles,
     emit: Emit,
+    stewards: Stewards | None = None,
 ) -> ExecutionOutcome | AgentWriteOutcome:
     """Run `request` through a task branch and a Proposal after `original` refused it.
 
@@ -811,6 +813,7 @@ async def run(
         emit=emit,
         branch_created=created_branch,
         policy_review=reason == REVIEW_POLICY,
+        stewards=stewards,
     )
 
 
@@ -844,10 +847,11 @@ async def _settle(
     emit: Emit,
     branch_created: bool,
     policy_review: bool,
+    stewards: Stewards | None = None,
 ) -> AgentWriteOutcome:
     """Conflicts, approvals and the merge: the state the response reports."""
     base = _paths(keeper, domain_id)
-    view = await proposals.get(store, domain_id, row.id, keeper.proposals)
+    view = await proposals.get(store, domain_id, row.id, keeper.proposals, stewards=stewards)
     status: Status = "proposed"
     attempt: AttemptSummary | None = None
     blockers: list[str] = []
@@ -879,7 +883,7 @@ async def _settle(
         if attempt.open_conflicts:
             status = "conflicts"
         elif decision.merge and not blockers:
-            merged = await _merge(store, domain_id, keeper, principal, current)
+            merged = await _merge(store, domain_id, keeper, principal, current, stewards)
             if merged is None:
                 blockers = ["approvals-pending"]
             elif merged.head is None:
@@ -958,6 +962,7 @@ async def _merge(
     keeper: KeeperSettings,
     principal: Principal,
     row: ProposalRow,
+    stewards: Stewards | None = None,
 ) -> proposals.MergeOutcome | None:
     """Merge `row`: the outcome (`head` is `None` while Conflicts remain), or `None` when the
     approvals went missing meanwhile."""
@@ -972,9 +977,14 @@ async def _merge(
             message=f"Merge {row.source_ref} (automatic)",
             page_limit=1,
             reconciliation_check=keeper.reconciliation.merge_check,
+            stewards=stewards,
         )
     except ProblemError as error:
-        if error.problem in (proposals.APPROVALS_REQUIRED, proposals.RECONCILIATION_OPEN):
+        if error.problem in (
+            proposals.APPROVALS_REQUIRED,
+            proposals.RECONCILIATION_OPEN,
+            proposals.STEWARDS_UNAVAILABLE,
+        ):
             return None
         raise
     return outcome

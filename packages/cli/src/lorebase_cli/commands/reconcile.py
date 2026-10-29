@@ -9,7 +9,7 @@ import typer
 from lorebase_cli.commands.data import json_argument
 from lorebase_cli.context import AppContext, app_of
 from lorebase_cli.failures import CliError
-from lorebase_cli.options import AllOpt, BranchOpt, DomainOpt, JsonOpt, LimitOpt
+from lorebase_cli.options import AllOpt, BranchOpt, DomainOpt, JsonOpt, LimitOpt, MineOpt
 from lorebase_cli.output import Column
 from lorebase_client import models as m
 
@@ -28,6 +28,8 @@ CANDIDATE_COLUMNS = [
     Column("keys", "keys", lambda keys: ", ".join(keys)),
     Column("attribute", "attribute"),
     Column("claims", "claim_count"),
+    Column("stewards", "steward_roles"),
+    Column("assignees", "assignees"),
     Column("created", "created_at"),
 ]
 
@@ -99,6 +101,7 @@ def reconcile_list(
         str | None,
         typer.Option("--source", help="Only candidates with a claim of this Source identity."),
     ] = None,
+    mine: MineOpt = False,
     domain: DomainOpt = None,
     branch: BranchOpt = None,
     limit: LimitOpt = None,
@@ -118,6 +121,7 @@ def reconcile_list(
             kind=kind,
             attribute=attribute,
             source=source,
+            assigned="me" if mine else None,
         ),
         limit,
         everything,

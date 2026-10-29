@@ -390,10 +390,13 @@ keeper:
       max_string_length: 65536   # characters of a string built during evaluation
       max_record_lookups: 100    # Records and link lists read through record(), links()
       decimal_precision: 34      # significant digits of decimal arithmetic
-  proposals:                     # a Domain overrides required_approvals with its own
-                                 # `required_approvals` setting; its `merge_policy` setting
-                                 # holds the merge policy options of new Proposals
+  proposals:                     # a Domain overrides required_approvals and
+                                 # required_approvals_from_stewards with its own settings of
+                                 # those names; its `merge_policy` setting holds the merge
+                                 # policy options of new Proposals
     required_approvals: 1        # approvals needed to merge into a protected branch
+    required_approvals_from_stewards: 0  # of those, approvals from the Proposal's assignees
+                                 # (stewards, design 10.7); the larger of the two is needed
     allow_self_approval: false   # authors may approve their own Proposals into protected branches
     changes_requested_blocks: true   # an outstanding request_changes review blocks such merges
     auto_close_source_branch: false  # delete the source branch after the merge (never the
@@ -452,6 +455,10 @@ keeper:
     jobs_listed: 20              # extraction jobs shown with a document
     max_text_chars: 2000000      # parsed text served by GET .../documents/{id}/text (cut above)
     max_source_key_chars: 1024   # longest source_key of an upload (new bytes: a new version)
+  stewards:                      # who looks after which part of a Domain (design 10.7); the
+                                 # roles come from the schema, assignees from grants
+    max_assignees_listed: 50     # assignees shown per Proposal or candidate (principal.read)
+    max_grants_scanned: 10000    # grants of a Domain read to find assignees
   trace:                         # agent trace (docs/agent-trace.md): steps of agent sessions
                                  # (query, counts, refs, latency; never values), written off the
                                  # request path to agent_trace_steps. Needs the `database` section
@@ -1204,6 +1211,13 @@ scribe:
                                  # of inference.llm; add 2 once a model is configured
     auto_accept_threshold: 0.9   # items at or above are accepted at once (above 1: none)
     min_confidence: 0.3          # weaker candidates are dropped
+    mode: doubts_only            # ingestion mode of Domains without their own: review_all
+                                 # (nothing accepted at once) or doubts_only; direct is refused
+                                 # here, a Domain's settings.extraction may choose it
+    domain_may_loosen: [mode]    # members a Domain may set looser than these (mode,
+                                 # auto_accept_threshold, min_confidence); []: none
+    direct_merge_protected: true # direct-mode jobs may merge into a protected branch; false:
+                                 # their Proposals wait for approvals
     new_record_kinds: null       # Kinds that may get new Records; null: every natural-key Kind
     value_cue_words: 8           # a rule-found value needs a cue word this close before it
     max_items_per_job: 5000

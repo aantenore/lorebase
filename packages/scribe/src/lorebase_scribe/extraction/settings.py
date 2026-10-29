@@ -11,8 +11,11 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from lorebase_platform.settings import SectionModel
+from lorebase_store.extraction.modes import Ingestion, Installation
 
 Tier = Literal[0, 1, 2]
+IngestionMode = Literal["review_all", "doubts_only", "direct"]
+LoosenableMember = Literal["mode", "auto_accept_threshold", "min_confidence"]
 
 
 class ChunkSettings(SectionModel):
@@ -267,6 +270,23 @@ class ExtractionSettings(SectionModel):
     min_confidence: float = Field(
         default=0.3, ge=0, le=1, description="Candidates below this confidence are dropped."
     )
+    mode: IngestionMode = Field(
+        default="doubts_only",
+        description="Ingestion mode of Domains without their own (design 9.2): review_all "
+        "accepts nothing at once, doubts_only accepts confident items and leaves the doubts "
+        "to reviewers. direct is refused here: a Domain may choose it, never the installation.",
+    )
+    domain_may_loosen: tuple[LoosenableMember, ...] = Field(
+        default=("mode",),
+        description="Members a Domain's settings.extraction may set looser than the values "
+        "above (a looser mode, a lower auto_accept_threshold, a higher min_confidence); "
+        "tightening is always allowed. An empty list forbids loosening.",
+    )
+    direct_merge_protected: bool = Field(
+        default=True,
+        description="Whether a direct-mode job may merge its Proposal into a protected branch; "
+        "off, such Proposals wait for their approvals.",
+    )
     new_record_kinds: tuple[str, ...] | None = Field(
         default=None,
         description="Kind api names that may receive new-Record candidates; null allows every "
@@ -304,3 +324,23 @@ class ExtractionSettings(SectionModel):
     confidence: ConfidenceSettings = Field(default_factory=ConfidenceSettings)
     discovery: DiscoverySettings = Field(default_factory=DiscoverySettings)
     versions: VersionCheckSettings = Field(default_factory=VersionCheckSettings)
+
+    @model_validator(mode="after")
+    def _direct_is_per_domain(self) -> Self:
+        if self.mode == "direct":
+            raise ValueError(
+                "mode: direct is refused for the installation; set it in a Domain's "
+                "settings.extraction (design 9.2)"
+            )
+        return self
+
+    def installation(self) -> Installation:
+        """The bounds Domains' extraction settings are resolved against."""
+        return Installation(
+            base=Ingestion(
+                mode=self.mode,
+                auto_accept_threshold=self.auto_accept_threshold,
+                min_confidence=self.min_confidence,
+            ),
+            domain_may_loosen=frozenset(self.domain_may_loosen),
+        )

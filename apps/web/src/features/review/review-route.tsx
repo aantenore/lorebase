@@ -5,11 +5,12 @@ const route = getRouteApi('/$domain/review/');
 
 /** The Review screen bound to its URL state; loaded lazily by the route. */
 export function ReviewRoute() {
-  const { status, tab } = route.useSearch();
+  const { status, mine, tab } = route.useSearch();
   const navigate = useNavigate();
   return (
     <ReviewPage
       status={status ?? 'open'}
+      mine={mine === true}
       tab={tab ?? 'proposals'}
       onTab={(next) => {
         void navigate({

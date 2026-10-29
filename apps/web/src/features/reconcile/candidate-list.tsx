@@ -3,6 +3,7 @@ import type { Page } from '@/api/types';
 import type { ReconciliationCandidate } from '@/api/reconciliation-types';
 import { common as commonMessages } from '@/messages/common';
 import { reconcile as reconcileMessages } from '@/messages/reconcile';
+import { Stewards } from '@/features/admin/stewards';
 import { Button } from '@/ui/button';
 import { cn } from '@/ui/cn';
 import { Badge, EmptyState } from '@/ui/layout';
@@ -100,6 +101,11 @@ export function CandidateList({
                 }}
               >
                 <span className="text-sm font-medium break-words">{title}</span>
+                <Stewards
+                  roles={candidate.steward_roles}
+                  assignees={candidate.assignees}
+                  truncated={candidate.assignees_truncated}
+                />
                 <span className="flex flex-wrap gap-1">
                   {candidate.status !== 'open' && (
                     <Badge tone={STATUS_TONE[candidate.status]}>

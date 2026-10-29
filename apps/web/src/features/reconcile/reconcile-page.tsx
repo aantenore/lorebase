@@ -4,6 +4,7 @@ import { useKeeperApi } from '@/api/provider';
 import { useCandidateCounts, useCandidates, useSchema } from '@/api/queries';
 import type { CandidateFilter, CandidateType } from '@/api/reconciliation-types';
 import { useScope } from '@/app/scope';
+import { common as commonMessages } from '@/messages/common';
 import { reconcile as reconcileMessages } from '@/messages/reconcile';
 import { Button } from '@/ui/button';
 import { Input, Select } from '@/ui/field';
@@ -56,6 +57,16 @@ function Filters({
   const known = signals.includes(search.signal ?? '') || search.signal === undefined;
   return (
     <FormRow role="group" aria-label={text.filters.label} className="mb-4">
+      <label className="flex items-center gap-2 pb-2 text-sm">
+        <input
+          type="checkbox"
+          checked={search.mine === true}
+          onChange={(event) => {
+            onSearch({ mine: event.target.checked ? true : undefined, candidate: undefined });
+          }}
+        />
+        {commonMessages.stewards.assignedToMe}
+      </label>
       <Select
         className="w-36"
         label={text.filters.status}
@@ -147,8 +158,12 @@ function Queue({ search, onSearch }: ReconcilePageProps) {
     [scope.branch, type, search.kind, search.attribute, search.source],
   );
   const filter = useMemo<CandidateFilter>(
-    () => (status === 'all' ? bulkFilter : { ...bulkFilter, status }),
-    [bulkFilter, status],
+    () => ({
+      ...bulkFilter,
+      ...(status === 'all' ? {} : { status }),
+      ...(search.mine === true ? { assigned: 'me' as const } : {}),
+    }),
+    [bulkFilter, status, search.mine],
   );
   const candidates = useCandidates(scope.domain, filter);
   const loaded = useMemo(
@@ -184,6 +199,7 @@ function Queue({ search, onSearch }: ReconcilePageProps) {
       <BulkBar
         selected={[...selected]}
         filter={bulkFilter}
+        selectedOnly={search.mine === true}
         onDone={() => {
           select(new Set());
         }}
@@ -226,6 +242,7 @@ export function ReconcilePage({ search, onSearch }: ReconcilePageProps) {
     ...(search.kind === undefined ? {} : { kind: search.kind }),
     ...(search.attribute === undefined ? {} : { attribute: search.attribute }),
     ...(search.source === undefined ? {} : { source: search.source }),
+    ...(search.mine === true ? { assigned: 'me' as const } : {}),
   }));
   const counts = useCandidateCounts(scope.domain, countFilters);
   const sweep = useMutation({

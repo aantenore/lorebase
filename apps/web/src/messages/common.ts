@@ -14,4 +14,11 @@ export const common = {
   none: 'None',
   allKinds: 'All Kinds',
   noResults: 'No results.',
+  stewards: {
+    assignedToMe: 'Assigned to me',
+    roles: 'Steward roles',
+    assignees: 'Assignees',
+    more: 'and more',
+    none: 'No steward roles',
+  },
 } as const;

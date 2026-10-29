@@ -2,7 +2,9 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useConflicts, useProposals } from '@/api/queries';
 import type { Proposal, ProposalStatus } from '@/api/types';
 import { useScope, useScopeSearch } from '@/app/scope';
+import { common as commonMessages } from '@/messages/common';
 import { review as reviewMessages } from '@/messages/review';
+import { Stewards } from '@/features/admin/stewards';
 import { Select } from '@/ui/field';
 import { Badge, EmptyState, PageHeader, QueryBoundary, type BadgeTone } from '@/ui/layout';
 import { unresolvedOf } from './conflict-state';
@@ -18,6 +20,7 @@ export const STATUS_TONE: Record<ProposalStatus, BadgeTone> = {
 };
 
 const text = reviewMessages.list;
+const assignedToMe = commonMessages.stewards.assignedToMe;
 
 const STATUS_OPTIONS = (['open', 'merged', 'closed', 'all'] as const).map((value) => ({
   value,
@@ -51,6 +54,11 @@ function ProposalRow({ domain, proposal }: { domain: string; proposal: Proposal 
         >
           {proposal.title}
         </Link>
+        <Stewards
+          roles={proposal.steward_roles}
+          assignees={proposal.assignees}
+          truncated={proposal.assignees_truncated}
+        />
       </TD>
       <TD>{proposal.origin}</TD>
       <TD>{text.branches(proposal.source_ref, proposal.target_ref)}</TD>
@@ -67,17 +75,23 @@ function ProposalRow({ domain, proposal }: { domain: string; proposal: Proposal 
 /** Review: Proposals of the Domain with their Conflict counts. */
 export function ReviewPage({
   status,
+  mine,
   tab,
   onTab,
 }: {
   status: StatusFilter;
+  /** Only the Proposals assigned to the caller. */
+  mine: boolean;
   tab: ReviewTab;
   onTab: (tab: ReviewTab) => void;
 }) {
   const scope = useScope();
   const navigate = useNavigate();
   const scopeSearch = useScopeSearch();
-  const proposals = useProposals(scope.domain, status === 'all' ? undefined : { status });
+  const proposals = useProposals(scope.domain, {
+    ...(status === 'all' ? {} : { status }),
+    ...(mine ? { assigned: 'me' as const } : {}),
+  });
 
   return (
     <>
@@ -94,19 +108,42 @@ export function ReviewPage({
             label: text.tabProposals,
             content: (
               <>
-                <div className="mb-4 w-48 max-w-full">
-                  <Select
-                    label={text.statusLabel}
-                    value={status}
-                    options={STATUS_OPTIONS}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      void navigate({
-                        to: '.',
-                        search: { ...scopeSearch, status: isStatusFilter(next) ? next : 'open' },
-                      });
-                    }}
-                  />
+                <div className="mb-4 flex flex-wrap items-end gap-4">
+                  <div className="w-48 max-w-full">
+                    <Select
+                      label={text.statusLabel}
+                      value={status}
+                      options={STATUS_OPTIONS}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        void navigate({
+                          to: '.',
+                          search: {
+                            ...scopeSearch,
+                            status: isStatusFilter(next) ? next : 'open',
+                            mine: mine ? true : undefined,
+                          },
+                        });
+                      }}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 pb-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={mine}
+                      onChange={(event) => {
+                        void navigate({
+                          to: '.',
+                          search: {
+                            ...scopeSearch,
+                            status: status === 'open' ? undefined : status,
+                            mine: event.target.checked ? true : undefined,
+                          },
+                        });
+                      }}
+                    />
+                    {assignedToMe}
+                  </label>
                 </div>
                 <QueryBoundary query={proposals}>
                   {(page) =>

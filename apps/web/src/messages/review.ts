@@ -265,6 +265,10 @@ export const review = {
     noApproval: 'The target Branch needs no approval.',
     approvals: (approved: number, required: number) =>
       `${approved.toString()} of ${required.toString()} approvals`,
+    fromStewards: (approved: number, required: number) =>
+      `${approved.toString()} of ${required.toString()} from stewards`,
+    stewardsUnavailable:
+      'Not enough stewards can approve this Proposal, so it cannot be merged. Ask an administrator to assign the steward roles.',
     changesRequested: (by: string) => `changes requested by ${by}`,
     approved: 'approved',
     waiting: 'waiting',

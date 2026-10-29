@@ -15,7 +15,7 @@ branch forked before the default branch tagged an Attribute the tags it lacks.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -291,21 +291,34 @@ async def read(store: StoreAccess, domain_id: str, target: ReadTarget) -> Schema
         return await schema_at(session, domain_id, revision, store.runtime)
 
 
+def static_warnings(target: Schema, rules: SchemaRules) -> list[Finding]:
+    """Warnings of static validation (such as `schema.steward_role_unknown` when `rules`
+    name the installation's roles), located like `static_issues`."""
+    return located(target, [i for i in validate_schema(target, rules) if not i.is_error])
+
+
 async def validate(
     store: StoreAccess,
     domain_id: str,
     change: ChangeSetInput,
     revision: ReadTarget,
+    *,
+    known_roles: frozenset[str] | None = None,
+    warnings: list[Finding] | None = None,
 ) -> tuple[list[Finding], list[ElementChange]]:
     """Static issues of a change set against the schema at an authorized Revision, and the
-    element changes it would make. Nothing is written."""
+    element changes it would make. Nothing is written. Warnings are appended to `warnings`
+    when given; `known_roles` (the installation's roles) turns on the steward role check."""
     current = await read(store, domain_id, revision)
     try:
         target = target_schema(current, change)
     except ChangeSetInvalidError as invalid:
         return invalid.issues, []
     _, described = diff_schemas(current, target)
-    return static_issues(target, store.runtime.schema.rules()), described
+    rules = store.runtime.schema.rules()
+    if warnings is not None:
+        warnings.extend(static_warnings(target, replace(rules, known_roles=known_roles)))
+    return static_issues(target, rules), described
 
 
 async def apply(

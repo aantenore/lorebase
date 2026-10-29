@@ -465,11 +465,12 @@ Budget of one Operation expression (ExprLimits)
 
 ### `keeper.proposals`
 
-A Domain overrides required_approvals with its own `required_approvals` setting; its `merge_policy` setting holds the merge policy options of new Proposals
+A Domain overrides required_approvals and required_approvals_from_stewards with its own settings of those names; its `merge_policy` setting holds the merge policy options of new Proposals
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `keeper.proposals.required_approvals` | `1` | approvals needed to merge into a protected branch |
+| `keeper.proposals.required_approvals_from_stewards` | `0` | of those, approvals from the Proposal's assignees (stewards, design 10.7); the larger of the two is needed |
 | `keeper.proposals.allow_self_approval` | `false` | authors may approve their own Proposals into protected branches |
 | `keeper.proposals.changes_requested_blocks` | `true` | an outstanding request_changes review blocks such merges |
 | `keeper.proposals.auto_close_source_branch` | `false` | delete the source branch after the merge (never the default or a protected branch) |
@@ -543,6 +544,15 @@ Accepted file name suffixes and their stored media type
 | `keeper.documents.jobs_listed` | `20` | extraction jobs shown with a document |
 | `keeper.documents.max_text_chars` | `2000000` | parsed text served by GET .../documents/{id}/text (cut above) |
 | `keeper.documents.max_source_key_chars` | `1024` | longest source_key of an upload (new bytes: a new version) |
+
+### `keeper.stewards`
+
+Who looks after which part of a Domain (design 10.7); the roles come from the schema, assignees from grants
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `keeper.stewards.max_assignees_listed` | `50` | assignees shown per Proposal or candidate (principal.read) |
+| `keeper.stewards.max_grants_scanned` | `10000` | grants of a Domain read to find assignees |
 
 ### `keeper.trace`
 
@@ -1601,6 +1611,9 @@ Documents into reviewable Proposals (docs/extraction.md)
 | `scribe.extraction.tiers` | `[0, 1]` | 0 rules, 1 local span and relation models, 2 the chat model of inference.llm; add 2 once a model is configured |
 | `scribe.extraction.auto_accept_threshold` | `0.9` | items at or above are accepted at once (above 1: none) |
 | `scribe.extraction.min_confidence` | `0.3` | weaker candidates are dropped |
+| `scribe.extraction.mode` | `doubts_only` | ingestion mode of Domains without their own: review_all (nothing accepted at once) or doubts_only; direct is refused here, a Domain's settings.extraction may choose it |
+| `scribe.extraction.domain_may_loosen` | `[mode]` | members a Domain may set looser than these (mode, auto_accept_threshold, min_confidence); []: none |
+| `scribe.extraction.direct_merge_protected` | `true` | direct-mode jobs may merge into a protected branch; false: their Proposals wait for approvals |
 | `scribe.extraction.new_record_kinds` | `null` | Kinds that may get new Records; null: every natural-key Kind |
 | `scribe.extraction.value_cue_words` | `8` | a rule-found value needs a cue word this close before it |
 | `scribe.extraction.max_items_per_job` | `5000` |  |

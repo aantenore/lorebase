@@ -41,6 +41,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import lorebase_inference
+from lorebase_core.canonical import hex
 from lorebase_core.expr.sensitivity import Tags
 from lorebase_core.model import Schema, new_ulid
 from lorebase_core.reconcile import ReconcileOptions
@@ -96,6 +97,7 @@ from lorebase_scribe.reconcile.detector import Detector, SemanticStage, effectiv
 from lorebase_scribe.reconcile.extraction import ExtractionCheck
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
 from lorebase_scribe.telemetry import EVIDENCE_WITHHELD, EXTRACTION_ITEMS
+from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
 from lorebase_store.commit import ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
@@ -104,6 +106,7 @@ from lorebase_store.extraction import (
     MaterializeContext,
     Materialized,
     materialize_items,
+    modes,
     refresh_proposal,
 )
 from lorebase_store.jobs import (
@@ -113,6 +116,7 @@ from lorebase_store.jobs import (
 )
 from lorebase_store.materialize import create_branch
 from lorebase_store.materialize.sensitivity import reference_tags
+from lorebase_store.merging import MergeRequest, MergeService
 from lorebase_store.models.enums import ItemDecision, ProposalOrigin, ProposalStatus, RunStatus
 from lorebase_store.reads import similar_titles
 from lorebase_store.repositories import (
@@ -130,6 +134,7 @@ from lorebase_store.repositories import (
     ProposalRepository,
     ProposalRow,
     ProvenanceRepository,
+    RefRepository,
     SchemaSuggestionRepository,
     scope_to_domain,
 )
@@ -380,6 +385,13 @@ class ExtractionReport:
     warnings: list[str] = field(default_factory=list)
     materialized: dict[str, Any] | None = None
     duration_ms: int = 0
+    mode: str = modes.DOUBTS_ONLY
+    """Effective ingestion mode, after the tier cap (design 9.2)."""
+    mode_capped: str | None = None
+    direct_blocked: str | None = None
+    direct_merged: bool = False
+    merged_revision: str | None = None
+    ignored_settings: list[str] = field(default_factory=list)
 
     def count(self, name: str, n: int = 1) -> None:
         self.stats[name] = int(self.stats.get(name, 0)) + n
@@ -401,6 +413,12 @@ class ExtractionReport:
             "warnings": list(self.warnings),
             "materialized": self.materialized,
             "duration_ms": self.duration_ms,
+            "mode": self.mode,
+            "mode_capped": self.mode_capped,
+            "direct_blocked": self.direct_blocked,
+            "direct_merged": self.direct_merged,
+            "merged_revision": self.merged_revision,
+            "ignored_settings": list(self.ignored_settings),
         }
 
 
@@ -476,6 +494,11 @@ class ExtractionRun:
                         f"document {document_id!r} is {row.status}: it is not extracted again"
                     )
                 documents.append(row)
+            installation = self._settings.installation()
+            resolved = [
+                modes.resolve(installation, domain.settings, d.source_key) for d in documents
+            ]
+            ingestion = modes.combine(r.ingestion for r in resolved)
             report = ExtractionReport(
                 job_id=job_id,
                 domain=domain_id,
@@ -484,6 +507,8 @@ class ExtractionRun:
                 target=domain.default_branch,
                 tiers=chosen,
                 warnings=list(models.warnings),
+                mode=ingestion.mode,
+                ignored_settings=sorted({path for r in resolved for path in r.ignored}),
             )
             await ExtractionJobRepository(session, domain_id).insert(
                 ExtractionJobRow(
@@ -503,7 +528,14 @@ class ExtractionRun:
         schema = load_compiled(compiled.compiled)
         try:
             await self._run(
-                domain, schema, compiled.schema_hash, documents, models, report, reference
+                domain,
+                schema,
+                compiled.schema_hash,
+                documents,
+                models,
+                report,
+                reference,
+                ingestion,
             )
         except Exception as error:
             report.duration_ms = int((time.monotonic() - started) * 1000)
@@ -593,7 +625,9 @@ class ExtractionRun:
         models: ExtractionModels,
         report: ExtractionReport,
         reference: Mapping[str, Tags] | None = None,
+        ingestion: modes.Ingestion | None = None,
     ) -> None:
+        ingestion = ingestion or self._settings.installation().base
         ontology = build_ontology(schema, self._settings.new_record_kinds, reference)
         dictionary = await self._dictionary(domain.id, report.target, ontology)
         resolver = Resolver(
@@ -633,7 +667,12 @@ class ExtractionRun:
             job_id=report.job_id,
             principal=self._principal,
             now=self._clock(),
-            settings=self._settings,
+            settings=self._settings.model_copy(
+                update={
+                    "auto_accept_threshold": ingestion.accept_threshold,
+                    "min_confidence": ingestion.min_confidence,
+                }
+            ),
             hold=check.contests if check is not None and check.holds else None,
         )
         for name, count in assembled.stats.items():
@@ -651,6 +690,75 @@ class ExtractionRun:
                     await self._reconcile(session, check, [], None, found, report)
             return
         await self._propose(domain, schema, documents, items, report, check, found)
+        if ingestion.mode == modes.DIRECT:
+            await self._direct(domain, items, report)
+
+    async def _direct(
+        self, domain: Any, items: Sequence[ItemRow], report: ExtractionReport
+    ) -> None:
+        """Merge the Proposal without a person when the job is in `direct` mode (design 9.2):
+        only when every item came from tier 0, none is pending, the target may take it and the
+        merge is clean and not held back by contradictions. Otherwise the reason is recorded
+        and the Proposal waits for review."""
+        if modes.tier_capped([item.tier for item in items]):
+            # Text a model read never reaches a branch without a person (AC-19).
+            report.mode = modes.DOUBTS_ONLY
+            report.mode_capped = report.direct_blocked = modes.BLOCKED_TIER
+            return
+        if report.proposal_id is None:
+            return
+        if report.pending:
+            report.direct_blocked = modes.BLOCKED_PENDING
+            return
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain.id)
+            proposal = await ProposalRepository(session, domain.id).get(
+                report.proposal_id, for_update=True
+            )
+            if proposal is None or proposal.status is not ProposalStatus.OPEN:
+                return
+            target = await RefRepository(session, domain.id).require(report.target)
+            if target.protected and not self._settings.direct_merge_protected:
+                report.direct_blocked = modes.BLOCKED_PROTECTED
+                return
+            result = await MergeService(
+                session, domain.id, runtime=self._runtime, clock=self._clock
+            ).merge(
+                MergeRequest(
+                    proposal=proposal,
+                    actor=self._principal,
+                    policy=domain_merge_policy(domain),
+                    message=f"Merge {proposal.source_ref} (direct ingestion, {report.job_id})",
+                    idempotency_key=report.job_id,
+                    reconciliation_check=None
+                    if self._reconciliation is None
+                    else self._reconciliation.merge_check,
+                )
+            )
+            if result.reconciliation_blocked:
+                report.direct_blocked = modes.BLOCKED_RECONCILIATION
+                return
+            if not result.merged or result.head is None:
+                report.direct_blocked = modes.BLOCKED_CONFLICTS
+                return
+            report.direct_merged = True
+            report.merged_revision = hex(result.head)
+            await AuditRepository(session).append(
+                NewAuditEntry(
+                    actor=self._principal,
+                    action="proposal.merge",
+                    domain_id=domain.id,
+                    target=proposal.id,
+                    details={
+                        "mode": modes.DIRECT_MERGE_MODE,
+                        "job": report.job_id,
+                        "target_branch": report.target,
+                        "result": result.attempt.result,
+                        "revision": report.merged_revision,
+                    },
+                    at=self._clock(),
+                )
+            )
 
     async def _check(
         self, domain: Any, schema: Schema, branch: str, found: _Found

@@ -79,6 +79,7 @@ from lorebase_store.commit.pipeline import (
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.materialize.apply import MaterializedChange, apply_changeset
 from lorebase_store.materialize.background import delete_branch
+from lorebase_store.materialize.rows import PartitionType, parse_partition
 from lorebase_store.materialize.stale import queue_after_tagging
 from lorebase_store.merging.attempts import (
     AttemptComputation,
@@ -238,6 +239,7 @@ class _Computed:
     nodes: dict[bytes, bytes]
     objects: list[EncodedObject]
     commit: _Commit | None
+    kinds: tuple[str, ...] = ()
 
 
 class MergeService:
@@ -405,7 +407,10 @@ class MergeService:
                 prepared = _prepare_commit(
                     store, objects, computation, outcome, request, created_at
                 )
-            return _Computed(computation, store.take_pending(), objects.take_pending(), prepared)
+            kinds = touched_kinds(store, objects, graph, computation, source.head)
+            return _Computed(
+                computation, store.take_pending(), objects.take_pending(), prepared, kinds
+            )
 
         computed = await session.run_sync(compute)
         computation = computed.computation
@@ -475,7 +480,8 @@ class MergeService:
                 attempt,
                 computation,
                 await self._reconciliation_check(request),
-            )
+            ),
+            "kinds": computed.kinds,
         }
         if head is not None:
             changes.update(status=ProposalStatus.MERGED, merged_revision=head)
@@ -692,6 +698,51 @@ def _prepare_commit(
         refresh_kinds=sorted(key for key in schema_keys if key in schema.kinds),
         provenance=provenance,
     )
+
+
+def touched_kinds(
+    store: PgNodeStore,
+    objects: SessionObjectStore,
+    graph: PgRevisionGraph,
+    computation: AttemptComputation,
+    theirs: bytes,
+) -> tuple[str, ...]:
+    """Ids of the Kinds the Proposal's own changes touch (design 10.7): the partitions that
+    differ between the merge base and the source head, Records by their Kind and Links by
+    both ends. A virtual base is not in the graph: the partitions of the merged changes and of
+    the Conflicts stand in for it. The schema partition alone names no Kind."""
+    outcome = computation.outcome
+    theirs_root = graph.root(theirs)
+    tree = Tree.load(store, theirs_root)
+    partitions: set[str]
+    if outcome.virtual_base:
+        partitions = {state.conflict.partition for state in computation.conflicts}
+        if isinstance(outcome, MergedTree):
+            partitions |= {entry.partition for entry in outcome.changes}
+    else:
+        base = {} if outcome.base is None else Tree.load(store, graph.root(outcome.base)).partitions
+        partitions = {
+            name
+            for name in set(tree.partitions) | set(base)
+            if tree.partitions.get(name) != base.get(name)
+        }
+    partitions.discard(PARTITION_SCHEMA)
+    if not partitions:
+        return ()
+    schema = tree_schema_loader(store, objects)(theirs_root)
+    kinds: set[str] = set()
+    for name in partitions:
+        try:
+            found = parse_partition(name)
+        except ValueError:
+            continue
+        if found.type is PartitionType.KIND:
+            kinds.add(found.element_id)
+        elif found.type is PartitionType.RELATION:
+            relation = schema.relations.get(found.element_id)
+            if relation is not None:
+                kinds.update((relation.from_kind, relation.to_kind))
+    return tuple(sorted(kinds))
 
 
 def _summary(computation: AttemptComputation) -> dict[str, Any]:

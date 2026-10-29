@@ -25,6 +25,7 @@ from lorebase_keeper.services.config import (
     SchemaChangeSettings,
     SchemaInferenceSettings,
     SchemaSuggestionSettings,
+    StewardSettings,
 )
 from lorebase_keeper.tracing.config import TraceSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
@@ -282,6 +283,7 @@ class KeeperSettings(SectionModel):
     agent_writes: AgentWriteSettings = Field(default_factory=AgentWriteSettings)
     reconciliation: ReconciliationSettings = Field(default_factory=ReconciliationSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
+    stewards: StewardSettings = Field(default_factory=StewardSettings)
     trace: TraceSettings = Field(default_factory=TraceSettings)
 
     @field_validator("trusted_proxies")

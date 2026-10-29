@@ -135,6 +135,10 @@ class SchemaRules:
     reserved_attribute_names: frozenset[str] = DEFAULT_RESERVED_ATTRIBUTE_NAMES
     allow_expressions: bool = False
     expression_limits: ExprLimits | None = None
+    #: Role names the installation defines (built in and custom). When set, a steward list
+    #: naming another role is a warning (``schema.steward_role_unknown``): roles live in
+    #: configuration and may be added later (design 5.13, 10.7).
+    known_roles: frozenset[str] | None = None
 
 
 class Refs(NamedTuple):
@@ -1184,6 +1188,29 @@ class _Checker:
             if node not in done:
                 visit(node, [])
 
+    def check_stewards(self) -> None:
+        """Steward roles the installation does not define are warnings (design 10.7)."""
+        known = self.rules.known_roles
+        if known is None:
+            return
+        lists: list[tuple[tuple[PathPart, ...], tuple[str, ...] | None, str | None]] = [
+            (("domain", "stewards"), self.schema.domain.stewards, None)
+        ]
+        lists.extend(
+            (("kinds", kind.id, "stewards"), kind.stewards, kind.id)
+            for kind in self.schema.kinds.values()
+        )
+        for path, roles, kind in lists:
+            for index, role in enumerate(roles or ()):
+                if role not in known:
+                    self.add(
+                        IssueCode.SCHEMA_STEWARD_ROLE_UNKNOWN,
+                        (*path, index),
+                        f"steward role {role!r} is not defined by this installation",
+                        severity=Severity.WARNING,
+                        kind=kind,
+                    )
+
     # Sources -------------------------------------------------------------------------
 
     def check_lens(self, lens: Lens) -> None:
@@ -1333,6 +1360,7 @@ class _Checker:
             self.check_source(source)
         for lens in self.schema.lenses.values():
             self.check_lens(lens)
+        self.check_stewards()
         if self.rules.allow_expressions:
             self.check_expressions()
         return self.issues

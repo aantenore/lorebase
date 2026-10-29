@@ -1540,6 +1540,7 @@ $ lorebase proposal list [OPTIONS]
 * `--source <str>`: Only Proposals from this branch.
 * `--target <str>`: Only Proposals into this branch.
 * `--author <str>`: Only Proposals by this principal.
+* `--mine`: Only items assigned to you through a steward role.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
 * `--all`: Print every item, however many.
@@ -1773,6 +1774,7 @@ $ lorebase reconcile list [OPTIONS]
 * `--kind <str>`: Only this Kind (api name).
 * `--attribute <str>`: Only this Attribute (api name; needs --kind).
 * `--source <str>`: Only candidates with a claim of this Source identity.
+* `--mine`: Only items assigned to you through a steward role.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
 * `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]

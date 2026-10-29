@@ -31,6 +31,7 @@ const wire: S['ReconciliationCandidateOut'] = {
     { claim_id: 'c3', value: null, evidence: { document_id: 'doc_1', quote: 'no offsets' } },
   ],
   claim_count: 3,
+  assignees_truncated: false,
   signals: { unit: true },
   proposal_id: null,
   decision: null,

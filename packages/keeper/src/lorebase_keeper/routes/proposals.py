@@ -3,7 +3,7 @@
 | Method and path | Permission | Notes |
 |-----------------|------------|-------|
 | `POST .../proposals` | `proposal.create` (source), `data.read` (target) | 201; key replays 200 |
-| `GET .../proposals` | `data.read` | filters `status`, `origin`, `source`, `target`, `author` |
+| `GET .../proposals` | `data.read` | filters status, origin, source, target, author, assigned |
 | `GET .../proposals/{p}` | `data.read` (both branches) | reviews, approvals, latest attempt |
 | `PATCH .../proposals/{p}` | author, else `proposal.merge` | title, description |
 | `POST .../proposals/{p}/close` | author, else `proposal.merge` | attempts abandoned |
@@ -27,6 +27,10 @@ Conflict listing, a resolution naming a Conflict outside it is refused (403), an
 attempts they return list only the Conflicts the caller may read. Proposal details count only
 those Conflicts too, and the merge check of a caller who does not see every Conflict states no
 count.
+
+Every Proposal carries its steward roles and, for callers with `principal.read`, its
+assignees (`services.stewards`, design 10.7); `assigned=me|any|none` keeps the Proposals the
+caller is an assignee of, those with steward roles, or those without.
 """
 
 from __future__ import annotations
@@ -75,10 +79,17 @@ from lorebase_keeper.services.proposal_reads import (
     visible_scope,
 )
 from lorebase_keeper.services.reads import ReadGuard
+from lorebase_keeper.services.stewards import (
+    Assigned,
+    AssigneeList,
+    Stewards,
+    proposal_subject,
+)
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError, ValidationFailedError
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
+from lorebase_store.reads import head_schema
 from lorebase_store.repositories import (
     ConflictRow,
     MaterializedRepository,
@@ -104,7 +115,8 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
         "model": Problem,
         "description": "Proposal not open (`proposal-not-open`), approvals missing "
         "(`approvals-required`), Conflicts remain (`merge-conflicts`, with `attempt`), open "
-        "contradictions block it (`reconciliation-open`, with `candidates`), a branch is gone "
+        "contradictions block it (`reconciliation-open`, with `candidates`), too few stewards "
+        "can approve it (`stewards-unavailable`), a branch is gone "
         "(`proposal-branch-missing`), duplicate or idempotency conflict.",
     },
     422: {"model": ValidationProblem, "description": "Invalid request or resolution."},
@@ -159,6 +171,16 @@ class ProposalOut(BaseModel):
     merged_revision: str | None
     policy: dict[str, Any] = Field(description="Merge policy options differing from defaults.")
     checks: list[CheckOut]
+    steward_roles: list[str] = Field(
+        default_factory=list,
+        description="Roles that look after the Kinds the changes touch (design 10.7).",
+    )
+    assignees: list[str] | None = Field(
+        default=None,
+        description="Principals who can review it as stewards (callers with principal.read "
+        "only; at most keeper.stewards.max_assignees_listed).",
+    )
+    assignees_truncated: bool = False
 
 
 class ReviewIn(BaseModel):
@@ -183,6 +205,19 @@ class ApprovalOut(BaseModel):
     approvers: list[str]
     changes_requested: list[str]
     satisfied: bool
+    required_from_stewards: int | None = Field(
+        default=None,
+        description="Approvals that must come from the Proposal's assignees (protection rule "
+        "required_approvals_from_stewards); null when the rule does not apply.",
+    )
+    steward_approvals: int | None = Field(
+        default=None, description="Approvals given by assignees, when the rule applies."
+    )
+    stewards_unavailable: bool = Field(
+        default=False,
+        description="Steward roles are declared but fewer principals can approve than the "
+        "rule requires (merge refused with stewards-unavailable).",
+    )
 
 
 class ResolutionIn(BaseModel):
@@ -346,11 +381,24 @@ def _checks(
             )
         )
     if approval is not None and approval.protected:
+        rule = approval.stewards
+        steward_text = ""
+        if rule is not None and rule.roles:
+            steward_text = (
+                f"; stewards unavailable: {rule.assignees} of {rule.required} needed"
+                if rule.unavailable
+                else f"; {len(rule.approvers)} of {rule.required} from stewards"
+            )
         checks.append(
             CheckOut(
                 name="approvals",
-                status="passed" if approval.satisfied else "pending",
+                status="passed"
+                if approval.satisfied
+                else "failed"
+                if rule is not None and rule.unavailable
+                else "pending",
                 message=f"{len(approval.approvers)} of {approval.required} approval(s)"
+                + steward_text
                 + (
                     f"; changes requested by {', '.join(approval.changes_requested)}"
                     if approval.changes_requested
@@ -361,10 +409,64 @@ def _checks(
     return checks
 
 
+@dataclass(frozen=True)
+class _Assignment:
+    """Steward roles, shown assignees and whether the caller is an assignee."""
+
+    roles: tuple[str, ...]
+    assignees: AssigneeList
+    mine: bool
+
+
+async def _assignments(
+    store: StoreDep,
+    stewards: Stewards,
+    principal: Any,
+    domain_id: str,
+    rows: list[ProposalRow],
+) -> dict[str, _Assignment]:
+    """The steward assignment of each Proposal, by the schema of its target's head."""
+    schemas: dict[str, Schema | None] = {}
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        for target in sorted({row.target_ref for row in rows}):
+            head = await head_schema(session, domain_id, target, runtime=store.runtime)
+            schemas[target] = None if head is None else head.schema
+    found: dict[str, _Assignment] = {}
+    for row in rows:
+        subject = proposal_subject(schemas[row.target_ref], row.kinds, row.target_ref)
+        found[row.id] = _Assignment(
+            roles=subject.roles,
+            assignees=await stewards.listing(principal, domain_id, subject),
+            mine=await stewards.is_assignee(principal, domain_id, subject),
+        )
+    return found
+
+
+def _stewards(auth: Any, keeper: KeeperSettings) -> Stewards:
+    return Stewards(auth, keeper.stewards)
+
+
 def _proposal(
-    row: ProposalRow, approval: service.Approval | None = None, *, counted: bool = True
+    row: ProposalRow,
+    approval: service.Approval | None = None,
+    *,
+    counted: bool = True,
+    assignment: _Assignment | None = None,
 ) -> ProposalOut:
+    shown = (
+        {}
+        if assignment is None
+        else {
+            "steward_roles": list(assignment.roles),
+            "assignees": None
+            if assignment.assignees.ids is None
+            else list(assignment.assignees.ids),
+            "assignees_truncated": assignment.assignees.truncated,
+        }
+    )
     return ProposalOut(
+        **shown,
         id=row.id,
         title=row.title,
         description=row.description,
@@ -388,6 +490,7 @@ def _review(row: ReviewRow) -> ReviewOut:
 
 
 def _approval(approval: service.Approval) -> ApprovalOut:
+    rule = approval.stewards
     return ApprovalOut(
         protected=approval.protected,
         required=approval.required,
@@ -395,6 +498,9 @@ def _approval(approval: service.Approval) -> ApprovalOut:
         approvers=list(approval.approvers),
         changes_requested=list(approval.changes_requested),
         satisfied=approval.satisfied,
+        required_from_stewards=None if rule is None else rule.required,
+        steward_approvals=None if rule is None else len(rule.approvers),
+        stewards_unavailable=rule is not None and rule.unavailable,
     )
 
 
@@ -604,9 +710,11 @@ def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
     )
 
 
-def _detail(view: service.ProposalView, scope: ConflictScope) -> ProposalDetailOut:
+def _detail(
+    view: service.ProposalView, scope: ConflictScope, assignment: _Assignment | None = None
+) -> ProposalDetailOut:
     """`view`, whose attempt `service.scoped` limited to `scope`."""
-    base = _proposal(view.proposal, view.approval, counted=scope.everything)
+    base = _proposal(view.proposal, view.approval, counted=scope.everything, assignment=assignment)
     return ProposalDetailOut(
         **base.model_dump(),
         reviews=[_review(r) for r in view.reviews],
@@ -715,6 +823,7 @@ async def create_proposal(
         keeper.proposals,
         idempotency_key=idempotency_key,
         reconciliation_check=keeper.reconciliation.merge_check,
+        stewards=_stewards(auth, keeper),
     )
     proposal = created.view.proposal
     annotate(
@@ -732,7 +841,11 @@ async def create_proposal(
         f"{keeper.api_prefix}/domains/{domain_id}/proposals/{proposal.id}"
     )
     scope = await visible_scope(guard, proposal)
-    return _detail(await service.scoped(store, domain_id, created.view, scope), scope)
+    stewards = _stewards(auth, keeper)
+    assigned = await _assignments(store, stewards, principal, domain_id, [proposal])
+    return _detail(
+        await service.scoped(store, domain_id, created.view, scope), scope, assigned[proposal.id]
+    )
 
 
 @router.get(PROPOSALS, summary="List Proposals", responses=_ERRORS)
@@ -741,13 +854,23 @@ async def list_proposals(
     store: StoreDep,
     params: PageParamsDep,
     guard: DataRead,
+    auth: AuthDep,
+    keeper: KeeperSettingsDep,
     status: ProposalStatus | None = None,
     origin: ProposalOrigin | None = None,
     source: Annotated[str | None, Query(description="Source branch.")] = None,
     target: Annotated[str | None, Query(description="Target branch.")] = None,
     author: str | None = None,
+    assigned: Annotated[
+        Assigned | None,
+        Query(
+            description="`me`: Proposals the caller is an assignee of; `any`: with steward "
+            "roles; `none`: without (design 10.7)."
+        ),
+    ] = None,
 ) -> Page[ProposalOut]:
-    """Proposals the caller may read, newest first."""
+    """Proposals the caller may read, newest first. With `assigned`, a page may hold fewer
+    items than asked while `next_cursor` is set."""
     await guard.precheck()
     after = None
     if params.position is not None:
@@ -774,11 +897,25 @@ async def list_proposals(
         if more and rows
         else None
     )
+    readable = await readable_proposals(guard, rows)
+    stewards = _stewards(auth, keeper)
+    assignments = await _assignments(store, stewards, guard.principal, domain_id, readable)
     items = [
-        _proposal(r, counted=(await visible_scope(guard, r)).everything)
-        for r in await readable_proposals(guard, rows)
+        _proposal(
+            r, counted=(await visible_scope(guard, r)).everything, assignment=assignments[r.id]
+        )
+        for r in readable
+        if _passes(assignments[r.id], assigned)
     ]
     return Page[ProposalOut](items=items, next_cursor=next_cursor)
+
+
+def _passes(assignment: _Assignment, assigned: Assigned | None) -> bool:
+    if assigned is None:
+        return True
+    if assigned == "me":
+        return assignment.mine
+    return bool(assignment.roles) == (assigned == "any")
 
 
 @router.get(PROPOSAL, summary="Get a Proposal", responses=_ERRORS)
@@ -788,11 +925,16 @@ async def get_proposal(
     store: StoreDep,
     keeper: KeeperSettingsDep,
     guard: DataRead,
+    auth: AuthDep,
 ) -> ProposalDetailOut:
-    """The Proposal with its reviews, approval state and latest merge attempt."""
+    """The Proposal with its reviews, approval state, latest merge attempt and stewards."""
     scope = await _readable(store, guard, domain_id, proposal_id)
-    view = await service.get(store, domain_id, proposal_id, keeper.proposals)
-    return _detail(await service.scoped(store, domain_id, view, scope), scope)
+    stewards = _stewards(auth, keeper)
+    view = await service.get(store, domain_id, proposal_id, keeper.proposals, stewards=stewards)
+    assigned = await _assignments(store, stewards, guard.principal, domain_id, [view.proposal])
+    return _detail(
+        await service.scoped(store, domain_id, view, scope), scope, assigned[view.proposal.id]
+    )
 
 
 async def _author_or_merger(
@@ -832,6 +974,7 @@ async def update_proposal(
         keeper.proposals,
         title=body.title,
         description=body.description,
+        stewards=_stewards(auth, keeper),
     )
     annotate(
         request,
@@ -857,7 +1000,9 @@ async def close_proposal(
 ) -> ProposalDetailOut:
     """Close without merging; the merge attempt is discarded and the target is unchanged."""
     await _author_or_merger(request, auth, principal, store, domain_id, proposal_id)
-    view = await service.close(store, domain_id, proposal_id, keeper.proposals)
+    view = await service.close(
+        store, domain_id, proposal_id, keeper.proposals, stewards=_stewards(auth, keeper)
+    )
     released = await agent_writes.release_branch(store, domain_id, view.proposal, keeper)
     annotate(request, action="proposal.close", target=proposal_id, branch_deleted=released)
     scope = await visible_scope(guard, view.proposal)
@@ -888,6 +1033,7 @@ async def review_proposal(
         keeper.proposals,
         verdict=body.verdict,
         comment=body.comment,
+        stewards=_stewards(auth, keeper),
     )
     annotate(request, action="proposal.review", target=proposal_id, verdict=body.verdict.value)
     return ReviewResult(review=_review(row), approval=_approval(view.approval))
@@ -938,6 +1084,7 @@ async def merge_proposal(
                 auth.authorizer, principal, domain_id, old, new
             ),
             reconciliation_check=keeper.reconciliation.merge_check,
+            stewards=_stewards(auth, keeper),
         )
     except CommitError as error:
         raise await _store_problem(

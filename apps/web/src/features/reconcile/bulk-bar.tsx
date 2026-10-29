@@ -31,10 +31,13 @@ const POLICIES: readonly ReconciliationPolicy[] = [
 export function BulkBar({
   selected,
   filter,
+  selectedOnly = false,
   onDone,
 }: {
   selected: string[];
   filter: Omit<CandidateFilter, 'status'>;
+  /** Keeper's bulk filter cannot narrow by assignment: only a selection is offered. */
+  selectedOnly?: boolean;
   onDone: () => void;
 }) {
   const scope = useScope();
@@ -56,12 +59,13 @@ export function BulkBar({
     },
   });
 
-  const empty = target === 'selected' && selected.length === 0;
+  const effective: Scope = selectedOnly ? 'selected' : target;
+  const empty = effective === 'selected' && selected.length === 0;
   const submit = (dryRun: boolean) => {
     setAttempted(true);
     if (reason.trim() === '' || empty) return;
     run.mutate({
-      ...(target === 'selected' ? { ids: selected } : { filter }),
+      ...(effective === 'selected' ? { ids: selected } : { filter }),
       choice: action,
       ...(action === 'policy' ? { policy } : {}),
       reason: reason.trim(),
@@ -84,10 +88,10 @@ export function BulkBar({
         <Select
           className="w-56"
           label={text.bulk.scope}
-          value={target}
+          value={effective}
           options={[
             { value: 'selected', label: text.bulk.scopeSelected(selected.length) },
-            { value: 'filter', label: text.bulk.scopeFilter },
+            ...(selectedOnly ? [] : [{ value: 'filter', label: text.bulk.scopeFilter }]),
           ]}
           onChange={(event) => {
             setTarget(event.target.value === 'filter' ? 'filter' : 'selected');

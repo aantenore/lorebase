@@ -5,7 +5,7 @@
  * JSON on the wire, so they are typed here and read defensively by `./live/reconciliation.ts`.
  */
 import type { components } from './generated/keeper';
-import type { JsonValue, PageParams } from './types';
+import type { AssignedFilter, JsonValue, PageParams } from './types';
 
 type S = components['schemas'];
 
@@ -63,6 +63,8 @@ export interface CandidateFilter {
   attribute?: string;
   /** Source identity of one of the claims. */
   source?: string;
+  /** Only the candidates the caller (`me`), somebody or nobody can decide as steward. */
+  assigned?: AssignedFilter;
 }
 
 export interface CandidateListParams extends PageParams, CandidateFilter {}
