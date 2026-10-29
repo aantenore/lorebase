@@ -31,7 +31,7 @@ import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
 import { previewDerivation, previewExpressions } from './previews';
-import { createReconciliationMock } from './reconciliation';
+import type { ReconciliationDeps, ReconciliationMock } from './reconciliation';
 import { createSourcesMock } from './sources';
 import { createSuggestionsMock } from './suggestions';
 import { createTraceMock } from './trace';
@@ -219,8 +219,20 @@ export function createMockApi(options: MockOptions): KeeperApi {
   });
 
   // A decision writes on its Branch, or on a copy proposed back into it when the Branch is
-  // protected or the decision always needs review (duplicate merges).
-  const reconciliation = createReconciliationMock({
+  // protected or the decision always needs review (duplicate merges). The queue and its sample
+  // candidates load on first use, so they stay out of the main chunk.
+  let reconciliationMock: Promise<ReconciliationMock> | undefined;
+  const loadReconciliation = () =>
+    (reconciliationMock ??= import('./reconciliation').then(({ createReconciliationMock }) =>
+      createReconciliationMock(reconciliationDeps),
+    ));
+  type ReconciliationApi = KeeperApi['reconciliation'];
+  const lazyReconciliation = <K extends keyof ReconciliationApi>(name: K): ReconciliationApi[K] =>
+    (async (...args: unknown[]) => {
+      const { api } = await loadReconciliation();
+      return (api[name] as (...a: unknown[]) => Promise<unknown>)(...args);
+    }) as ReconciliationApi[K];
+  const reconciliationDeps: ReconciliationDeps = {
     exists: (id) => domains.has(id),
     defaultBranch: (id) => domainOf(id).domain.default_branch,
     branchData: (id, name) => branchOf(domainOf(id), name),
@@ -256,7 +268,7 @@ export function createMockApi(options: MockOptions): KeeperApi {
       });
       return { revision, proposal: opened.id, branch: name };
     },
-  });
+  };
 
   const requireOperation = (data: BranchData, name: string) => {
     const operation = data.schema.operations.find((o) => o.api_name === name);
@@ -654,12 +666,12 @@ export function createMockApi(options: MockOptions): KeeperApi {
         return Promise.resolve(summary(detail));
       },
       // A copy, as over the wire: the review form changes the stored Proposal in place.
-      get: (id, proposal) => {
+      get: async (id, proposal) => {
         const detail = structuredClone(proposalOf(domainOf(id), proposal).detail);
-        const check = reconciliation.checkFor(id, proposal);
+        const check = (await loadReconciliation()).checkFor(id, proposal);
         const checks = detail.checks.filter((c) => c.name !== 'reconciliation');
         detail.checks = check === null ? checks : [...checks, check];
-        return Promise.resolve(detail);
+        return detail;
       },
       diff: (id, proposal) => {
         const domain = domainOf(id);
@@ -821,7 +833,15 @@ export function createMockApi(options: MockOptions): KeeperApi {
       },
     },
     suggestions: suggestions.api,
-    reconciliation: reconciliation.api,
+    reconciliation: {
+      list: lazyReconciliation('list'),
+      get: lazyReconciliation('get'),
+      resolve: lazyReconciliation('resolve'),
+      dismiss: lazyReconciliation('dismiss'),
+      reopen: lazyReconciliation('reopen'),
+      resolveMany: lazyReconciliation('resolveMany'),
+      sweep: lazyReconciliation('sweep'),
+    },
     admin: admin.api,
   };
   return mock;
