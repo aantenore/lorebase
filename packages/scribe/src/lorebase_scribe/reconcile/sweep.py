@@ -172,6 +172,12 @@ class ReconcileSweep:
             options, principal=self._principal, clock=self._clock, semantic=self._semantic
         )
         schema = load_compiled(compiled.compiled)
+        if detector.semantic:
+            async with self._sessions() as session, session.begin():
+                await scope_to_domain(session, domain_id)
+                await detector.load_tags(
+                    session, schema, domain_id=domain_id, branch=name, runtime=self._runtime
+                )
         with tracer.start_as_current_span(
             "scribe.reconcile_sweep",
             attributes={"lorebase.domain": domain_id, "lorebase.branch": name},

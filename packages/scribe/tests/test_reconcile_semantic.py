@@ -116,6 +116,10 @@ def _draft(first: str, second: str, attribute_id: str = "att_text") -> Candidate
     )
 
 
+TEXT = Attribute(
+    id=new_id(IdPrefix.ATTRIBUTE), api_name="text", type=TypeSpec.of(AttributeType.TEXT)
+)
+SHARED: dict[str, Any] = {"attributes": {"att_text": TEXT, "att_other": TEXT}, "tags": {}}
 SAME = {"blue door": [1.0, 0.0], "a door painted blue": [0.99, 0.141], "red door": [0.0, 1.0]}
 
 
@@ -129,7 +133,7 @@ async def test_similarity_and_equivalence_are_signals_and_null_raises_all() -> N
     model = Vectors(SAME)
     stage = EmbeddingSemanticStage(_models(model))
     close, apart = _draft("blue door", "a door painted blue"), _draft("blue door", "red door")
-    kept = await stage.review([close, apart], ON)
+    kept = await stage.review([close, apart], ON, **SHARED)
     assert [d.fingerprint for d in kept] == [close.fingerprint, apart.fingerprint]
     assert kept[0].signals["similarity"] == pytest.approx(0.99, abs=0.01)
     assert kept[0].signals["equivalent"] is True
@@ -141,14 +145,14 @@ async def test_above_the_equivalence_threshold_a_draft_is_dropped() -> None:
     options = ReconcileOptions(semantic={"enabled": True, "equivalence_threshold": 0.95})
     stage = EmbeddingSemanticStage(_models(Vectors(SAME)))
     close, apart = _draft("blue door", "a door painted blue"), _draft("blue door", "red door")
-    kept = await stage.review([close, apart], options)
+    kept = await stage.review([close, apart], options, **SHARED)
     assert [d.fingerprint for d in kept] == [apart.fingerprint]
 
 
 async def test_model_failures_give_no_signal() -> None:
     draft = _draft("blue door", "red door")
     failing = EmbeddingSemanticStage(_models(Vectors(SAME, fail=True)))
-    assert await failing.review([draft], ON) == [draft]
+    assert await failing.review([draft], ON, **SHARED) == [draft]
 
     def broken() -> Any:
         raise InferenceError("no provider")
@@ -156,7 +160,7 @@ async def test_model_failures_give_no_signal() -> None:
     unavailable = EmbeddingSemanticStage(
         EmbeddingModels(InferenceSettings(), dims=2, factory=broken)
     )
-    assert await unavailable.review([draft], ON) == [draft]
+    assert await unavailable.review([draft], ON, **SHARED) == [draft]
 
 
 async def test_the_judge_adds_a_label_through_the_cache_and_its_budget() -> None:
@@ -165,10 +169,10 @@ async def test_the_judge_adds_a_label_through_the_cache_and_its_budget() -> None
     stage = EmbeddingSemanticStage(
         _models(Vectors(SAME)), chat=lambda: judge, chat_model="fake:judge", cache=cache
     )
-    (draft,) = await stage.review([_draft("blue door", "red door")], options)
+    (draft,) = await stage.review([_draft("blue door", "red door")], options, **SHARED)
     assert draft.signals["judge"] == {"label": "contradiction", "score": 0.8, "model": "fake:judge"}
     # The same question again (texts either way round) is answered by the cache.
-    (again,) = await stage.review([_draft("red door", "blue door", "att_other")], options)
+    (again,) = await stage.review([_draft("red door", "blue door", "att_other")], options, **SHARED)
     assert again.signals["judge"] == draft.signals["judge"]
     assert judge.calls == 1
     assert stage.tokens == 10
@@ -176,11 +180,11 @@ async def test_the_judge_adds_a_label_through_the_cache_and_its_budget() -> None
     # Past the budget nothing more is asked; a failing or invalid judge gives no label.
     spent = EmbeddingSemanticStage(_models(Vectors(SAME)), chat=lambda: judge, max_tokens=10)
     spent.tokens = 10
-    (plain,) = await spent.review([_draft("blue door", "red door")], options)
+    (plain,) = await spent.review([_draft("blue door", "red door")], options, **SHARED)
     assert "judge" not in plain.signals
     for bad in (Judge(None, fail=True), Judge({"contradicts": "yes", "score": 2})):
         stage = EmbeddingSemanticStage(_models(Vectors(SAME)), chat=functools.partial(_same, bad))
-        (draft,) = await stage.review([_draft("blue door", "red door")], options)
+        (draft,) = await stage.review([_draft("blue door", "red door")], options, **SHARED)
         assert "judge" not in draft.signals
         assert draft.signals["similarity"] == 0.0
 
@@ -214,41 +218,116 @@ def _attribute(attribute_id: str, type_: AttributeType, **extra: Any) -> Attribu
     )
 
 
-async def test_the_detector_reviews_text_values_and_counts_what_is_filtered(
+def _summary(schema: Schema) -> Attribute:
+    kind = schema.kind_by_api_name("Part")
+    assert kind is not None
+    summary = kind.attribute_by_api_name("summary")
+    assert summary is not None
+    assert summary.type.name is AttributeType.TEXT
+    assert not summary.sensitivity
+    return summary
+
+
+async def _tagged(
+    detector: Detector,
+    schema: Schema,
     monkeypatch: pytest.MonkeyPatch,
+    reference: dict[str, Any] | None = None,
+) -> None:
+    """Load the detector's tags with `reference` as the default branch's."""
+
+    async def tags(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return reference or {}
+
+    monkeypatch.setattr(detector_module, "reference_tags", tags)
+    await detector.load_tags(
+        object(),  # type: ignore[arg-type]
+        schema,
+        domain_id="dom_1",
+        branch="feature",
+        runtime=object(),  # type: ignore[arg-type]
+    )
+
+
+async def test_the_detector_reviews_text_values_and_counts_what_is_filtered(
+    monkeypatch: pytest.MonkeyPatch, supply_schema: Schema
 ) -> None:
     monkeypatch.setattr(detector_module, "ReconciliationCandidateRepository", Repository)
     Repository.upserts = []
     options = ReconcileOptions(semantic={"enabled": True, "equivalence_threshold": 0.95})
-    stage = EmbeddingSemanticStage(_models(Vectors(SAME)))
+    model = Vectors(SAME)
+    stage = EmbeddingSemanticStage(_models(model))
     detector = Detector(options, principal="svc", clock=lambda: NOW, semantic=stage)
-    text = _attribute("att_text", AttributeType.TEXT)
+    text = _summary(supply_schema)
     plain = _attribute("att_name", AttributeType.STRING)
     raised = [
-        Raised(_draft("blue door", "a door painted blue"), text),
-        Raised(_draft("blue door", "red door"), text),
+        Raised(_draft("blue door", "a door painted blue", text.id), text),
+        Raised(_draft("blue door", "red door", text.id), text),
         Raised(_draft("blue door", "a door painted blue", "att_name"), plain),
     ]
+    # Without the effective tags nothing is sent to a model.
+    report = await detector.store(object(), "dom_1", raised)  # type: ignore[arg-type]
+    assert report.as_dict() == {"raised": 3}
+    assert model.calls == []
+
+    Repository.upserts = []
+    await _tagged(detector, supply_schema, monkeypatch)
     report = await detector.store(object(), "dom_1", raised)  # type: ignore[arg-type]
     assert report.as_dict() == {"filtered": 1, "raised": 2}
     stored = [d for d, _ in Repository.upserts]
-    assert [d.attribute_id for d in stored] == ["att_text", "att_name"]
+    assert [d.attribute_id for d in stored] == [text.id, "att_name"]
     assert "similarity" in stored[0].signals
     assert stored[1].signals == {}  # a string Attribute is not reviewed
 
     class Broken:
-        async def review(self, *_args: Any) -> list[CandidateDraft]:
+        async def review(self, *_args: Any, **_kwargs: Any) -> list[CandidateDraft]:
             raise RuntimeError("bug")
 
     Repository.upserts = []
     detector = Detector(options, principal="svc", clock=lambda: NOW, semantic=Broken())
+    await _tagged(detector, supply_schema, monkeypatch)
     report = await detector.store(object(), "dom_1", raised[:1])  # type: ignore[arg-type]
     assert report.as_dict() == {"raised": 1}
 
     # Off for the Domain: the stage is not asked.
     off = ReconcileOptions(stages=[Stage.IDENTITY, Stage.VALUES, Stage.NORMALIZE])
     detector = Detector(off, principal="svc", clock=lambda: NOW, semantic=Broken())
-    assert (await detector.store(object(), "dom_1", raised[:1])).as_dict() == {"raised": 1}  # type: ignore[arg-type]
+    await _tagged(detector, supply_schema, monkeypatch)
+    found = await detector.store(object(), "dom_1", raised[:1])  # type: ignore[arg-type]
+    assert found.as_dict() == {"raised": 1}
+
+
+async def test_sensitive_and_vault_values_are_sent_to_no_model(
+    monkeypatch: pytest.MonkeyPatch, supply_schema: Schema
+) -> None:
+    monkeypatch.setattr(detector_module, "ReconciliationCandidateRepository", Repository)
+    text = _summary(supply_schema)
+    draft = _draft("blue door", "red door", text.id)
+    cases: list[tuple[Attribute, dict[str, Any] | None]] = [
+        (text, {text.id: frozenset({"confidential"})}),  # tagged on the default branch only
+        (text.model_copy(update={"sensitivity": ("pii",)}), None),
+        (text.model_copy(update={"vault": True}), None),
+    ]
+    for attribute, reference in cases:
+        Repository.upserts = []
+        model = Vectors(SAME)
+        stage = EmbeddingSemanticStage(_models(model))
+        detector = Detector(ON, principal="svc", clock=lambda: NOW, semantic=stage)
+        await _tagged(detector, supply_schema, monkeypatch, reference)
+        await detector.store(object(), "dom_1", [Raised(draft, attribute)])  # type: ignore[arg-type]
+        assert model.calls == []
+        assert Repository.upserts[0][0].signals == {}
+
+    # The stage checks again on its own: a tagged or unknown Attribute is not embedded.
+    model = Vectors(SAME)
+    stage = EmbeddingSemanticStage(_models(model))
+    cases_: list[tuple[dict[str, Attribute], dict[str, Any]]] = [
+        ({text.id: text}, {text.id: frozenset({"pii"})}),
+        ({}, {}),
+    ]
+    for attributes, tags in cases_:
+        assert await stage.review([draft], ON, attributes=attributes, tags=tags) == [draft]
+    assert model.calls == []
 
 
 async def test_vault_attributes_are_stored_without_quotes(
@@ -303,7 +382,7 @@ def test_a_domain_overrides_only_what_it_may() -> None:
 
 def test_semantic_members_follow_the_operator_and_bad_members_are_dropped_alone() -> None:
     found = _override(ON, semantic={"judge": True, "equivalence_threshold": 0.97})
-    assert found.semantic.judge
+    assert not found.semantic.judge  # model spend: the operator's only
     assert found.semantic.equivalence_threshold == 0.97
     assert not _override(ON, semantic={"enabled": False}).runs(Stage.SEMANTIC)
     mixed = _override(ON, hold_auto_accept=False, stale={"max_age": "soon"}, merge_check="off")

@@ -592,6 +592,9 @@ class ExtractionRun:
         writes = self._runtime.settings.writes
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain.id)
+            await detector.load_tags(
+                session, schema, domain_id=domain.id, branch=branch, runtime=self._runtime
+            )
             return await ExtractionCheck.gather(
                 detector,
                 MaterializedRepository(session, domain.id, branch, writes=writes),

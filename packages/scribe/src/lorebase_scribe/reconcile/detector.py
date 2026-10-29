@@ -12,7 +12,9 @@ options in force for a Domain (`scribe.reconciliation`, overridden by the Domain
 - The semantic stage (d, `lorebase_scribe.reconcile.semantic`): a `SemanticStage` given to the
   detector sees the `contradiction` and `superseded` drafts of `text` Attributes the cheaper
   stages raised, when `semantic.enabled` and the stage is listed, and returns the drafts to
-  store (with signals added); those it leaves out are counted `filtered`.
+  store (with signals added); those it leaves out are counted `filtered`. Values of vault
+  Attributes and of Attributes with any effective sensitivity tag (`load_tags`) are never
+  sent to a model.
 - Candidates of vault Attributes are stored without evidence quotes (`vault=True`).
 - `obsolete` is set only by `retire`, with the reason the disagreement left the data.
 """
@@ -28,7 +30,8 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lorebase_core.model import Attribute, Kind, new_ulid
+from lorebase_core.expr.sensitivity import Tags, effective_tags
+from lorebase_core.model import Attribute, Kind, Schema, new_ulid
 from lorebase_core.reconcile import (
     CANDIDATE_ID_PREFIX,
     CandidateDraft,
@@ -47,10 +50,12 @@ from lorebase_core.reconcile import (
 )
 from lorebase_core.types import AttributeType
 from lorebase_scribe.telemetry import RECONCILIATION_CANDIDATES
+from lorebase_store.materialize.sensitivity import reference_tags
 from lorebase_store.repositories.reconciliation_candidates import (
     CandidateRow,
     ReconciliationCandidateRepository,
 )
+from lorebase_store.runtime import StoreRuntime
 
 log = logging.getLogger("lorebase.scribe.reconcile")
 
@@ -74,15 +79,14 @@ DOMAIN_MEMBERS: Mapping[str, frozenset[str] | None] = {
             "equivalence_threshold",
             "equivalent_similarity",
             "duplicate_threshold",
-            "judge",
         }
     ),
     "stale": frozenset({"max_age"}),
 }
 """What a Domain's `reconciliation` setting may override: whole members (None) or the listed
 members of a section. Files (`normalize.units_file`), work limits (`sweep_*`,
-`max_claims_per_candidate`, `duplicates.max_pairs_per_kind`, `normalize.max_quantity_length`)
-and `merge_check` are the operator's only."""
+`max_claims_per_candidate`, `duplicates.max_pairs_per_kind`, `normalize.max_quantity_length`),
+`merge_check` and `semantic.judge` (model spend) are the operator's only."""
 
 
 def _domain_override(base: ReconcileOptions, raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -159,14 +163,33 @@ def compared(attribute: Attribute | None) -> bool:
     return attribute is not None and not attribute.is_derived and not attribute.in_vault
 
 
+def shareable(attribute: Attribute | None, tags: Mapping[str, Tags]) -> bool:
+    """Whether values of `attribute` may be sent to a model: not in the vault and without any
+    sensitivity tag, its own or effective (`tags`, as extraction reads them). Unknown
+    Attributes are not."""
+    return (
+        attribute is not None
+        and not attribute.in_vault
+        and not attribute.sensitivity
+        and not tags.get(attribute.id)
+    )
+
+
 class SemanticStage(Protocol):
-    """Stage d of design 10.6: compares competing ``text`` values (the detector hands it the
-    value candidates of ``text`` Attributes only) and returns the drafts to store, each with
-    its signals (``equivalent``, ``similarity``, ``judge``) added; it may drop a draft only
-    above ``semantic.equivalence_threshold``."""
+    """Stage d of design 10.6: compares competing ``text`` values and returns the drafts to
+    store, each with its signals (``equivalent``, ``similarity``, ``judge``) added; it may drop
+    a draft only above ``semantic.equivalence_threshold``. The detector hands it the value
+    candidates of ``text`` Attributes that are `shareable` only; `attributes` (by id) and
+    `tags` (effective sensitivity tags by Attribute id) let it check that again: a draft whose
+    Attribute is not shareable must go on unchanged, its values sent to no model."""
 
     async def review(
-        self, drafts: Sequence[CandidateDraft], options: ReconcileOptions
+        self,
+        drafts: Sequence[CandidateDraft],
+        options: ReconcileOptions,
+        *,
+        attributes: Mapping[str, Attribute],
+        tags: Mapping[str, Tags],
     ) -> list[CandidateDraft]: ...
 
 
@@ -217,6 +240,7 @@ class Detector:
         self._clock = clock
         self._semantic = semantic
         self._units: UnitTable | None = None
+        self._tags: Mapping[str, Tags] | None = None
 
     @property
     def units(self) -> UnitTable:
@@ -230,6 +254,28 @@ class Detector:
 
     def runs(self, stage: Stage) -> bool:
         return self.options.runs(stage)
+
+    @property
+    def semantic(self) -> bool:
+        """Whether the semantic stage runs for these options."""
+        return self._semantic is not None and self.runs(Stage.SEMANTIC)
+
+    async def load_tags(
+        self,
+        session: AsyncSession,
+        schema: Schema,
+        *,
+        domain_id: str,
+        branch: str,
+        runtime: StoreRuntime,
+    ) -> None:
+        """Read the effective sensitivity tags of `schema` on `branch` (its own, the default
+        branch's and those carried through Derivations), which the semantic stage needs: without
+        them it sends nothing to a model. A no-op when the stage does not run."""
+        if not self.semantic:
+            return
+        reference = await reference_tags(session, domain_id, branch, runtime=runtime)
+        self._tags = effective_tags(schema, reference)
 
     def verdict(
         self,
@@ -307,9 +353,13 @@ class Detector:
         report: ReconcileReport,
     ) -> list[CandidateDraft]:
         """The drafts after the semantic stage: it sees the value candidates of `text`
-        Attributes only; those it leaves out are counted `filtered`. A stage that fails leaves
-        the drafts as they were."""
+        Attributes that are `shareable` only (none before `load_tags`); those it leaves out are
+        counted `filtered`. A stage that fails leaves the drafts as they were."""
         if self._semantic is None or not self.runs(Stage.SEMANTIC):
+            return drafts
+        tags = self._tags
+        if tags is None:
+            log.warning("semantic reconciliation stage skipped: sensitivity tags not loaded")
             return drafts
         reviewed = [
             d
@@ -317,11 +367,15 @@ class Detector:
             if d.type in _REVIEWED
             and (attribute := attributes.get(d.fingerprint)) is not None
             and attribute.type.name is AttributeType.TEXT
+            and shareable(attribute, tags)
         ]
         if not reviewed:
             return drafts
+        by_id = {a.id: a for d in reviewed if (a := attributes.get(d.fingerprint)) is not None}
         try:
-            returned = await self._semantic.review(reviewed, self.options)
+            returned = await self._semantic.review(
+                reviewed, self.options, attributes=by_id, tags=tags
+            )
         except Exception as error:
             log.warning("semantic reconciliation stage failed, no signal: %s", error)
             return drafts
@@ -385,4 +439,5 @@ __all__ = [
     "document_identity",
     "effective_options",
     "new_candidate_id",
+    "shareable",
 ]
