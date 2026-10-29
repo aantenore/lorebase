@@ -48,6 +48,8 @@ type Step =
   | { wait: number }
   | { waitFor: string; timeoutMs?: number }
   | { fill: string; text: string }
+  /** Choose the option `value` of the select labelled `label`. */
+  | { select: string; value: string }
   | { check: string; nth: number }
   | { upload: string; files: string[]; from?: 'sourceSample' };
 
@@ -67,6 +69,14 @@ interface Shot {
   /** Viewport height for a long screen; the width is always the one of CONFIG. */
   height?: number;
 }
+
+/** The Settings picture starts at the Domain section and reaches past the ingestion form. */
+const SETTINGS_STEPS: Step[] = [
+  { waitFor: 'form[aria-label="Ingestion settings"]' },
+  { scrollToTop: 'h2:text-is("Domain")', offset: 24 },
+  { wait: 300 },
+];
+const SETTINGS_HEIGHT = 1100;
 
 /** The sample Domain of the mock; a live run uses a Domain it loads itself. */
 const MOCK_DOMAIN = 'supply';
@@ -303,6 +313,9 @@ const MOCK_SHOTS = (domain: string): Shot[] => [
     name: 'settings',
     path: `/${domain}/settings`,
     ready: 'text=Appearance',
+    // From the Domain section down, so its ingestion settings are in the picture.
+    steps: SETTINGS_STEPS,
+    height: SETTINGS_HEIGHT,
   },
   {
     name: 'explorer-home-dark',
@@ -350,7 +363,13 @@ const LIVE_SHOTS = (domain: string, open: string): Shot[] => [
       { scrollToTop: 'text=Merge attempt', offset: 80 },
     ],
   },
-  { name: 'settings', path: `/${domain}/settings`, ready: 'text=Appearance' },
+  {
+    name: 'settings',
+    path: `/${domain}/settings`,
+    ready: 'text=Appearance',
+    steps: SETTINGS_STEPS,
+    height: SETTINGS_HEIGHT,
+  },
   {
     name: 'explorer-home-dark',
     path: `/${domain}/explorer`,
@@ -431,6 +450,9 @@ const DEMO_SHOTS = (domain: string, ids: DemoIds): Shot[] => [
     ready: '.cm-content',
     steps: [
       { click: '[role=tab]:has-text("Sources")' },
+      // The Source the sample file belongs to, whatever order the schema lists Sources in.
+      { select: 'Source', value: 'approved.suppliers' },
+      { waitFor: 'text=Transforms of legal_name' },
       { upload: 'input[type=file]', files: ['suppliers.csv'], from: 'sourceSample' },
       { waitFor: 'table[aria-label^="Sample rows"]' },
       { scrollToTop: 'table[aria-label^="Sample rows"]', offset: 260 },
@@ -501,7 +523,13 @@ const DEMO_SHOTS = (domain: string, ids: DemoIds): Shot[] => [
     needsWebGL: true,
     graph: '[role=img][aria-label^="Records touched"]',
   },
-  { name: 'settings', path: `/${domain}/settings`, ready: 'text=Appearance' },
+  {
+    name: 'settings',
+    path: `/${domain}/settings`,
+    ready: 'text=Appearance',
+    steps: SETTINGS_STEPS,
+    height: SETTINGS_HEIGHT,
+  },
   {
     name: 'explorer-home-dark',
     path: `/${domain}/explorer`,
@@ -605,6 +633,8 @@ async function runStep(page: Page, step: Step): Promise<void> {
       .locator(step.waitFor)
       .first()
       .waitFor({ state: 'visible', timeout: step.timeoutMs ?? CONFIG.readyTimeoutMs });
+  } else if ('select' in step) {
+    await page.getByLabel(step.select, { exact: true }).first().selectOption(step.value);
   } else if ('fill' in step) {
     await page.locator(step.fill).first().fill(step.text);
   } else if ('check' in step) {

@@ -28,7 +28,6 @@ import {
 import { createAdminMock } from './admin';
 import { buildContext } from './context';
 import { createDocumentsMock } from './documents';
-import { extractionProblems, ignoredSettings, rejectedSettings } from './domain-settings';
 import { decide, listItems } from './extraction';
 import { createInferenceMock } from './inference';
 import { assertShape, attemptOf, runMerge } from './merge';
@@ -337,32 +336,12 @@ export function createMockApi(options: MockOptions): KeeperApi {
         return Promise.resolve(created.domain);
       },
       get: (id) => Promise.resolve(withCan(domainOf(id).domain)),
-      update: (id, input) => {
+      // Loaded on first use: the mock ships in the main chunk, and only Settings writes here.
+      update: async (id, input) => {
         const data = domainOf(id);
-        const changed = input.settings ?? {};
-        const unknown = Object.keys(changed).filter((key) => key !== 'extraction');
-        const issues = [
-          ...unknown.map((key) => ({
-            pointer: `/body/settings/${key}`,
-            message: 'not a setting this request may change (extraction)',
-            code: 'invalid',
-          })),
-          ...('extraction' in changed ? extractionProblems(changed['extraction']) : []),
-        ];
-        if (issues.length > 0) return Promise.reject(rejectedSettings(issues));
-        const settings: Record<string, unknown> = { ...data.domain.settings };
-        for (const [key, value] of Object.entries(changed)) {
-          if (value === null) delete settings[key];
-          else settings[key] = value;
-        }
-        data.domain = {
-          ...data.domain,
-          ...(input.display_name == null ? {} : { display_name: input.display_name }),
-          ...(input.description === undefined ? {} : { description: input.description }),
-          settings,
-          ignored_settings: ignoredSettings(settings),
-        };
-        return Promise.resolve(withCan(data.domain));
+        const { updateDomain } = await import('./domain-settings');
+        data.domain = updateDomain(data.domain, input);
+        return withCan(data.domain);
       },
     },
 
