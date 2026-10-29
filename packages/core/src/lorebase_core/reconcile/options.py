@@ -72,6 +72,12 @@ class NormalizeOptions(_Options):
         ge=0,
         description="Relative difference under which two numbers are equal; 0 compares exactly.",
     )
+    max_quantity_length: int = Field(
+        default=64,
+        ge=1,
+        le=1024,
+        description="Longer values are not read as quantities (a number and a unit).",
+    )
     negation_words: tuple[str, ...] = Field(
         default=("not", "no", "never", "without"),
         description="Words whose removal makes two values equal: such pairs are kept and "

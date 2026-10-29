@@ -1306,6 +1306,7 @@ scribe:
     normalize:                   # string and text values; never changes a stored value
       units_file: null           # YAML table of units replacing the one shipped with lorebase_core
       numeric_tolerance: 0.0     # relative difference under which numbers are equal
+      max_quantity_length: 64    # longer values are not read as a number and a unit
       negation_words: [not, "no", never, without]   # equal without them: marked negation
     semantic:                    # embeddings of competing text values (needs inference.embeddings)
       enabled: false             # true also needs the stage in `stages`
