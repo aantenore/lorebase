@@ -1,14 +1,20 @@
 import { Link } from '@tanstack/react-router';
-import type { ExtractionItem } from '@/api/extraction-types';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { extraction as extractionMessages } from '@/messages/extraction';
 
-/** Jump from an item to its quote in the document viewer. */
+/** What links to a passage: an extraction item, or any value read from a document. */
+export interface EvidenceSource {
+  /** The extraction item the viewer highlights, when there is one. */
+  id?: string | undefined;
+  evidence: { document_id: string; start: number; end: number } | null;
+}
+
+/** Jump from an item (or another value read from a document) to its quote in the viewer. */
 export function EvidenceLink({
   item,
   children = extractionMessages.evidence.view,
 }: {
-  item: ExtractionItem;
+  item: EvidenceSource;
   children?: string;
 }) {
   const scope = useScope();

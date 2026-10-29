@@ -95,6 +95,15 @@ import type {
   SourceExpressionPreviewRequest,
 } from './preview-types';
 import type { SourceRun, SourceRunListParams, SourceSyncQueued } from './sources-types';
+import type {
+  CandidateListParams,
+  ReconciliationCandidate,
+  ReconciliationDecision,
+  ResolveCandidateInput,
+  ResolveCandidatesInput,
+  ResolveCandidatesResult,
+  SweepQueued,
+} from './reconciliation-types';
 
 /**
  * The Keeper surface the web app uses (design 11.1). One interface, two
@@ -302,6 +311,32 @@ export interface KeeperApi {
      * Proposal. An invalid change set is a 422 `ValidationError` and nothing changes.
      */
     decide(domain: DomainId, input: DecideSuggestionsInput): Promise<DecideSuggestionsResult>;
+  };
+
+  readonly reconciliation: {
+    /**
+     * Candidates of a Branch, newest first (`GET .../reconciliation`), by type, status, Kind,
+     * Attribute and source identity. Kind-narrowed grants see the candidates of their Kinds only.
+     */
+    list(domain: DomainId, params?: CandidateListParams): Promise<Page<ReconciliationCandidate>>;
+    get(domain: DomainId, candidate: string): Promise<ReconciliationCandidate>;
+    /**
+     * Decides a candidate (`POST .../resolution`): a claim, the current value, a custom value, a
+     * policy, or for duplicates a merge. The write takes the Operation path: on a protected
+     * Branch it opens a Proposal (`proposed`) and the candidate stays open until it merges.
+     */
+    resolve(
+      domain: DomainId,
+      candidate: string,
+      input: ResolveCandidateInput,
+    ): Promise<ReconciliationDecision>;
+    dismiss(domain: DomainId, candidate: string, reason: string): Promise<ReconciliationDecision>;
+    /** Reopens a dismissed candidate. */
+    reopen(domain: DomainId, candidate: string, reason: string): Promise<ReconciliationDecision>;
+    /** One policy or a dismissal over listed or filtered open candidates, each decided on its own. */
+    resolveMany(domain: DomainId, input: ResolveCandidatesInput): Promise<ResolveCandidatesResult>;
+    /** Queues a detection sweep of a Branch (the default one when absent) for Scribe. */
+    sweep(domain: DomainId, branch?: BranchName): Promise<SweepQueued>;
   };
 
   readonly sources: {

@@ -5,6 +5,7 @@ import { useProposal, useProposalDiff } from '@/api/queries';
 import { useScope, useScopeSearch } from '@/app/scope';
 import { ItemsPanel } from '@/features/extraction/items-panel';
 import { common as commonMessages } from '@/messages/common';
+import { reconcile as reconcileMessages } from '@/messages/reconcile';
 import { review as reviewMessages } from '@/messages/review';
 import { Button } from '@/ui/button';
 import { Badge, EmptyState, PageHeader, QueryBoundary, Section } from '@/ui/layout';
@@ -53,6 +54,27 @@ function DiffSection({ domain, proposal }: { domain: string; proposal: string })
         }
       </QueryBoundary>
     </Section>
+  );
+}
+
+/** Links to the open reconciliation candidates a `reconciliation` check names. */
+function CheckCandidates({ domain, ids }: { domain: string; ids: string[] }) {
+  const scopeSearch = useScopeSearch();
+  return (
+    <ul aria-label={reconcileMessages.check.candidates} className="flex flex-wrap gap-2">
+      {ids.map((id) => (
+        <li key={id}>
+          <Link
+            to="/$domain/reconcile"
+            params={{ domain }}
+            search={{ ...scopeSearch, candidate: id }}
+            className="font-mono text-xs text-accent hover:underline"
+          >
+            {id}
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -122,6 +144,9 @@ export function ProposalPage({
                       <span>{check.name}</span>
                       {typeof check.message === 'string' && (
                         <span className="min-w-0 break-words text-muted">{check.message}</span>
+                      )}
+                      {(check.candidates ?? []).length > 0 && (
+                        <CheckCandidates domain={scope.domain} ids={check.candidates ?? []} />
                       )}
                     </li>
                   ))}

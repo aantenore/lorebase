@@ -9,6 +9,7 @@ import type { PrincipalListParams } from './admin-types';
 import { useConfig } from '@/config/context';
 import type { DocumentDetail, ExtractionItem } from './extraction-types';
 import { useKeeperApi } from './provider';
+import type { CandidateFilter, ReconciliationCandidate } from './reconciliation-types';
 import type { SourceRunListParams } from './sources-types';
 import type { DecideSuggestionsInput, SuggestionFilter } from './suggestion-types';
 import type {
@@ -92,6 +93,13 @@ export const keys = {
     ['keeper', 'suggestions', domain, filter ?? null] as const,
   sourceRuns: (domain: DomainId, params: SourceRunListParams | undefined) =>
     ['keeper', 'source-runs', domain, params ?? null] as const,
+  reconciliation: (domain: DomainId) => ['keeper', 'reconciliation', domain] as const,
+  candidates: (domain: DomainId, filter: CandidateFilter) =>
+    ['keeper', 'reconciliation', domain, 'list', filter] as const,
+  candidateCount: (domain: DomainId, filter: CandidateFilter) =>
+    ['keeper', 'reconciliation', domain, 'count', filter] as const,
+  candidate: (domain: DomainId, id: string) =>
+    ['keeper', 'reconciliation', domain, 'candidate', id] as const,
   apiKeys: (domain: DomainId) => ['keeper', 'api-keys', domain] as const,
   principals: (params: PrincipalListParams | undefined) =>
     ['keeper', 'principals', params ?? null] as const,
@@ -481,5 +489,73 @@ export function useDecideSuggestions(domain: DomainId) {
         queryClient.invalidateQueries({ queryKey: keys.branches(domain) }),
       ]);
     },
+  });
+}
+
+// ------------------------------------------------------------ Reconciliation
+
+/** Candidates matching `filter`, newest first, one page more each time `fetchNextPage` is called. */
+export function useCandidates(domain: DomainId, filter: CandidateFilter) {
+  const api = useKeeperApi();
+  const { reconciliation } = useConfig();
+  return useInfiniteQuery({
+    queryKey: keys.candidates(domain, filter),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      api.reconciliation.list(domain, {
+        ...filter,
+        limit: reconciliation.pageSize,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.next_cursor,
+  });
+}
+
+/** How many candidates match each filter, read up to `countLimit`; `more` when there are others. */
+export function useCandidateCounts(domain: DomainId, filters: CandidateFilter[]) {
+  const api = useKeeperApi();
+  const { reconciliation } = useConfig();
+  return useQueries({
+    queries: filters.map((filter) => ({
+      queryKey: keys.candidateCount(domain, filter),
+      queryFn: async () => {
+        const page = await api.reconciliation.list(domain, {
+          ...filter,
+          limit: reconciliation.countLimit,
+        });
+        return { count: page.items.length, more: page.next_cursor !== null };
+      },
+    })),
+  });
+}
+
+export function useCandidate(domain: DomainId, id: string | null) {
+  const api = useKeeperApi();
+  return useQuery({
+    queryKey: keys.candidate(domain, id ?? ''),
+    queryFn: () => api.reconciliation.get(domain, id ?? ''),
+    enabled: id !== null,
+  });
+}
+
+/**
+ * The open candidates of one Record. Keeper filters by Kind, not by key: the first
+ * `countLimit` open candidates of the Kind are read and matched on their keys here.
+ */
+export function useRecordCandidates(
+  domain: DomainId,
+  branch: BranchName,
+  kind: string,
+  key: string,
+) {
+  const api = useKeeperApi();
+  const { reconciliation } = useConfig();
+  const filter: CandidateFilter = { branch, kind, status: 'open' };
+  return useQuery({
+    queryKey: [...keys.candidates(domain, filter), 'first', reconciliation.countLimit],
+    queryFn: () => api.reconciliation.list(domain, { ...filter, limit: reconciliation.countLimit }),
+    // A grant without `data.read` on the Branch answers 403 again when asked again.
+    retry: false,
+    select: (page): ReconciliationCandidate[] => page.items.filter((c) => c.keys.includes(key)),
   });
 }

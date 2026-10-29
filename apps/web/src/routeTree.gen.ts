@@ -16,6 +16,7 @@ import { Route as DomainAgentActivityRouteImport } from './routes/$domain.agent-
 import { Route as DomainCanvasRouteImport } from './routes/$domain.canvas'
 import { Route as DomainExploreRouteImport } from './routes/$domain.explore'
 import { Route as DomainModelerRouteImport } from './routes/$domain.modeler'
+import { Route as DomainReconcileRouteImport } from './routes/$domain.reconcile'
 import { Route as DomainRetrievalLabRouteImport } from './routes/$domain.retrieval-lab'
 import { Route as DomainSettingsRouteImport } from './routes/$domain.settings'
 import { Route as DomainSourcesRouteImport } from './routes/$domain.sources'
@@ -60,6 +61,11 @@ const DomainExploreRoute = DomainExploreRouteImport.update({
 const DomainModelerRoute = DomainModelerRouteImport.update({
   id: '/modeler',
   path: '/modeler',
+  getParentRoute: () => DomainRoute,
+} as any)
+const DomainReconcileRoute = DomainReconcileRouteImport.update({
+  id: '/reconcile',
+  path: '/reconcile',
   getParentRoute: () => DomainRoute,
 } as any)
 const DomainRetrievalLabRoute = DomainRetrievalLabRouteImport.update({
@@ -121,6 +127,7 @@ export interface FileRoutesByFullPath {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/reconcile': typeof DomainReconcileRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/reconcile': typeof DomainReconcileRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/$domain/canvas': typeof DomainCanvasRoute
   '/$domain/explore': typeof DomainExploreRoute
   '/$domain/modeler': typeof DomainModelerRoute
+  '/$domain/reconcile': typeof DomainReconcileRoute
   '/$domain/retrieval-lab': typeof DomainRetrievalLabRoute
   '/$domain/settings': typeof DomainSettingsRoute
   '/$domain/sources': typeof DomainSourcesRoute
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/explore'
     | '/$domain/modeler'
+    | '/$domain/reconcile'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
@@ -200,6 +210,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/explore'
     | '/$domain/modeler'
+    | '/$domain/reconcile'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
@@ -219,6 +230,7 @@ export interface FileRouteTypes {
     | '/$domain/canvas'
     | '/$domain/explore'
     | '/$domain/modeler'
+    | '/$domain/reconcile'
     | '/$domain/retrieval-lab'
     | '/$domain/settings'
     | '/$domain/sources'
@@ -286,6 +298,13 @@ declare module '@tanstack/react-router' {
       path: '/modeler'
       fullPath: '/$domain/modeler'
       preLoaderRoute: typeof DomainModelerRouteImport
+      parentRoute: typeof DomainRoute
+    }
+    '/$domain/reconcile': {
+      id: '/$domain/reconcile'
+      path: '/reconcile'
+      fullPath: '/$domain/reconcile'
+      preLoaderRoute: typeof DomainReconcileRouteImport
       parentRoute: typeof DomainRoute
     }
     '/$domain/retrieval-lab': {
@@ -366,6 +385,7 @@ interface DomainRouteChildren {
   DomainCanvasRoute: typeof DomainCanvasRoute
   DomainExploreRoute: typeof DomainExploreRoute
   DomainModelerRoute: typeof DomainModelerRoute
+  DomainReconcileRoute: typeof DomainReconcileRoute
   DomainRetrievalLabRoute: typeof DomainRetrievalLabRoute
   DomainSettingsRoute: typeof DomainSettingsRoute
   DomainSourcesRoute: typeof DomainSourcesRoute
@@ -383,6 +403,7 @@ const DomainRouteChildren: DomainRouteChildren = {
   DomainCanvasRoute: DomainCanvasRoute,
   DomainExploreRoute: DomainExploreRoute,
   DomainModelerRoute: DomainModelerRoute,
+  DomainReconcileRoute: DomainReconcileRoute,
   DomainRetrievalLabRoute: DomainRetrievalLabRoute,
   DomainSettingsRoute: DomainSettingsRoute,
   DomainSourcesRoute: DomainSourcesRoute,

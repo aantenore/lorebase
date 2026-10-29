@@ -41,6 +41,13 @@ import {
   suggestionDecideBody,
   suggestionQuery,
 } from './live/suggestions';
+import {
+  bulkBody,
+  candidateQuery,
+  mapCandidate,
+  mapDecision,
+  resolveBody,
+} from './live/reconciliation';
 import { splitRecordRef } from './refs';
 import type { DocumentText, UploadDocumentInput } from './extraction-types';
 import type { FilePreview } from './inference-types';
@@ -618,6 +625,50 @@ export function createHttpApi(options: HttpAdapterOptions): KeeperApi {
             `${d(domain)}/schema/suggestions:decide`,
             suggestionDecideBody(input),
           ),
+        ),
+    },
+
+    reconciliation: {
+      list: async (domain, params) => {
+        const page = await get<S['Page_ReconciliationCandidateOut_']>(
+          `${d(domain)}/reconciliation`,
+          { ...candidateQuery(params), ...pageParams(params) },
+        );
+        return { items: page.items.map(mapCandidate), next_cursor: page.next_cursor ?? null };
+      },
+      get: async (domain, candidate) =>
+        mapCandidate(
+          await get<S['ReconciliationCandidateOut']>(
+            `${d(domain)}/reconciliation/${enc(candidate)}`,
+          ),
+        ),
+      resolve: async (domain, candidate, input) =>
+        mapDecision(
+          await post<S['ReconciliationDecisionOut']>(
+            `${d(domain)}/reconciliation/${enc(candidate)}/resolution`,
+            resolveBody(input),
+          ),
+        ),
+      dismiss: async (domain, candidate, reason) =>
+        mapDecision(
+          await post<S['ReconciliationDecisionOut']>(
+            `${d(domain)}/reconciliation/${enc(candidate)}/dismissal`,
+            { reason },
+          ),
+        ),
+      reopen: async (domain, candidate, reason) =>
+        mapDecision(
+          await post<S['ReconciliationDecisionOut']>(
+            `${d(domain)}/reconciliation/${enc(candidate)}/reopen`,
+            { reason },
+          ),
+        ),
+      resolveMany: (domain, input) =>
+        post<S['ReconciliationBulkOut']>(`${d(domain)}/reconciliation:resolve`, bulkBody(input)),
+      sweep: (domain, branch) =>
+        post<S['ReconciliationSweepOut']>(
+          `${d(domain)}/reconciliation/sweeps`,
+          branch === undefined ? {} : { branch },
         ),
     },
 

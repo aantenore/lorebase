@@ -114,6 +114,10 @@ const plant = kind(
     attr('plant', 'name', 'string', { required: true, searchable: 'A' }),
     attr('plant', 'country', 'string', { indexed: true }),
     attr('plant', 'city', 'string', { searchable: 'C' }),
+    attr('plant', 'logistics_note', 'text', {
+      description: 'Access, storage and delivery notes from site surveys.',
+      constraints: { max_length: 240 },
+    }),
   ],
   {
     description: 'A manufacturing site that consumes Parts.',
@@ -136,7 +140,10 @@ const contract = kind(
     attr('contract', 'incoterm', 'enum', {
       constraints: { enum_values: ['DAP', 'DDP', 'EXW', 'FCA'] },
     }),
-    attr('contract', 'payment_terms_days', 'integer', { constraints: { min: 0 } }),
+    {
+      ...attr('contract', 'payment_terms_days', 'integer', { constraints: { min: 0 } }),
+      valid_time: true,
+    },
   ],
   {
     description: 'A framework agreement with a Supplier.',
@@ -352,18 +359,21 @@ function mainData(): BranchData {
         name: 'Torino Assembly',
         country: 'IT',
         city: 'Torino',
+        logistics_note: 'Rail terminal 5 km from the gate.',
       }),
       record('Plant', 'GLW', {
         plant_code: 'GLW',
         name: 'Gliwice Works',
         country: 'PL',
         city: 'Gliwice',
+        logistics_note: 'Hazardous goods are stored on site.',
       }),
       record('Plant', 'MNZ', {
         plant_code: 'MNZ',
         name: 'Monza Foundry',
         country: 'IT',
         city: 'Monza',
+        logistics_note: 'Night deliveries accepted after 22:00.',
       }),
       record('Plant', 'PL-12', {
         plant_code: 'PL-12',
@@ -400,11 +410,13 @@ function mainData(): BranchData {
         contract_id: 'C-2231',
         title: 'Brevik master supply agreement',
         expiry_date: '2027-03-31',
+        payment_terms_days: 60,
       }),
       record('Contract', 'C-2232', {
         contract_id: 'C-2232',
         title: 'Nordhaus fastener framework',
         expiry_date: '2026-12-31',
+        payment_terms_days: 30,
       }),
       record('Contract', 'C-2233', {
         contract_id: 'C-2233',
