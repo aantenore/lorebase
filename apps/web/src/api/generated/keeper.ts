@@ -743,7 +743,9 @@ export interface paths {
         put?: never;
         /**
          * Query Records with the DSL
-         * @description Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates.
+         * @description Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates. The
+         *     answer says how complete it can be (`coverage`, design 8.11) unless the request turns it
+         *     off.
          */
         post: operations["query_records_api_v1_domains__domain_id__query_post"];
         delete?: never;
@@ -826,6 +828,8 @@ export interface paths {
          * @description Ground the words of a text in the schema and the indexed values (design 8.9): ranked
          *     candidate Kinds, Attributes and values, each with the words it matched and, for values,
          *     a ready-to-use predicate. No query is run and nothing is interpreted beyond matching.
+         *     Phrases that matched nothing are listed in `coverage.unknown` and, where the operator
+         *     turned it on, kept for vocabulary suggestions (design 8.10).
          */
         post: operations["resolve_words_api_v1_domains__domain_id__resolve_post"];
         delete?: never;
@@ -2236,6 +2240,31 @@ export interface components {
             op: components["schemas"]["Operator"];
             value?: components["schemas"]["JsonValue"];
         };
+        /**
+         * AttributeCoverage
+         * @description How many Records of a Kind miss an Attribute the request used.
+         */
+        AttributeCoverage: {
+            /** Kind */
+            kind: string;
+            /** Attribute */
+            attribute: string;
+            /**
+             * Missing
+             * @description Share of the Kind's Records without a value, 0 to 1.
+             */
+            missing: number;
+            /**
+             * Missing Records
+             * @description Records without a value (estimated if sampled).
+             */
+            missing_records: number;
+            /**
+             * Used In
+             * @description Where the request used the Attribute (resolve: a candidate named it).
+             */
+            used_in: ("where" | "select" | "order_by" | "resolve")[];
+        };
         /** AttributeLineageOut */
         AttributeLineageOut: {
             /** Revision */
@@ -2837,6 +2866,35 @@ export interface components {
             revision: string;
             /** Partitions */
             partitions: components["schemas"]["PartitionCount"][];
+        };
+        /**
+         * CoverageOut
+         * @description How complete an answer can be (design 8.11): an empty result is not missing data. Read
+         *     from statistics of the default branch head, never from the Records; only Kinds and
+         *     Attributes the caller may read are described.
+         */
+        CoverageOut: {
+            /** Kinds */
+            kinds?: components["schemas"]["KindCoverage"][];
+            /** Attributes */
+            attributes?: components["schemas"]["AttributeCoverage"][];
+            /** Sources */
+            sources?: components["schemas"]["SourceFreshness"][];
+            /**
+             * Unknown
+             * @description Resolution: phrases that matched nothing in this Domain (no Kind, Attribute or indexed value).
+             */
+            unknown?: string[];
+            /**
+             * Notes
+             * @description One line per signal, for agents and people.
+             */
+            notes?: string[];
+            /**
+             * Omitted
+             * @description Why statistics are left out (e.g. not the default branch).
+             */
+            omitted?: string | null;
         };
         /**
          * CreateApiKey
@@ -4133,6 +4191,31 @@ export interface components {
             max_confidence?: number | null;
         };
         JsonValue: unknown;
+        /**
+         * KindCoverage
+         * @description The statistics the coverage of a Kind was read from.
+         */
+        KindCoverage: {
+            /** Kind */
+            kind: string;
+            /**
+             * Records
+             * @description Live Records of the Kind when counted.
+             */
+            records: number | null;
+            /**
+             * As Of
+             * @description Revision (hex) the statistics were counted at.
+             */
+            as_of: string | null;
+            /** Computed At */
+            computed_at?: string | null;
+            /**
+             * Approximate
+             * @description The head moved since, or the Kind was counted over a sample.
+             */
+            approximate: boolean;
+        };
         /** KindHealth */
         KindHealth: {
             /** Kind */
@@ -5103,6 +5186,11 @@ export interface components {
              * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
              */
             at?: string | null;
+            /**
+             * Coverage
+             * @description Add the coverage block (design 8.11): missing values of the Attributes used, Source freshness. Default: read.coverage.enabled.
+             */
+            coverage?: boolean | null;
         };
         /** QueryResponse */
         QueryResponse: {
@@ -5117,6 +5205,8 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
             aggregate?: components["schemas"]["AggregateOut"] | null;
+            /** @description How complete the answer can be (unless coverage: false). */
+            coverage?: components["schemas"]["CoverageOut"] | null;
         };
         /**
          * QuotaReport
@@ -5865,6 +5955,17 @@ export interface components {
              * @description Candidates returned.
              */
             limit?: number | null;
+            /**
+             * Coverage
+             * @description Add the coverage block (design 8.11): missing values of the Attributes used, Source freshness. Default: read.coverage.enabled.
+             */
+            coverage?: boolean | null;
+            /**
+             * Record Misses
+             * @description false: never keep the phrases that matched nothing for vocabulary suggestions (they are kept only where the operator turned it on).
+             * @default true
+             */
+            record_misses: boolean;
         };
         /** ResolveResponse */
         ResolveResponse: {
@@ -5886,6 +5987,8 @@ export interface components {
              * @description Levels that did not run, and why.
              */
             skipped?: components["schemas"]["ResolveSkipped"][];
+            /** @description Phrases unknown in this Domain and how many Records miss the Attributes of the candidates (unless coverage: false). */
+            coverage?: components["schemas"]["CoverageOut"] | null;
         };
         /** ResolveSkipped */
         ResolveSkipped: {
@@ -6417,6 +6520,39 @@ export interface components {
             idle_timeout_s: number;
         };
         /**
+         * SourceFreshness
+         * @description When a Source feeding a Kind last synchronized, and what it has not seen lately.
+         */
+        SourceFreshness: {
+            /** Kind */
+            kind: string;
+            /**
+             * Source
+             * @description Source api name.
+             */
+            source: string;
+            /**
+             * Last Synced At
+             * @description End of its last successful run (dry runs aside); null: never.
+             */
+            last_synced_at: string | null;
+            /**
+             * Stale After
+             * @description The Source's stale_after.
+             */
+            stale_after?: string | null;
+            /**
+             * Stale
+             * @description Its last successful run is older than stale_after (or it never ran).
+             */
+            stale: boolean;
+            /**
+             * Unseen Records
+             * @description Records it owns that no run has seen for stale_after (incremental Sources with stale_after), as of the statistics.
+             */
+            unseen_records?: number | null;
+        };
+        /**
          * SourcePreviewOut
          * @description Values of the expression mappings of a candidate Source on sample rows.
          */
@@ -6537,7 +6673,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "kind" | "attribute" | "relation";
+            type: "kind" | "attribute" | "relation" | "kind_alias" | "attribute_alias" | "value_alias" | "attribute_description";
             /**
              * Name
              * @description Proposed api name.
@@ -6554,18 +6690,33 @@ export interface components {
              */
             target?: string | null;
             /**
+             * Attribute
+             * @description Vocabulary suggestions: the Attribute they change.
+             */
+            attribute?: string | null;
+            /**
+             * Value
+             * @description Value aliases: the stored value the alias stands for.
+             */
+            value?: string | null;
+            /**
+             * Description
+             * @description Attribute descriptions: the proposed description.
+             */
+            description?: string | null;
+            /**
              * Labels
-             * @description Labels as the documents wrote them.
+             * @description Labels as the documents wrote them; the missed phrases of a vocabulary suggestion.
              */
             labels: string[];
             /**
              * Support
-             * @description Observations, over every document.
+             * @description Observations, over every document; misses for a vocabulary suggestion.
              */
             support: number;
             /**
              * Documents
-             * @description Documents it was observed in.
+             * @description Documents it was observed in; distinct missed phrases for a vocabulary suggestion.
              */
             documents: number;
             /**
@@ -6584,7 +6735,7 @@ export interface components {
             samples: string[];
             /**
              * Examples
-             * @description Evidence: document, chunk, offsets into the parsed text, quote.
+             * @description Evidence: document, chunk, offsets into the parsed text, quote; for a vocabulary suggestion the missed phrase, its misses, distinct callers and the similarity that linked it.
              */
             examples: {
                 [key: string]: unknown;
@@ -8539,7 +8690,7 @@ export interface operations {
         parameters: {
             query?: {
                 status?: ("pending" | "accepted" | "rejected")[] | null;
-                type?: ("kind" | "attribute" | "relation")[] | null;
+                type?: ("kind" | "attribute" | "relation" | "kind_alias" | "attribute_alias" | "value_alias" | "attribute_description")[] | null;
                 /** @description Also those below `schema.suggestions.min_support`. */
                 all?: boolean;
                 /** @description Page size. */

@@ -37,6 +37,23 @@ describe('suggestion mapping', () => {
     ]);
   });
 
+  it('reads vocabulary evidence defensively', () => {
+    const mapped = mapSuggestion({
+      ...wire,
+      type: 'value_alias',
+      attribute: 'status',
+      value: 'on_hold',
+      examples: [
+        { document_id: 'miss:main:paused', phrase: 'paused', misses: 4, callers: 2 },
+        { document_id: 'llm:main:att_x', phrases: ['paused', 3] },
+      ],
+    });
+    expect(mapped.value).toBe('on_hold');
+    expect(mapped.examples).toEqual([
+      { phrase: 'paused', misses: 4, callers: 2, similarity: null },
+    ]);
+  });
+
   it('sends one query parameter per value and leaves unset filters out', () => {
     expect(suggestionQuery({ status: ['pending', 'rejected'], type: [], all: false })).toEqual({
       status: { repeat: ['pending', 'rejected'] },

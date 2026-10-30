@@ -50,6 +50,7 @@ export function mapQuery(out: S['QueryResponse']): QueryResponse {
     revision: out.revision,
     rows: out.items.map(mapRecord),
     next_cursor: out.next_cursor ?? null,
+    coverage: out.coverage,
   };
 }
 

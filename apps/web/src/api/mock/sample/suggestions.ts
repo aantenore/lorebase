@@ -1,4 +1,4 @@
-import type { SchemaSuggestion, SuggestionExample } from '../../suggestion-types';
+import type { DocumentExample, SchemaSuggestion } from '../../suggestion-types';
 import {
   AMENDMENT_TEXT,
   CONTRACT_TEXT,
@@ -9,10 +9,39 @@ import {
 } from './documents';
 
 /** Evidence for a quote of a document: the offsets are found in the text, so they cannot drift. */
-function example(document: string, text: string, quote: string, chunk: number): SuggestionExample {
+function example(document: string, text: string, quote: string, chunk: number): DocumentExample {
   const start = text.indexOf(quote);
   if (start < 0) throw new Error(`The quote is not in ${document}: ${quote}`);
-  return { document_id: document, chunk, start, end: start + quote.length, quote };
+  return {
+    document_id: document,
+    chunk,
+    start,
+    end: start + quote.length,
+    quote,
+  };
+}
+
+/** A pending vocabulary suggestion of the Supplier Kind, proposed from missed phrases. */
+function vocabulary(
+  id: string,
+  type: SchemaSuggestion['type'],
+  name: string,
+  patch: Partial<SchemaSuggestion>,
+): SchemaSuggestion {
+  return {
+    ...base,
+    id,
+    type,
+    name,
+    kind: 'Supplier',
+    labels: [name],
+    documents: 1,
+    confidence: 0.6,
+    status: 'pending',
+    sources: ['resolve_misses'],
+    support: 3,
+    ...patch,
+  };
 }
 
 const base = {
@@ -118,6 +147,21 @@ export function buildSuggestions(): Record<string, SchemaSuggestion[]> {
         confidence: 0.31,
         status: 'pending',
       },
+      vocabulary('sug_valias_paused', 'value_alias', 'paused', {
+        attribute: 'status',
+        value: 'on_hold',
+        support: 4,
+        examples: [{ phrase: 'paused', misses: 4, callers: 2, similarity: 0.61 }],
+      }),
+      vocabulary('sug_kalias_vendor', 'kind_alias', 'vendor', {
+        support: 6,
+        examples: [{ phrase: 'vendor', misses: 4, callers: 3, similarity: 0.72 }],
+      }),
+      vocabulary('sug_adesc_tier', 'attribute_description', 'tier', {
+        attribute: 'tier',
+        description: 'Importance: tier 1 is critical.',
+        support: 3,
+      }),
     ],
   };
 }

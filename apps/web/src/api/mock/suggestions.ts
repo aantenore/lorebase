@@ -17,8 +17,16 @@ export interface SuggestionsMock {
 
 const ACTOR = 'usr_mock';
 
-const SECTION = { kind: 'kinds', attribute: 'attributes', relation: 'relations' } as const;
-const PREFIX = { kind: 'knd', attribute: 'att', relation: 'rel' } as const;
+/** Aliases and descriptions change the Kind or Attribute they belong to. */
+const SECTION = {
+  kind: 'kinds',
+  attribute: 'attributes',
+  relation: 'relations',
+  kind_alias: 'kinds',
+  attribute_alias: 'attributes',
+  value_alias: 'attributes',
+  attribute_description: 'attributes',
+} as const;
 
 /** Whether a suggestion passes the list filters; pending ones under the support need `all`. */
 export function matches(suggestion: SchemaSuggestion, filter: SuggestionFilter | undefined) {
@@ -103,7 +111,7 @@ export function createSuggestionsMock(
         changes: accepted.map((t) => ({
           op: 'create' as const,
           section: SECTION[t.found.type],
-          id: `${PREFIX[t.found.type]}_${t.found.id.slice(-8)}`,
+          id: `${SECTION[t.found.type].slice(0, 3)}_${t.found.id.slice(-8)}`,
           api_name: t.name,
         })),
       };

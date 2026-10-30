@@ -4,6 +4,8 @@ import { describeError, ValidationError } from '@/api';
 import type {
   DecideSuggestionsResult,
   SchemaSuggestion,
+  DocumentExample,
+  MissExample,
   SuggestionExample,
   SuggestionStatus,
   SuggestionType,
@@ -35,7 +37,18 @@ const STATUS_OPTIONS = (['all', 'pending', 'accepted', 'rejected'] as const).map
   label: text.statusOptions[value],
 }));
 
-const TYPE_OPTIONS = (['all', 'kind', 'attribute', 'relation'] as const).map((value) => ({
+const TYPE_OPTIONS = (
+  [
+    'all',
+    'kind',
+    'attribute',
+    'relation',
+    'kind_alias',
+    'attribute_alias',
+    'value_alias',
+    'attribute_description',
+  ] as const
+).map((value) => ({
   value,
   label: text.typeOptions[value],
 }));
@@ -88,7 +101,32 @@ function Filters({
   );
 }
 
-function ExampleLink({ example }: { example: SuggestionExample }) {
+function MissEvidence({ example }: { example: MissExample }) {
+  const fixed = (value: number | null) => (value === null ? '' : value.toFixed(2));
+  const count = (value: number | null) => (value === null ? '?' : value.toString());
+  return (
+    <li>
+      {text.missed(
+        example.phrase,
+        count(example.misses),
+        count(example.callers),
+        fixed(example.similarity),
+      )}
+    </li>
+  );
+}
+
+function ExampleItem({ example }: { example: SuggestionExample }) {
+  if ('phrase' in example) return <MissEvidence example={example} />;
+  return <ExampleLink example={example} />;
+}
+
+function exampleKey(example: SuggestionExample, index: number): string {
+  if ('phrase' in example) return `miss-${index.toString()}`;
+  return `${example.document_id}-${example.start.toString()}`;
+}
+
+function ExampleLink({ example }: { example: DocumentExample }) {
   const scope = useScope();
   const scopeSearch = useScopeSearch();
   return (
@@ -140,6 +178,18 @@ function Detail({
             </dd>
           </>
         )}
+        {suggestion.value != null && (
+          <>
+            <dt className="text-muted">{text.standsFor}</dt>
+            <dd>{suggestion.value}</dd>
+          </>
+        )}
+        {suggestion.description != null && (
+          <>
+            <dt className="text-muted">{text.proposedDescription}</dt>
+            <dd>{suggestion.description}</dd>
+          </>
+        )}
         {suggestion.decided_by !== null && (
           <>
             <dt className="text-muted">{text.decidedBy}</dt>
@@ -161,11 +211,8 @@ function Detail({
         <div>
           <h4 className="font-medium">{text.evidence}</h4>
           <ul className="flex flex-col gap-2">
-            {suggestion.examples.map((example) => (
-              <ExampleLink
-                key={`${example.document_id}-${example.start.toString()}`}
-                example={example}
-              />
+            {suggestion.examples.map((example, index) => (
+              <ExampleItem key={exampleKey(example, index)} example={example} />
             ))}
           </ul>
         </div>
