@@ -11,7 +11,10 @@
 - `mat_coverage(domain_id, branch, kind_id, revision, computed_at, records, sampled, missing,
   unseen)`: per Kind of a branch head, the Records and how many miss each Attribute's value,
   and per Source how many of its Records no run has seen for its `stale_after`, as counted at
-  `revision`. Rows go with their branch.
+  `revision` (`unseen` recounted at `unseen_at` by every pass). Rows go with their branch.
+- `ix_source_runs_last_succeeded`: the successful runs (dry runs aside) per Source, newest
+  first, so the coverage block finds a Source's last successful run with one index probe
+  however many runs it has.
 
 Every table is Domain-scoped with row-level security like those of revision 0001. Additive:
 no data is rewritten.
@@ -104,6 +107,7 @@ def _coverage() -> None:
         sa.Column("sampled", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("missing", _JSON, server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("unseen", _JSON, server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column("unseen_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "octet_length(revision) = 32", name=op.f("ck_mat_coverage_revision_h32")
         ),
@@ -118,9 +122,20 @@ def _coverage() -> None:
     _isolate("mat_coverage")
 
 
+LAST_SUCCEEDED = "ix_source_runs_last_succeeded"
+SUCCEEDED = "status = 'succeeded' AND coalesce(stats ->> 'dry_run', 'false') <> 'true'"
+"""The runs `lorebase_store.coverage.last_runs` reads (its predicate must match)."""
+
+
 def upgrade() -> None:
     _misses()
     _coverage()
+    op.create_index(
+        LAST_SUCCEEDED,
+        "source_runs",
+        ["domain_id", "source_id", sa.text("started_at DESC")],
+        postgresql_where=sa.text(SUCCEEDED),
+    )
     op.add_column(
         "schema_suggestions",
         sa.Column("payload", _JSON, server_default=sa.text("'{}'::jsonb"), nullable=False),
@@ -137,6 +152,7 @@ def downgrade() -> None:
     op.drop_constraint(op.f(TYPE_CHECK), "schema_suggestions", type_="check")
     op.create_check_constraint(op.f(TYPE_CHECK), "schema_suggestions", OLD_TYPES)
     op.drop_column("schema_suggestions", "payload")
+    op.drop_index(LAST_SUCCEEDED, table_name="source_runs")
     op.drop_table("mat_coverage")
     op.drop_index(op.f("ix_resolve_misses_domain_id_branch_misses"), table_name="resolve_misses")
     op.drop_index(op.f("ix_resolve_misses_domain_id_last_seen"), table_name="resolve_misses")

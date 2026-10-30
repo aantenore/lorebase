@@ -651,7 +651,9 @@ def query_command(
             yield from page.items
             if page.next_cursor is None:
                 return
-            following = {**body, "cursor": page.next_cursor, "coverage": False}
+            # Only the request's own members: a Keeper older than the coverage block refuses
+            # unknown ones, so later pages repeat the first one's body with the cursor.
+            following = {**body, "cursor": page.next_cursor}
             page = client.records.query(domain_id, following)
 
     items, more = app.take(pages(), limit, everything)
