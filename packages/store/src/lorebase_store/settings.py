@@ -192,6 +192,36 @@ class ValueIndexSettings(SectionModel):
         ge=1,
         description="Records a Kind needs before max_distinct_ratio applies.",
     )
+    hysteresis: float = Field(
+        default=1.2,
+        ge=1,
+        description="A plain string Attribute already held is dropped only past this factor "
+        "times max_distinct and max_distinct_ratio, so one near the limits does not come and go.",
+    )
+    hard_max_distinct: int = Field(
+        default=10_000,
+        ge=1,
+        description="Values of one Attribute any branch may hold, enums and resolvable: true "
+        "included; past it the Attribute is dropped from the index.",
+    )
+    stats_interval_s: float = Field(
+        default=3600.0,
+        ge=0,
+        description="Distinct values are counted again this often while the schema and these "
+        "settings are unchanged (a change counts at once); in between a pass checks sizes only.",
+    )
+    max_added_per_pass: int = Field(
+        default=20,
+        ge=1,
+        description="Attributes one pass adds (one scan of its Kind's rows per Kind, while "
+        "the Domain's writers wait); the rest go to the next pass, queued at once.",
+    )
+    pass_statement_timeout_ms: int = Field(
+        default=120_000,
+        ge=1,
+        description="statement_timeout of a pass; it bounds how long the Domain's writers wait "
+        "for a backfill.",
+    )
 
 
 class WriteSettings(SectionModel):

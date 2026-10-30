@@ -3,25 +3,26 @@ commits and overlays, lookups and rebuild."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from lorebase_core.model import Kind, Record
+from lorebase_core.model import Domain, Kind, Record, Sensitivity
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types import TypeSpec
 from lorebase_core.validate import RecordDelete, RecordUpsert
 from lorebase_store import values
 from lorebase_store.commit import CommitResult, SchemaUpsert, commit, create_domain
 from lorebase_store.layout import resolve_layout
-from lorebase_store.materialize import BranchMode, create_branch
+from lorebase_store.materialize import BranchMode, create_branch, delete_branch, promote
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 
-from .support import DOMAIN, Clock, T, attribute, domain, ident
+from .support import DOMAIN, Clock, T, attribute, domain, ident, wait_for_lock_waiter
 
 pytestmark = pytest.mark.integration
 
@@ -110,9 +111,39 @@ async def sync(sessions: Sessions, settings: StoreSettings, **options: Any) -> A
         return await values.sync_selection(session, DOMAIN, settings=settings, **options)
 
 
-def test_normalize_mirrors_the_database() -> None:
+def test_normalize_folds_case_accents_and_blanks() -> None:
     assert values.normalize("  Café\tCRÈME ") == "cafe creme"
     assert values.normalize("Ärger") == "arger"
+    assert values.normalize("ΟΔΟΣ") == "οδοσ"
+
+
+PARITY = [
+    "  Café\tCRÈME ",
+    "ΟΔΟΣ ΣΟΦΙΑΣ",
+    f"a{chr(0xA0)}b{chr(0x2007)}c{chr(0x202F)}d{chr(0x1C)}e{chr(0x3000)}f",
+    "Straße",
+    "".join(chr(c) for c in (0x41C, 0x41E, 0x421, 0x41A, 0x412, 0x410)),  # Moscow, Cyrillic
+    "हिन्दी",
+    "ภาษาไทย",
+    "שָׁלוֹם",
+    "العربية",
+    "Rock & Roll",
+    "C++",
+    "S/M",
+    "50%",
+]
+
+
+async def test_normalize_matches_lb_value_norm(engine: AsyncEngine) -> None:
+    async with engine.connect() as connection:
+        found = await connection.execute(
+            text(
+                "SELECT lb_value_norm(x) FROM unnest(CAST(:xs AS text[])) "
+                "WITH ORDINALITY AS t(x, n) ORDER BY n"
+            ),
+            {"xs": PARITY},
+        )
+        assert list(found.scalars()) == [values.normalize(x) for x in PARITY]
 
 
 async def test_selection_upkeep_lookups_and_rebuild(
@@ -153,7 +184,7 @@ async def test_selection_upkeep_lookups_and_rebuild(
     async with sessions() as session:
         await scope_to_domain(session, DOMAIN)
         layout = await resolve_layout(session, DOMAIN, "main")
-        exact = await values.exact_values(session, layout, ["ROSSO", "cafe creme"], limit=10)
+        exact = await values.exact_values(session, layout, ["ROSSO", "cafe creme"], per_term=10)
         assert {(h.term, h.value, h.records) for h in exact} == {
             ("ROSSO", "Rosso", 19),
             ("cafe creme", "Café crème", 20),
@@ -206,7 +237,7 @@ async def test_overlays_hold_their_own_values_and_count_live(
     async with sessions() as session:
         layout = await resolve_layout(session, DOMAIN, "agent/colors")
         assert layout.overlay
-        exact = await values.exact_values(session, layout, ["viola", "blu"], limit=10)
+        exact = await values.exact_values(session, layout, ["viola", "blu"], per_term=10)
         assert {h.value for h in exact} == {"Viola", "Blu"}
         live = await values.live_counts(session, layout, PRODUCT, COLOR, ["Blu", "Viola", "Rosso"])
         assert live == {"Blu": 2, "Viola": 1, "Rosso": 3}
@@ -228,3 +259,243 @@ async def test_thresholds_and_switch_off(sessions: Sessions, runtime: StoreRunti
     report = await sync(sessions, runtime.settings.model_copy(update={"values": off}))
     assert report.selected == []
     assert await held(sessions) == {}
+
+
+RECOUNT = text(
+    "SELECT m.branch, a.attribute_id, v.v, count(*) FROM mat_records m "
+    "JOIN refs r ON r.domain_id = m.domain_id AND r.name = m.branch "
+    "JOIN mat_value_attributes a ON a.domain_id = m.domain_id AND a.kind_id = m.kind_id "
+    'CROSS JOIN LATERAL lb_value_strings(m."values" -> a.attribute_id, a.max_chars) AS v(v) '
+    "WHERE m.domain_id = :d AND NOT m.deleted GROUP BY 1, 2, 3"
+)
+INDEXED = text("SELECT branch, attribute_id, value, records FROM mat_values WHERE domain_id = :d")
+
+
+async def agree(sessions: Sessions) -> dict[tuple[str, str, str], int]:
+    """The index equals a recount of the Records; returns it."""
+    async with sessions() as session:
+        recount = {
+            (b, a, v): int(n) for b, a, v, n in await session.execute(RECOUNT, {"d": DOMAIN})
+        }
+        index = {(b, a, v): int(n) for b, a, v, n in await session.execute(INDEXED, {"d": DOMAIN})}
+    assert index == recount
+    return index
+
+
+async def seeded(sessions: Sessions, runtime: StoreRuntime, clock: Clock, count: int = 30) -> None:
+    await run(sessions, runtime, clock, [], schema_changes=[SchemaUpsert(product_kind())])
+    await run(sessions, runtime, clock, [product(n) for n in range(count)])
+
+
+def tuned(runtime: StoreRuntime, **changes: Any) -> StoreSettings:
+    return runtime.settings.model_copy(
+        update={"values": runtime.settings.values.model_copy(update=changes)}
+    )
+
+
+async def test_reselection_and_max_chars_changes_recount(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    await agree(sessions)
+    dropped = await sync(sessions, tuned(runtime, max_distinct=2), force=True)
+    assert (PRODUCT, COLOR) in dropped.removed
+    assert all(a != COLOR for _, a, _ in await agree(sessions))
+    # Values written while it was out are counted when it comes back; no key collides.
+    await run(sessions, runtime, clock, [product(1, color="Giallo")])
+    back = await sync(sessions, runtime.settings, force=True)
+    assert (PRODUCT, COLOR) in back.added
+    assert ("main", COLOR, "Giallo") in await agree(sessions)
+    short = await sync(sessions, tuned(runtime, max_value_chars=5), force=True)
+    # Every held Attribute is recounted (codes too: 30 Records are below ratio_min_records).
+    assert {(PRODUCT, COLOR), (PRODUCT, SIZE), (PRODUCT, TAGS)} <= set(short.added)
+    index = await agree(sessions)
+    assert ("main", COLOR, "Café crème") not in index
+    assert ("main", COLOR, "Rosso") in index
+
+
+async def test_hysteresis_and_pass_limits(sessions: Sessions, runtime: StoreRuntime) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock, count=60)
+    # Three colors: held at max_distinct 3, kept at 2 (2 * 1.5 >= 3), dropped at 2 without it.
+    assert (PRODUCT, COLOR) in (await sync(sessions, tuned(runtime, max_distinct=3))).selected
+    kept = await sync(sessions, tuned(runtime, max_distinct=2, hysteresis=1.5), force=True)
+    assert (PRODUCT, COLOR) in kept.selected
+    gone = await sync(sessions, tuned(runtime, max_distinct=2, hysteresis=1.0), force=True)
+    assert (PRODUCT, COLOR) not in gone.selected
+    # A pass adds at most max_added_per_pass Attributes, the next one the rest.
+    off = await sync(sessions, tuned(runtime, enabled=False), force=True)
+    assert off.selected == []
+    first = await values.run_value_index(
+        sessions, DOMAIN, settings=tuned(runtime, max_added_per_pass=1)
+    )
+    assert len(first.added) == 1
+    assert len(first.pending) == 2
+    async with sessions() as session:
+        queued = await session.scalar(
+            text("SELECT count(*) FROM jobs WHERE type = 'value_index' AND domain_id = :d"),
+            {"d": DOMAIN},
+        )
+    assert queued == 1
+    rest = await values.run_value_index(sessions, DOMAIN, settings=runtime.settings)
+    assert len(rest.added) == 2
+    await agree(sessions)
+    # A branch holding too many values of an Attribute drops it, enums included.
+    huge = await sync(sessions, tuned(runtime, hard_max_distinct=2), force=False)
+    assert (PRODUCT, SIZE) in huge.removed
+
+
+async def test_the_fence_waits_for_writers_and_spares_other_domains(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock, count=10)
+    async with sessions() as session:
+        await create_domain(
+            session,
+            Domain(id="other", display_name="Other", description="Another Domain."),
+            author=AUTHOR,
+            runtime=runtime,
+            clock=clock,
+        )
+    # A writer of the Domain holds the shared fence (uncommitted) while a pass adds Attributes.
+    async with sessions() as writer:
+        await writer.begin()
+        await writer.execute(
+            text(
+                'UPDATE mat_records SET "values" = jsonb_set("values", '
+                "ARRAY[CAST(:color AS text)], to_jsonb(CAST('Nuovo' AS text))) "
+                "WHERE domain_id = :d AND branch = 'main' AND key = 'P-001'"
+            ),
+            {"d": DOMAIN, "color": COLOR},
+        )
+        waiting = asyncio.create_task(sync(sessions, runtime.settings))
+        await wait_for_lock_waiter(engine, waiting, locktype="advisory", what="value fence")
+        await writer.commit()
+    await asyncio.wait_for(waiting, 30)
+    assert ("main", COLOR, "Nuovo") in await agree(sessions)
+
+    # While a pass holds the fence, writers of other Domains go on; the Domain's own wait.
+    async with sessions() as holder:
+        await holder.begin()
+        await holder.execute(
+            text("SELECT pg_advisory_xact_lock(lb_values_lock_key(:d))"), {"d": DOMAIN}
+        )
+        other = Domain(id="other", display_name="Other", description="Another Domain.")
+        assert other.id == "other"
+        async with sessions() as session:
+            await asyncio.wait_for(
+                commit(
+                    session,
+                    "other",
+                    "main",
+                    [],
+                    schema_changes=[SchemaUpsert(product_kind())],
+                    author=AUTHOR,
+                    message="schema",
+                    origin=ORIGIN,
+                    runtime=runtime,
+                    clock=clock,
+                ),
+                10,
+            )
+        async with sessions() as session:
+            await asyncio.wait_for(
+                commit(
+                    session,
+                    "other",
+                    "main",
+                    [product(n) for n in range(5)],
+                    author=AUTHOR,
+                    message="data",
+                    origin=ORIGIN,
+                    runtime=runtime,
+                    clock=clock,
+                ),
+                10,
+            )
+        blocked = asyncio.create_task(run(sessions, runtime, clock, [product(2, color="Blu")]))
+        await wait_for_lock_waiter(engine, blocked, locktype="advisory", what="value fence")
+        await holder.rollback()
+    await asyncio.wait_for(blocked, 30)
+    await agree(sessions)
+
+
+async def test_a_schema_change_drops_values_in_the_same_commit(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    kind = product_kind()
+    color = kind.attributes[COLOR].model_copy(update={"sensitivity": (Sensitivity.CONFIDENTIAL,)})
+    changed = kind.model_copy(update={"attributes": {**kind.attributes, COLOR: color}})
+    await run(sessions, runtime, clock, [], schema_changes=[SchemaUpsert(changed)])
+    async with sessions() as session:
+        held_pairs = await values.selection(session, DOMAIN)
+        left = await session.scalar(
+            text("SELECT count(*) FROM mat_values WHERE domain_id = :d AND attribute_id = :a"),
+            {"d": DOMAIN, "a": COLOR},
+        )
+        queued = await session.scalar(
+            text("SELECT count(*) FROM jobs WHERE type = 'value_index' AND domain_id = :d"),
+            {"d": DOMAIN},
+        )
+    assert (PRODUCT, COLOR) not in held_pairs
+    assert left == 0
+    assert queued == 1
+
+
+async def test_branches_copies_promotions_and_deletions_keep_the_index(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock, count=12)
+    await sync(sessions, runtime.settings)
+    for name, mode in (("copy", BranchMode.COPY), ("ov", BranchMode.OVERLAY)):
+        async with sessions() as session:
+            await create_branch(
+                session,
+                DOMAIN,
+                name,
+                created_by="usr_test",
+                source="main",
+                mode=mode,
+                runtime=runtime,
+            )
+    await run(sessions, runtime, clock, [product(3, color="Viola")], branch="ov")
+    index = await agree(sessions)
+    assert ("copy", COLOR, "Rosso") in index
+    assert ("ov", COLOR, "Rosso") not in index  # an overlay holds its own rows only
+    async with sessions() as session, session.begin():
+        assert await promote(session, DOMAIN, "ov", runtime=runtime)
+    index = await agree(sessions)
+    assert index[("ov", COLOR, "Viola")] == 1
+    assert index[("ov", COLOR, "Rosso")] == index[("main", COLOR, "Rosso")] - 1
+    async with sessions() as session, session.begin():
+        await delete_branch(session, DOMAIN, "copy", runtime=runtime)
+    assert not any(b == "copy" for b, _, _ in await agree(sessions))
+
+
+async def test_reads_ignore_values_of_attributes_no_longer_held(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock, count=6)
+    await sync(sessions, runtime.settings)
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO mat_values (domain_id, branch, kind_id, attribute_id, value, norm, "
+                "records) VALUES (:d, 'main', :k, :a, 'stray', 'stray', 1)"
+            ),
+            {"d": DOMAIN, "k": PRODUCT, "a": NOTES},
+        )
+    async with sessions() as session:
+        layout = await resolve_layout(session, DOMAIN, "main")
+        assert await values.exact_values(session, layout, ["stray"], per_term=5) == []
+    report = await sync(sessions, runtime.settings, force=True)
+    assert report.orphans == 1
+    await agree(sessions)

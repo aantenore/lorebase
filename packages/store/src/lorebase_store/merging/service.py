@@ -592,6 +592,11 @@ class MergeService:
                 prepared.schema,
                 runtime=self._runtime,
             )
+        if prepared.schema_hash is not None:
+            # Imported here: the value index reads compiled schemas through the commit package.
+            from lorebase_store.values import drop_ineligible
+
+            await drop_ineligible(session, domain_id, target.name, prepared.schema)
         refs = RefRepository(session, domain_id)
         try:
             await refs.compare_and_swap(
