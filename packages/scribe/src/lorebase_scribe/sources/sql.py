@@ -38,6 +38,7 @@ from lorebase_core.model import Source
 from lorebase_core.model.source import SourceType
 from lorebase_scribe.sources.access import SourceReadError, resolve_location
 from lorebase_scribe.sources.mapping import Row, SourceDefinitionError
+from lorebase_store.profiling import SQL_DIALECTS, SqlDialectSpec
 
 __all__ = ["MssqlConnector", "MysqlConnector", "quote_identifier"]
 
@@ -165,8 +166,8 @@ class _SqlConnector:
     query_type: ClassVar[SourceType]
     opening: ClassVar[str]
     closing: ClassVar[str]
-    schemes: ClassVar[frozenset[str]]
-    driver: ClassVar[str]
+    #: URL schemes, driver and extra of the dialect, shared with schema inference.
+    dialect: ClassVar[SqlDialectSpec]
     #: Replaced by tests to read through a fake engine.
     engine_factory: ClassVar[Callable[..., Any]]
 
@@ -213,12 +214,10 @@ class _SqlConnector:
         return body + where + order, parameters, name
 
     def _url(self) -> URL:
-        _require_driver(self.driver, self.label, self.label)
+        dialect = self.dialect
+        _require_driver(dialect.module, dialect.extra, self.label)
         return _driver_url(
-            resolve_location(self.source),
-            self.schemes,
-            f"{self.label}+{self.driver}",
-            self.label,
+            resolve_location(self.source), dialect.schemes, dialect.driver_name, self.label
         )
 
 
@@ -229,8 +228,7 @@ class MysqlConnector(_SqlConnector):
     label = "mysql"
     query_type = SourceType.MYSQL_QUERY
     opening = closing = "`"
-    driver = "asyncmy"
-    schemes = frozenset({"mysql", "mariadb", "mysql+asyncmy", "mariadb+asyncmy"})
+    dialect = SQL_DIALECTS["mysql"]
     engine_factory = staticmethod(create_async_engine)
 
     async def rows(self, since: Any) -> AsyncIterator[tuple[str, Row]]:
@@ -276,8 +274,7 @@ class MssqlConnector(_SqlConnector):
     label = "mssql"
     query_type = SourceType.MSSQL_QUERY
     opening, closing = "[", "]"
-    driver = "pymssql"
-    schemes = frozenset({"mssql", "sqlserver", "mssql+pymssql"})
+    dialect = SQL_DIALECTS["mssql"]
     engine_factory = staticmethod(lambda url, **options: create_engine(url, **options))
 
     def _derived(self, query: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,8 @@ from lorebase_store.profiling import sql_databases as module
 from lorebase_store.settings import RecordProfilingSettings, SqlProfilingSettings
 
 RECORDS = RecordProfilingSettings()
+APPLICATION = "lorebase-keeper"
+profile_sql = partial(profile_sql_database, application=APPLICATION)
 
 
 @pytest.fixture
@@ -73,7 +76,7 @@ async def test_sql_server_tables_are_sampled_and_described(engine: Engine) -> No
     seen: list[Any] = []
     settings = SqlProfilingSettings(sample_rows=3, statement_timeout_ms=2500, connect_timeout_s=4)
     profiles = by_name(
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "sqlserver://u:p@db:1433/erp",
             settings,
@@ -96,14 +99,14 @@ async def test_sql_server_tables_are_sampled_and_described(engine: Engine) -> No
     assert options["connect_args"] == {
         "login_timeout": 4,
         "timeout": 3,
-        "appname": "lorebase-keeper",
+        "appname": APPLICATION,
     }
     assert any(isinstance(item, str) and item == "SET LOCK_TIMEOUT 2500" for item in seen)
 
 
 async def test_named_tables_only_and_unknown_tables_are_refused(engine: Engine) -> None:
     factory = sql_server(engine, [])
-    only = await profile_sql_database(
+    only = await profile_sql(
         "mssql",
         "mssql://u:p@h/db",
         SqlProfilingSettings(),
@@ -113,7 +116,7 @@ async def test_named_tables_only_and_unknown_tables_are_refused(engine: Engine) 
     )
     assert [profile.name for profile in only] == ["supplier"]
     with pytest.raises(SqlProfileError, match=r"unknown tables.*missing"):
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(),
@@ -122,7 +125,7 @@ async def test_named_tables_only_and_unknown_tables_are_refused(engine: Engine) 
             engine_factory=factory,
         )
     with pytest.raises(SqlProfileError, match="more than the 1 allowed"):
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(max_tables=1),
@@ -132,7 +135,7 @@ async def test_named_tables_only_and_unknown_tables_are_refused(engine: Engine) 
 
 
 async def test_the_count_can_be_skipped(engine: Engine) -> None:
-    (profile,) = await profile_sql_database(
+    (profile,) = await profile_sql(
         "mssql",
         "mssql://u:p@h/db",
         SqlProfilingSettings(sample_rows=2, count_rows=False),
@@ -144,7 +147,7 @@ async def test_the_count_can_be_skipped(engine: Engine) -> None:
 
 
 async def test_profiles_feed_inference(engine: Engine) -> None:
-    profiles = await profile_sql_database(
+    profiles = await profile_sql(
         "mssql",
         "mssql://u:p@h/db",
         SqlProfilingSettings(),
@@ -207,7 +210,7 @@ async def test_mysql_sessions_are_read_only_and_bounded(
         made.append(FakeAsyncEngine(engine, mariadb, log))
         return made[0]
 
-    profiles = await profile_sql_database(
+    profiles = await profile_sql(
         "mysql",
         "mariadb://u:p@db/erp",
         SqlProfilingSettings(statement_timeout_ms=2500),
@@ -224,20 +227,17 @@ async def test_mysql_sessions_are_read_only_and_bounded(
 
 async def test_connections_of_another_database_are_refused_without_echo() -> None:
     with pytest.raises(SqlProfileError, match="must be a mssql:// URL") as refused:
-        await profile_sql_database(
-            "mssql", "postgresql://u:hunter2@h/db", SqlProfilingSettings(), RECORDS
-        )
+        await profile_sql("mssql", "postgresql://u:hunter2@h/db", SqlProfilingSettings(), RECORDS)
     assert "hunter2" not in str(refused.value)
     with pytest.raises(SqlProfileError, match="not a valid database URL") as garbled:
-        await profile_sql_database("mysql", "not a url hunter2", SqlProfilingSettings(), RECORDS)
+        await profile_sql("mysql", "not a url hunter2", SqlProfilingSettings(), RECORDS)
     assert "hunter2" not in str(garbled.value)
 
 
 async def test_a_missing_driver_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(__import__("sys").modules, "pymssql", None)
     with pytest.raises(SqlDriverError, match=r"install lorebase-keeper\[mssql\]"):
-        await profile_sql_database("mssql", "mssql://u:p@h/db", SqlProfilingSettings(), RECORDS)
-    assert module.APPLICATION_NAME == "lorebase-keeper"
+        await profile_sql("mssql", "mssql://u:p@h/db", SqlProfilingSettings(), RECORDS)
 
 
 # Bounds and schema checks ----------------------------------------------------------------
@@ -258,7 +258,7 @@ def wide(tmp_path: Path) -> Engine:
 
 async def test_wide_and_binary_columns_are_bounded(wide: Engine) -> None:
     profiles = by_name(
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(max_value_chars=20),
@@ -279,7 +279,7 @@ async def test_the_time_spent_on_tables_is_bounded(
     clock = iter([0.0, 1.0, 500.0, 501.0, 502.0])
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     with pytest.raises(SqlProfileError, match="took longer than the 5 s allowed"):
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(total_timeout_s=5),
@@ -291,7 +291,7 @@ async def test_the_time_spent_on_tables_is_bounded(
 @pytest.mark.parametrize("schema", ["otherdb.dbo", "", "a\nb", "x" * 129])
 async def test_schemas_are_plain_names(engine: Engine, schema: str) -> None:
     with pytest.raises(SqlProfileError, match="plain schema name"):
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(),
@@ -306,7 +306,7 @@ async def test_schemas_must_exist_and_may_be_restricted(engine: Engine) -> None:
     settings = SqlProfilingSettings()
 
     async def run(**options: Any) -> list[TableProfile]:
-        return await profile_sql_database(
+        return await profile_sql(
             "mssql", "mssql://u:p@h/db", settings, RECORDS, engine_factory=factory, **options
         )
 
@@ -321,7 +321,7 @@ async def test_schemas_must_exist_and_may_be_restricted(engine: Engine) -> None:
 
 async def test_the_tables_named_are_bounded_before_reading(engine: Engine) -> None:
     with pytest.raises(SqlProfileError, match="3 tables requested, more than the 2 allowed"):
-        await profile_sql_database(
+        await profile_sql(
             "mssql",
             "mssql://u:p@h/db",
             SqlProfilingSettings(max_tables=2),
