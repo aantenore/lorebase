@@ -784,6 +784,18 @@ Storage profile (docs/performance.md#storage-profiles): memory and disk traded f
 |---------|---------|-------------|
 | `store.embeddings.dims` | `384` | HNSW index dimension; must equal inference.embeddings.dims |
 
+### `store.values`
+
+Value index of POST /resolve (design 8.9): distinct short values per branch, kept by triggers on mat_records. Enums and `resolvable: true` Attributes are always held; sensitive, vault, `resolvable: false` and non-string Attributes never; plain strings while their distinct values on the default branch stay within the thresholds below.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.values.enabled` | `true` | false drops every selection on the next pass |
+| `store.values.max_value_chars` | `64` | longer values are left out |
+| `store.values.max_distinct` | `1000` | a plain string with more distinct values is not held |
+| `store.values.max_distinct_ratio` | `0.2` | ...nor one whose distinct values exceed this share of Records |
+| `store.values.ratio_min_records` | `50` | Records a Kind needs before max_distinct_ratio applies |
+
 ### `store.writes`
 
 | Setting | Default | Description |
@@ -1195,6 +1207,34 @@ Reciprocal rank fusion: w / (rrf_k + rank) per list
 | `search.hybrid.lexical_weight` | `1.0` |  |
 | `search.hybrid.semantic_weight` | `1.0` |  |
 
+### `search.resolve`
+
+POST /resolve (design 8.9): words of a text to candidate Kinds, Attributes and indexed values (store.values). Phrases of 1..max_phrase_words words, longest first; levels in order, a phrase stopping at the first that matches.
+
+#### `search.resolve.results`
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `search.resolve.results.default_limit` | `20` |  |
+| `search.resolve.results.max_limit` | `100` |  |
+
+### `search.resolve` (continued)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `search.resolve.max_text_chars` | `500` |  |
+| `search.resolve.max_words` | `40` | words of the text considered |
+| `search.resolve.max_phrase_words` | `3` |  |
+| `search.resolve.min_word_chars` | `2` | shorter words are never matched alone |
+| `search.resolve.trigram_min_chars` | `3` | shortest phrase matched by similarity |
+| `search.resolve.trigram_threshold` | `0.45` | least trigram similarity of a similar match |
+| `search.resolve.per_phrase` | `5` | similar values kept per phrase |
+| `search.resolve.exact_values` | `200` | exact value matches read per request |
+| `search.resolve.plural_rules` | `[["s", ""], ["es", ""]]` | (plural, singular) suffixes folded both ways |
+| `search.resolve.embedding_records` | `10` | nearest Records read by the embedding level |
+| `search.resolve.levels` | `{exact: true, synonym: true, trigram: true, embedding: true}` |  |
+| `search.resolve.scores` | `{exact: 1.0, synonym: 0.95, trigram: 0.85, embedding: 0.7, description: 0.6}` |  |
+
 ## `agents`
 
 Agent-facing reads (docs/agents.md). Context packs are also bounded by read.traverse; nothing here calls a model.
@@ -1509,6 +1549,7 @@ One process at a time is leader (Postgres advisory lock)
 | `scribe.scheduler.gc_dry_run` | `false` |  |
 | `scribe.scheduler.source_schedules` | `true` | queue Source synchronizations from each Source's `schedule` |
 | `scribe.scheduler.embeddings_interval_s` | `60.0` | embedding pass of every Domain; 0 disables |
+| `scribe.scheduler.value_index_interval_s` | `300.0` | value index pass of every Domain (store.values); 0 disables |
 | `scribe.scheduler.audit_verify_interval_s` | `86400.0` | verification of every audit hash chain; 0 disables |
 | `scribe.scheduler.domain_batch` | `100` | Domains read per query |
 
