@@ -62,6 +62,10 @@ def whoami() -> Call[m.WhoAmI]:
     return Call("GET", "/auth/whoami", parse_model(m.WhoAmI), safe=True)
 
 
+def session_info() -> Call[m.SessionInfo]:
+    return Call("GET", "/auth/session", parse_model(m.SessionInfo), safe=True)
+
+
 # Domains ----------------------------------------------------------------------------------
 
 

@@ -26,10 +26,9 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
-from typing import Any, Literal
+from typing import Literal
 
 from lorebase_client import AsyncLorebaseClient
-from lorebase_client.core import Call, parse_json
 from lorebase_client.errors import LorebaseError
 from lorebase_guide.settings import HttpSettings
 
@@ -163,8 +162,7 @@ async def verify(caller: Caller, client: AsyncLorebaseClient) -> Caller:
     try:
         who = await client.whoami()
         if caller.kind == "session":
-            session: Any = await client.send(Call("GET", "/auth/session", parse_json, safe=True))
-            expected = str(session.get("csrf_token") or "") if isinstance(session, dict) else ""
+            expected = (await client.session_info()).csrf_token
             given = caller.csrf_token or ""
             if not expected or not hmac.compare_digest(expected.encode(), given.encode()):
                 raise AuthRefusedError(403, "csrf", "the CSRF token does not match the session")

@@ -129,6 +129,17 @@ class WhoAmI(Model):
     quota: QuotaReport | None = None
 
 
+class SessionInfo(Model):
+    """The browser session of the caller: who is signed in, until when, and its CSRF token."""
+
+    principal_id: str
+    display_name: str
+    csrf_header: str
+    csrf_token: str
+    expires_at: datetime
+    idle_timeout_s: int
+
+
 # Domains ----------------------------------------------------------------------------------
 
 
