@@ -22,6 +22,7 @@ DESIGN_TABLES = {
     "mat_values",
     "mat_value_attributes",
     "mat_value_cursors",
+    "mat_coverage",
     "mat_lineage_maps",
     "storage_tasks",
     "mat_history",
@@ -64,6 +65,7 @@ DESIGN_TABLES = {
     "extraction_jobs",
     "extraction_cache",
     "schema_suggestions",
+    "resolve_misses",
     "vault",
     "vault_tombstones",
     "inference_endpoint_modes",
@@ -126,4 +128,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0045",)
+    assert head_revisions() == ("0046",)

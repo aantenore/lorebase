@@ -154,6 +154,85 @@ class EmbeddingStoreSettings(SectionModel):
     )
 
 
+class ResolveMissSettings(SectionModel):
+    """Words that `POST /resolve` matched to nothing, kept per Domain, branch and phrase so
+    that Scribe's consolidation pass can propose vocabulary (design 8.10,
+    `lorebase_store.resolve_misses`).
+
+    The phrases are free text typed by callers (a name searched for may be personal data):
+    off by default, kept at most `retention_days` after they were last seen, deleted with
+    their Domain, and never recorded for callers without `keeper.resolve_misses.permission`
+    or for requests that opt out. Only digests of the callers are kept, to count them.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Record the phrases resolution matched to nothing. Keeper records, "
+        "Scribe prunes and consolidates; both read this switch.",
+    )
+    retention_days: float = Field(
+        default=30.0,
+        gt=0,
+        description="A phrase not seen for this long is deleted by the next consolidation "
+        "pass (and so are its counts).",
+    )
+    min_phrase_chars: int = Field(
+        default=3, ge=1, description="Shorter phrases are not recorded (filler words)."
+    )
+    max_phrase_chars: int = Field(
+        default=64,
+        ge=1,
+        le=128,
+        description="Longer phrases are not recorded (an alias is at most 128 characters).",
+    )
+    ignore_words: tuple[str, ...] = Field(
+        default=(),
+        description="Words never recorded on their own, compared like values (lower case, "
+        "accents dropped): the filler words of the agents' languages, e.g. [how, many, the].",
+    )
+    max_per_domain: int = Field(
+        default=10_000,
+        ge=1,
+        description="Phrases kept per Domain; new ones beyond are dropped until pruning "
+        "makes room (known phrases keep counting).",
+    )
+    max_callers: int = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description="Distinct callers counted per phrase (by keyed digest, never by name); the "
+        "count stops at this bound.",
+    )
+    prune_batch: int = Field(
+        default=5000, ge=1, description="Expired phrases deleted per statement of a pass."
+    )
+
+
+class CoverageSettings(SectionModel):
+    """Per-Kind statistics behind the `coverage` block of reads (design 8.11,
+    `lorebase_store.coverage`): Records of each Kind of the default branch head and, per
+    Attribute, how many miss a value. Scribe computes them off the request path; reads only
+    look them up."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Compute the statistics; false leaves the stored ones in place until the "
+        "next pass with true replaces them, and reads report no missing shares meanwhile.",
+    )
+    max_records_per_kind: int = Field(
+        default=1_000_000,
+        ge=1,
+        description="Kinds with more Records are counted over this many of them (in key "
+        "order) and their statistics marked sampled.",
+    )
+    statement_timeout_ms: int = Field(
+        default=120_000,
+        ge=1,
+        description="statement_timeout of each Kind's count; a Kind whose count exceeds it "
+        "keeps its previous statistics.",
+    )
+
+
 class ValueIndexSettings(SectionModel):
     """Which Attributes the value index holds (design 8.9, `lorebase_store.values`).
 
@@ -899,6 +978,8 @@ class StoreSettings(SectionModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
     values: ValueIndexSettings = Field(default_factory=ValueIndexSettings)
+    resolve_misses: ResolveMissSettings = Field(default_factory=ResolveMissSettings)
+    coverage: CoverageSettings = Field(default_factory=CoverageSettings)
     writes: WriteSettings = Field(default_factory=WriteSettings)
     nodes: NodeSettings = Field(default_factory=NodeSettings)
     commit: CommitSettings = Field(default_factory=CommitSettings)

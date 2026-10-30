@@ -75,6 +75,12 @@ VALUE_INDEX_JOB = "value_index"
 """Job type of a value index pass over one Domain run by Scribe (design 8.9): the selection
 of indexed Attributes brought in line with the default branch, or a rebuild; payload from
 `value_index_payload`."""
+COVERAGE_JOB = "coverage"
+"""Job type of a coverage statistics pass over one Domain's default branch head run by Scribe
+(design 8.11, `lorebase_store.coverage`); payload from `coverage_payload`."""
+CONSOLIDATION_JOB = "vocabulary_consolidation"
+"""Job type of a consolidation pass over one Domain's resolution misses run by Scribe (design
+8.10): expired misses pruned, frequent ones turned into vocabulary suggestions; payload `{}`."""
 RECONCILE_SWEEP_JOB = "reconcile_sweep"
 """Job type of a reconciliation sweep of one branch of a Domain run by Scribe (design 10.6);
 payload from `reconcile_sweep_payload`."""
@@ -258,6 +264,13 @@ def value_index_payload(*, rebuild: bool = False) -> dict[str, Any]:
     scheduler queues the default, `{}`, so identical scheduled passes are recognized by
     `enqueue_job(unique)`."""
     return {"rebuild": True} if rebuild else {}
+
+
+def coverage_payload(*, force: bool = False) -> dict[str, Any]:
+    """Payload of a `coverage` job: `force` recounts although the head did not move. The
+    scheduler queues the default, `{}`, so identical scheduled passes are recognized by
+    `enqueue_job(unique)`."""
+    return {"force": True} if force else {}
 
 
 def reconcile_sweep_payload(
