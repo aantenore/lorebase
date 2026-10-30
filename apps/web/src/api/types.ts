@@ -205,6 +205,8 @@ export interface TraitImplementation {
   trait_id: ElementId;
   /** Trait Attribute id to the Kind's own Attribute id. */
   attribute_map: Record<ElementId, ElementId>;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface KindSearchSettings {
@@ -212,6 +214,8 @@ export interface KindSearchSettings {
   embedding_template: string | null;
   /** Lets the template name sensitive Attributes; `null` leaves the Keeper default (refuse). */
   embedding_sensitive: boolean | null;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface Kind {
@@ -308,6 +312,15 @@ export interface OperationParameter {
   description: string;
   kind_ref?: string;
   enum_values?: string[];
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
+}
+
+export interface OperationPrecondition {
+  expression: string;
+  message: string;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface OperationStep {
@@ -323,7 +336,7 @@ export interface Operation {
   display_name: string;
   description: string;
   parameters: OperationParameter[];
-  preconditions: { expression: string; message: string }[];
+  preconditions: OperationPrecondition[];
   steps: OperationStep[];
   /** `never`, `always` or a CEL expression. */
   review_policy: string;
@@ -385,6 +398,13 @@ export interface SourceTransform {
   args?: Record<string, unknown>;
 }
 
+export interface SourceRelationMapping {
+  relation: ElementId;
+  columns: string[];
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
+}
+
 export interface Source {
   id: ElementId;
   api_name: string;
@@ -413,12 +433,16 @@ export interface Source {
     ElementId,
     { column?: string; expression?: string; transforms?: SourceTransform[] }
   >;
-  relation_mapping: { relation: ElementId; columns: string[] }[];
+  relation_mapping: SourceRelationMapping[];
   scope_filter: string | null;
   sync_mode: SyncMode;
   /** Cron expression, or `null` for manual. */
   schedule: string | null;
-  target_branch_policy: { branch_template?: string; merge_policy?: SourceMergePolicy };
+  target_branch_policy: {
+    branch_template?: string;
+    merge_policy?: SourceMergePolicy;
+    extra?: Record<string, unknown>;
+  };
   /** Absent means `review`. */
   local_edits?: LocalEdits;
   /** Incremental Sources: ISO 8601 duration after which an unseen Record is flagged; absent: off. */

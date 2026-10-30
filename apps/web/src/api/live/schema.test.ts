@@ -253,4 +253,89 @@ describe('sections the Modeler does not edit', () => {
       retention: { default_days: 90, rules: [{ kind: 'Part', days: 30 }] },
     });
   });
+
+  describe('members the view does not model, inside nested objects', () => {
+    /** `SchemaOut` with a future key in each nested object that the view rebuilds. */
+    function nested() {
+      const copy = structuredClone(out);
+      const body = copy.schema as Obj;
+      const byName = (section: string, name: string) => {
+        const found = Object.values(at(body, section)).find((e) => (e as Obj)['api_name'] === name);
+        if (found === undefined) throw new Error(`No ${name}`);
+        return found as Obj;
+      };
+      const supplier = byName('kinds', 'Supplier');
+      supplier['search'] = { ...(supplier['search'] as Obj), future_search_key: { a: [1] } };
+      const implementation = (supplier['traits'] as Obj[])[0];
+      if (implementation === undefined) throw new Error('No trait implementation');
+      implementation['future_trait_link_key'] = 'x';
+      const constrained = Object.values(supplier['attributes'] as Obj).find(
+        (a) => (a as Obj)['constraints'] !== undefined && (a as Obj)['constraints'] !== null,
+      ) as Obj;
+      constrained['constraints'] = { ...(constrained['constraints'] as Obj), future_constraint: 7 };
+      const opId = 'op_01KEZF7C00OPERATION00000001';
+      at(body, 'operations')[opId] = {
+        id: opId,
+        api_name: 'flag_supplier',
+        description: '',
+        parameters: [
+          { name: 'supplier', type: { name: 'string' }, required: true, future_param_key: [1, 2] },
+        ],
+        preconditions: [
+          { expression: 'true', message: 'never', future_precondition_key: { b: 1 } },
+        ],
+        steps: [],
+        review_policy: { mode: 'never' },
+        permissions: [],
+        side_effects: [],
+        rate_limit: null,
+        status: 'active',
+      };
+      const [orders] = Object.values(at(body, 'sources')).filter(
+        (s) => ((s as Obj)['relation_mapping'] as unknown[]).length > 0,
+      ) as Obj[];
+      if (orders === undefined) throw new Error('No Source with a relation mapping');
+      const [mapping] = orders['relation_mapping'] as Obj[];
+      if (mapping === undefined) throw new Error('No mapping');
+      mapping['future_mapping_key'] = 'm';
+      orders['target_branch_policy'] = {
+        ...(orders['target_branch_policy'] as Obj),
+        future_policy_key: { c: true },
+      };
+      return copy;
+    }
+
+    const noNewId = () => {
+      throw new Error('no element should need a new id');
+    };
+
+    it('writes each one into the document verbatim', () => {
+      const json = JSON.stringify(schemaToDocument(mapSchema(nested())));
+      for (const key of [
+        'future_search_key',
+        'future_trait_link_key',
+        'future_constraint',
+        'future_param_key',
+        'future_precondition_key',
+        'future_mapping_key',
+        'future_policy_key',
+      ]) {
+        expect(json).toContain(`"${key}"`);
+      }
+    });
+
+    it('keeps them through an edit of an unrelated Kind and a save', () => {
+      const schema = mapSchema(nested());
+      const edited = schemaToDocument(schema);
+      at(edited, 'kinds', 'Plant')['description'] = 'Edited';
+      const back = documentToSchema(edited, schema, noNewId);
+      expect(back.issues).toEqual([]);
+      expect(back.schema.kinds.find((k) => k.api_name === 'Supplier')).toEqual(
+        schema.kinds.find((k) => k.api_name === 'Supplier'),
+      );
+      expect(back.schema.operations).toEqual(schema.operations);
+      expect(back.schema.sources).toEqual(schema.sources);
+      expect(schemaToDocument(back.schema)).toEqual(edited);
+    });
+  });
 });

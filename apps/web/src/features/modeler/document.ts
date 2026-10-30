@@ -179,6 +179,12 @@ const ATTRIBUTE_DOCUMENT_KEYS = [
   'vault',
   'valid_time',
 ] as const;
+const TRAIT_IMPLEMENTATION_DOCUMENT_KEYS = ['trait', 'attribute_map'] as const;
+const KIND_SEARCH_DOCUMENT_KEYS = ['embedding_template', 'embedding_sensitive'] as const;
+const PARAMETER_DOCUMENT_KEYS = ['name', 'type', 'required', 'description'] as const;
+const PRECONDITION_DOCUMENT_KEYS = ['expression', 'message'] as const;
+const RELATION_MAPPING_DOCUMENT_KEYS = ['relation', 'columns'] as const;
+const BRANCH_POLICY_DOCUMENT_KEYS = ['branch_template', 'merge_policy'] as const;
 const KIND_DOCUMENT_KEYS = [
   'id',
   'display_name',
@@ -326,7 +332,7 @@ function parameterToDocument(parameter: OperationParameter): Doc {
   const out: Doc = { name: parameter.name, type };
   if (parameter.required) out['required'] = true;
   if (parameter.description !== '') out['description'] = parameter.description;
-  return out;
+  return withExtra(out, parameter.extra);
 }
 
 const RATE_LIMIT = /^(\d+) per (\d+)s$/;
@@ -336,7 +342,11 @@ function operationToDocument(operation: Operation): ElementDocument {
   if (operation.display_name !== operation.api_name) out['display_name'] = operation.display_name;
   if (operation.description !== '') out['description'] = operation.description;
   out['parameters'] = operation.parameters.map(parameterToDocument);
-  if (operation.preconditions.length > 0) out['preconditions'] = operation.preconditions;
+  if (operation.preconditions.length > 0) {
+    out['preconditions'] = operation.preconditions.map(({ extra, ...p }) =>
+      withExtra({ ...p }, extra),
+    );
+  }
   out['steps'] = operation.steps.map((s) => ({ step: s.action, ...s.with }));
   out['review_policy'] =
     operation.review_policy === 'never' || operation.review_policy === 'always'
@@ -399,10 +409,9 @@ function sourceToDocument(
     Object.entries(source.attribute_mapping).map(([id, mapping]) => [attributeName(id), mapping]),
   );
   if (source.relation_mapping.length > 0) {
-    out['relation_mapping'] = source.relation_mapping.map((m) => ({
-      relation: relationName(m.relation),
-      columns: m.columns,
-    }));
+    out['relation_mapping'] = source.relation_mapping.map((m) =>
+      withExtra({ relation: relationName(m.relation), columns: m.columns }, m.extra),
+    );
   }
   if (source.scope_filter !== null) out['scope_filter'] = source.scope_filter;
   out['sync_mode'] = source.sync_mode;
@@ -410,7 +419,8 @@ function sourceToDocument(
   if (source.tombstone_column != null) out['tombstone_column'] = source.tombstone_column;
   if (source.schedule !== null) out['schedule'] = source.schedule;
   if (Object.keys(source.target_branch_policy).length > 0) {
-    out['target_branch_policy'] = source.target_branch_policy;
+    const { extra, ...policy } = source.target_branch_policy;
+    out['target_branch_policy'] = withExtra({ ...policy }, extra);
   }
   if (source.local_edits !== undefined) out['local_edits'] = source.local_edits;
   if (source.stale_after !== undefined) out['stale_after'] = source.stale_after;
@@ -461,6 +471,7 @@ export function schemaToDocument(
       if (kind.search.embedding_sensitive !== null) {
         search['embedding_sensitive'] = kind.search.embedding_sensitive;
       }
+      withExtra(search, kind.search.extra);
       if (Object.keys(search).length > 0) out['search'] = search;
       const builtin = kind.operations_builtin;
       if (!(builtin.create && builtin.update && builtin.delete)) {
@@ -471,15 +482,18 @@ export function schemaToDocument(
       if (kind.traits.length > 0) {
         out['traits'] = kind.traits.map((t) => {
           const trait = schema.traits.find((x) => x.id === t.trait_id);
-          return {
-            trait: trait?.api_name ?? t.trait_id,
-            attribute_map: Object.fromEntries(
-              Object.entries(t.attribute_map).map(([from, to]) => [
-                trait?.attributes.find((a) => a.id === from)?.name ?? from,
-                name(to),
-              ]),
-            ),
-          };
+          return withExtra(
+            {
+              trait: trait?.api_name ?? t.trait_id,
+              attribute_map: Object.fromEntries(
+                Object.entries(t.attribute_map).map(([from, to]) => [
+                  trait?.attributes.find((a) => a.id === from)?.name ?? from,
+                  name(to),
+                ]),
+              ),
+            },
+            t.extra,
+          );
         });
       }
       return [kind.api_name, withExtra(out, kind.extra)];
@@ -861,7 +875,13 @@ function kindFromDocument(
         map[traitAttribute.id] = attributeRef(to, `${at}/attribute_map`);
       }
     }
-    return [{ trait_id: trait.id, attribute_map: map }];
+    return [
+      {
+        trait_id: trait.id,
+        attribute_map: map,
+        ...extraOfDocument(raw, TRAIT_IMPLEMENTATION_DOCUMENT_KEYS),
+      },
+    ];
   });
 
   const builtinDoc = reader.map(value['operations_builtin'], `${path}/operations_builtin`);
@@ -883,6 +903,7 @@ function kindFromDocument(
         .map((a) => ({ attribute_id: a.id, weight: a.searchable ?? 'D' })),
       embedding_template: reader.optionalString(searchDoc, 'embedding_template', `${path}/search`),
       embedding_sensitive: reader.optionalBool(searchDoc, 'embedding_sensitive', `${path}/search`),
+      ...extraOfDocument(searchDoc, KIND_SEARCH_DOCUMENT_KEYS),
     },
     icon: reader.optionalString(value, 'icon', path),
     color: reader.optionalString(value, 'color', path),
@@ -1017,6 +1038,7 @@ function parameterFromDocument(
     type: 'string',
     required: reader.bool(raw, 'required', path, false),
     description: reader.string(raw, 'description', path, ''),
+    ...extraOfDocument(raw, PARAMETER_DOCUMENT_KEYS),
   };
   const refType = typeof type === 'string' ? /^ref\(([A-Za-z0-9]+)\)$/.exec(type) : null;
   if (refType?.[1] !== undefined) {
@@ -1067,6 +1089,7 @@ function operationFromDocument(name: string, value: unknown, ctx: ReadContext): 
       .map((p) => ({
         expression: reader.string(p, 'expression', `${path}/preconditions`, ''),
         message: reader.string(p, 'message', `${path}/preconditions`, ''),
+        ...extraOfDocument(p, PRECONDITION_DOCUMENT_KEYS),
       })),
     steps: reader.list(value['steps'], `${path}/steps`).flatMap((raw, index) => {
       if (!isMap(raw)) {
@@ -1227,6 +1250,7 @@ function sourceFromDocument(
     relationMapping.push({
       relation: relation.id,
       columns: reader.strings(mapping['columns'], `${at}/columns`),
+      ...extraOfDocument(mapping, RELATION_MAPPING_DOCUMENT_KEYS),
     });
   });
   const policy = reader.map(value['target_branch_policy'], `${path}/target_branch_policy`);
@@ -1284,6 +1308,7 @@ function sourceFromDocument(
       ...(mergePolicy === null
         ? {}
         : { merge_policy: mergePolicy as Source['target_branch_policy']['merge_policy'] }),
+      ...extraOfDocument(policy, BRANCH_POLICY_DOCUMENT_KEYS),
     },
     ...(Object.keys(extra).length === 0 ? {} : { extra }),
   };

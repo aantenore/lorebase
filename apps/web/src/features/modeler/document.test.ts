@@ -267,3 +267,69 @@ describe('schema YAML', () => {
     expect(locateIssue(text, 'kinds/Supplier/attributes/missing')?.line).toBe(4);
   });
 });
+
+describe('members the Modeler does not model, inside nested objects', () => {
+  async function nested(): Promise<Schema> {
+    const schema = structuredClone(await sample('model/risk'));
+    const kind = schema.kinds.find((k) => k.traits.length > 0);
+    const operation = schema.operations.find(
+      (o) => !o.builtin && o.parameters.length > 0 && o.preconditions.length > 0,
+    );
+    const source = schema.sources[0];
+    const relation = schema.relations[0];
+    const implementation = kind?.traits[0];
+    const parameter = operation?.parameters[0];
+    const precondition = operation?.preconditions[0];
+    if (!kind || !source || !relation || !implementation || !parameter || !precondition) {
+      throw new Error('The sample lacks an element this test needs');
+    }
+    kind.search = { ...kind.search, embedding_template: 'x', extra: { future_search: { a: [1] } } };
+    implementation.extra = { future_link: 'x' };
+    const attribute = Object.values(kind.attributes)[0];
+    if (!attribute) throw new Error('No attribute');
+    Object.assign(attribute.constraints, { future_constraint: 7 });
+    parameter.extra = { future_parameter: [1, 2] };
+    precondition.extra = { future_precondition: { b: 1 } };
+    source.relation_mapping = [
+      { relation: relation.id, columns: ['c'], extra: { future_mapping: 'm' } },
+    ];
+    source.target_branch_policy = {
+      ...source.target_branch_policy,
+      extra: { future_policy: { c: true } },
+    };
+    return schema;
+  }
+
+  it('writes them into the document', async () => {
+    const json = JSON.stringify(schemaToDocument(await nested()));
+    for (const key of [
+      'future_search',
+      'future_link',
+      'future_constraint',
+      'future_parameter',
+      'future_precondition',
+      'future_mapping',
+      'future_policy',
+    ]) {
+      expect(json).toContain(`"${key}"`);
+    }
+    expect(json).not.toContain('"extra"');
+  });
+
+  it('keeps them through an edit of an unrelated Kind and a save', async () => {
+    const schema = await nested();
+    const edited = structuredClone(schemaToDocument(schema));
+    const plant = edited.kinds?.['Plant'];
+    if (plant === undefined) throw new Error('No Plant');
+    plant.description = 'Edited';
+    const { schema: back, issues } = documentToSchema(edited, schema, mint);
+    expect(issues).toEqual([]);
+    expect(back.relations).toEqual(schema.relations);
+    expect(back.sources).toEqual(schema.sources);
+    expect(custom(back)).toEqual(custom(schema));
+    expect(back.kinds.filter((k) => k.api_name !== 'Plant')).toEqual(
+      schema.kinds.filter((k) => k.api_name !== 'Plant'),
+    );
+    expect(schemaToDocument(back)).toEqual(edited);
+  });
+});

@@ -94,9 +94,12 @@ function enumValuesOf(raw: RawType): string[] | undefined {
 function constraintsOf(raw: unknown, type: RawType): AttributeConstraints {
   const out: AttributeConstraints = {};
   if (isRaw(raw)) {
-    for (const key of ['min', 'max', 'min_length', 'max_length', 'pattern'] as const) {
-      const value = raw[key];
-      if (value !== undefined && value !== null) Object.assign(out, { [key]: value });
+    // Every member is kept: a constraint the view does not model rides along flat, as the
+    // document spells it.
+    for (const [key, value] of Object.entries(raw)) {
+      if (value !== undefined && value !== null && key !== 'enum_values') {
+        Object.assign(out, { [key]: value });
+      }
     }
     const members = raw['enum_values'];
     if (Array.isArray(members)) out.enum_values = members.map(String);
@@ -164,6 +167,9 @@ function status(raw: Raw): { status?: ElementStatus } {
   return value === undefined || value === 'active' ? {} : { status: value as ElementStatus };
 }
 
+const TRAIT_IMPLEMENTATION_KEYS = ['trait_id', 'attribute_map'] as const;
+const KIND_SEARCH_KEYS = ['embedding_template', 'embedding_sensitive'] as const;
+
 const KIND_KEYS = [
   'id',
   'api_name',
@@ -206,6 +212,7 @@ function kind(raw: Raw, names: Names): Kind {
             String(to),
           ]),
         ),
+        ...extraOf(t, TRAIT_IMPLEMENTATION_KEYS),
       })),
     status: str(raw['status'], 'active') as Kind['status'],
     search: {
@@ -219,6 +226,7 @@ function kind(raw: Raw, names: Names): Kind {
         isRaw(raw['search']) && typeof raw['search']['embedding_sensitive'] === 'boolean'
           ? raw['search']['embedding_sensitive']
           : null,
+      ...(isRaw(raw['search']) ? extraOf(raw['search'], KIND_SEARCH_KEYS) : {}),
     },
     icon: strOrNull(raw['icon']),
     color: strOrNull(raw['color']),
@@ -312,6 +320,9 @@ function trait(raw: Raw, names: Names): Trait {
   };
 }
 
+const PARAMETER_KEYS = ['name', 'type', 'required', 'description'] as const;
+const PRECONDITION_KEYS = ['expression', 'message'] as const;
+
 function parameter(raw: Raw, names: Names): OperationParameter {
   const type = (isRaw(raw['type']) ? raw['type'] : { name: 'string' }) as unknown as RawType;
   const base: OperationParameter = {
@@ -326,6 +337,7 @@ function parameter(raw: Raw, names: Names): OperationParameter {
     ...base,
     type: typeName(type, names) as AttributeType,
     ...(enumValues === undefined ? {} : { enum_values: enumValues }),
+    ...extraOf(raw, PARAMETER_KEYS),
   };
 }
 
@@ -376,6 +388,7 @@ function operation(raw: Raw, names: Names): Operation {
       .map((p) => ({
         expression: str(p['expression']),
         message: str(p['message']),
+        ...extraOf(p, PRECONDITION_KEYS),
       })),
     steps: list(raw['steps'])
       .filter(isRaw)
@@ -462,6 +475,9 @@ const SOURCE_KEYS = [
   'stale_after',
 ] as const;
 
+const RELATION_MAPPING_KEYS = ['relation', 'columns'] as const;
+const BRANCH_POLICY_KEYS = ['branch_template', 'merge_policy'] as const;
+
 function source(raw: Raw): Source {
   const policy = isRaw(raw['target_branch_policy']) ? raw['target_branch_policy'] : {};
   const mapping = isRaw(raw['attribute_mapping']) ? raw['attribute_mapping'] : {};
@@ -502,6 +518,7 @@ function source(raw: Raw): Source {
       .map((m) => ({
         relation: str(m['relation']),
         columns: list(m['columns']).map(String),
+        ...extraOf(m, RELATION_MAPPING_KEYS),
       })),
     scope_filter: strOrNull(raw['scope_filter']),
     sync_mode: str(raw['sync_mode'], 'snapshot') as Source['sync_mode'],
@@ -517,6 +534,7 @@ function source(raw: Raw): Source {
       ...(typeof policy['merge_policy'] === 'string'
         ? { merge_policy: policy['merge_policy'] as 'proposal' }
         : {}),
+      ...extraOf(policy, BRANCH_POLICY_KEYS),
     },
     ...(Object.keys(extra).length === 0 ? {} : { extra }),
   };
