@@ -4834,6 +4834,94 @@
         }
       }
     },
+    "/api/v1/domains/{domain_id}/resolve": {
+      "post": {
+        "tags": [
+          "read"
+        ],
+        "summary": "Resolve words to schema elements and values",
+        "description": "Ground the words of a text in the schema and the indexed values (design 8.9): ranked\ncandidate Kinds, Attributes and values, each with the words it matched and, for values,\na ready-to-use predicate. No query is run and nothing is interpreted beyond matching.",
+        "operationId": "resolve_words_api_v1_domains__domain_id__resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Domain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem details (RFC 9457), media type application/problem+json.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks data.read for the branch or Revision read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Domain, branch, Revision, Kind or Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/domains/{domain_id}/derivations:preview": {
       "post": {
         "tags": [
@@ -21810,6 +21898,120 @@
         "title": "ResolutionOut",
         "description": "A stored resolution; `matched` is false when its Conflict is gone from the attempt."
       },
+      "ResolveCandidate": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": [
+              "kind",
+              "attribute",
+              "value"
+            ],
+            "title": "Target",
+            "description": "What matched: a Kind, an Attribute (by name), or values of an Attribute."
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Kind api name."
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Attribute api name (attribute and value candidates)."
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type",
+            "description": "Attribute type, e.g. decimal(12,2)."
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values",
+            "description": "Stored values the words stand for (value candidates)."
+          },
+          "predicate": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicate",
+            "description": "Ready-to-use where fragment of lorebase_query / POST /query for the Kind (value candidates)."
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Confidence, 0 to 1; higher first."
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "synonym",
+              "trigram",
+              "embedding"
+            ],
+            "title": "Level",
+            "description": "How it matched: exact name or value, alias, similar spelling, or values of the Records nearest to the query vector."
+          },
+          "matched": {
+            "type": "string",
+            "title": "Matched",
+            "description": "The words of the text that matched."
+          },
+          "records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Records",
+            "description": "Records holding the values on the branch read (value candidates)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "kind",
+          "score",
+          "level",
+          "matched"
+        ],
+        "title": "ResolveCandidate",
+        "description": "A schema element or indexed value some words of the text may stand for."
+      },
       "ResolveManyIn": {
         "properties": {
           "resolutions": {
@@ -21826,6 +22028,170 @@
           "resolutions"
         ],
         "title": "ResolveManyIn"
+      },
+      "ResolveRequest": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text",
+            "description": "Words to resolve, e.g. a user's question; split into phrases of one to a few words."
+          },
+          "kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kinds",
+            "description": "Kind api names to look in; default: every Kind you may read."
+          },
+          "levels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "synonym",
+                    "trigram",
+                    "embedding"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Levels",
+            "description": "Matching levels to use (exact, synonym, trigram, embedding); default: those the server enables."
+          },
+          "query_vector": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Vector",
+            "description": "Embedding of `text` (configured model and dimension): enables the embedding level when nothing else matched."
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit",
+            "description": "Candidates returned."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "ResolveRequest",
+        "description": "Words to ground in the schema and the indexed values (design 8.9)."
+      },
+      "ResolveResponse": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "Revision the response was served from (hex)."
+          },
+          "served_from": {
+            "$ref": "#/components/schemas/ServedFrom"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "unmatched": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unmatched",
+            "description": "Words no candidate covers (often filler words)."
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveSkipped"
+            },
+            "type": "array",
+            "title": "Skipped",
+            "description": "Levels that did not run, and why."
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "served_from",
+          "candidates"
+        ],
+        "title": "ResolveResponse"
+      },
+      "ResolveSkipped": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "reason"
+        ],
+        "title": "ResolveSkipped"
       },
       "RetirementIn": {
         "properties": {
