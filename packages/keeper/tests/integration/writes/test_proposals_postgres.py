@@ -173,6 +173,8 @@ async def test_merge_with_conflicts_end_to_end(
             "required_from_stewards": None,
             "steward_approvals": None,
             "stewards_unavailable": False,
+            "required_roles": None,
+            "missing_roles": None,
         }
         assert (left["steward_roles"], left["assignees"]) == ([], None)  # no principal.read
         again = await http.post(
