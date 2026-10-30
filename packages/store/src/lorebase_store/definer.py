@@ -1,4 +1,5 @@
-"""Grants on the security definer read functions of revisions 0005, 0010, 0018, 0035 and 0037
+"""Grants on the security definer read functions of revisions 0005, 0010, 0018, 0035, 0037 and
+0045
 (store schema notes).
 
 The migration revokes EXECUTE from PUBLIC and grants it to `database.application_role`.
@@ -25,6 +26,7 @@ READ_FUNCTIONS = (
     "lb_search_corrected_overlay",
     "lb_search_bounded",
     "lb_search_bounded_overlay",
+    "lb_values_similar",
 )
 """Functions only the store read primitives call, with a Domain already authorized."""
 BM25_FUNCTIONS = ("lb_search_bm25", "lb_search_bm25_overlay")

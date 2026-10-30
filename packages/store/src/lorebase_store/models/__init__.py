@@ -43,6 +43,9 @@ from lorebase_store.models.materialized import (
     MatLink,
     MatRecord,
     MatSchema,
+    MatValue,
+    MatValueAttribute,
+    MatValueCursor,
     StorageTask,
 )
 from lorebase_store.models.proposals import (
@@ -108,6 +111,9 @@ __all__ = [
     "MatLink",
     "MatRecord",
     "MatSchema",
+    "MatValue",
+    "MatValueAttribute",
+    "MatValueCursor",
     "MergeAttempt",
     "OperationDeferredEvent",
     "OperationInvocation",

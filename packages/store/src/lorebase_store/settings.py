@@ -154,6 +154,46 @@ class EmbeddingStoreSettings(SectionModel):
     )
 
 
+class ValueIndexSettings(SectionModel):
+    """Which Attributes the value index holds (design 8.9, `lorebase_store.values`).
+
+    Enums are always held, and so are Attributes the schema marks `resolvable: true`; those
+    marked `resolvable: false`, sensitive ones and types other than string and enum (alone or
+    in arrays) never are. A plain string Attribute is held while its distinct values on the
+    default branch stay within `max_distinct` and, once the Kind holds at least
+    `ratio_min_records` Records, within `max_distinct_ratio` of its Records.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Keep the value index; false drops every selection on the next pass "
+        "(resolution then matches schema names only).",
+    )
+    max_value_chars: int = Field(
+        default=64,
+        ge=1,
+        le=512,
+        description="Values longer than this are left out of the index.",
+    )
+    max_distinct: int = Field(
+        default=1000,
+        ge=1,
+        description="A plain string Attribute with more distinct values than this is not held.",
+    )
+    max_distinct_ratio: float = Field(
+        default=0.2,
+        gt=0,
+        le=1,
+        description="A plain string Attribute whose distinct values exceed this share of the "
+        "Kind's Records is not held (codes, names, free text).",
+    )
+    ratio_min_records: int = Field(
+        default=50,
+        ge=1,
+        description="Records a Kind needs before max_distinct_ratio applies.",
+    )
+
+
 class WriteSettings(SectionModel):
     """Bulk writes of objects, tree nodes, changesets and materialized rows."""
 
@@ -827,6 +867,7 @@ class StoreSettings(SectionModel):
     layout: LayoutSettings = Field(default_factory=LayoutSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     embeddings: EmbeddingStoreSettings = Field(default_factory=EmbeddingStoreSettings)
+    values: ValueIndexSettings = Field(default_factory=ValueIndexSettings)
     writes: WriteSettings = Field(default_factory=WriteSettings)
     nodes: NodeSettings = Field(default_factory=NodeSettings)
     commit: CommitSettings = Field(default_factory=CommitSettings)

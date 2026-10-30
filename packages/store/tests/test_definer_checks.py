@@ -65,11 +65,15 @@ CALLS = {
     # One function for both layouts: it adds the base's words on an overlay.
     "lb_search_corrections": f"SELECT * FROM lb_search_corrections(:domain, '{OVERLAY}', "
     "NULL, 'simple', 'bearng', CAST(0.3 AS real), CAST(:p_candidates AS integer), 3)",
+    # Likewise: it adds the base's values on an overlay.
+    "lb_values_similar": f"SELECT * FROM lb_values_similar(:domain, '{OVERLAY}', NULL, "
+    "ARRAY['bearng'], CAST(0.3 AS real), CAST(:p_limit AS integer))",
 }
 COUNTS = {
     **_COUNTS,
     **{f"{name}_overlay": counts for name, counts in _COUNTS.items()},
     "lb_search_corrections": ("p_candidates",),
+    "lb_values_similar": ("p_limit",),
 }
 ARGUMENTS: dict[str, Any] = {
     "domain": DOMAIN,
@@ -137,6 +141,15 @@ async def sessions(
             runtime=runtime,
         )
     assert created.mode.value == "overlay"
+    async with factory() as session, session.begin():
+        # A value of the base, so that `lb_values_similar` has something to return.
+        await session.execute(
+            text(
+                "INSERT INTO mat_values (domain_id, branch, kind_id, attribute_id, value, norm, "
+                "records) VALUES (:domain, 'main', :kind, :attribute, 'bearing', 'bearing', 1)"
+            ),
+            {"domain": DOMAIN, "kind": SUPPLIER, "attribute": VAT},
+        )
     return factory
 
 
@@ -258,15 +271,21 @@ def test_upgrade_and_downgrade_keep_the_grants(
     checked = [(name, True, False, True) for name in names]
     assert _privileges(database_url, application_role) == checked
     plain = ["lb_links_in", "lb_neighborhood", "lb_query_by_attribute", "lb_search"]
+    migrations.downgrade("0044", database=database, store=store, url=database_url)
+    assert _privileges(database_url, application_role) == [
+        (name, True, False, True) for name in names if "_values" not in name
+    ]
     migrations.downgrade("0034", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
-        (name, True, False, True) for name in names if "_bounded" not in name
+        (name, True, False, True)
+        for name in names
+        if "_bounded" not in name and "_values" not in name
     ]
     migrations.downgrade("0017", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
         (name, True, False, True)
         for name in names
-        if "_correct" not in name and "_bounded" not in name
+        if "_correct" not in name and "_bounded" not in name and "_values" not in name
     ]
     migrations.downgrade("0009", database=database, store=store, url=database_url)
     assert _privileges(database_url, application_role) == [
