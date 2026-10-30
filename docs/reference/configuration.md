@@ -335,7 +335,7 @@ Sign-in of the web app: Keeper as backend-for-frontend (authorization code + PKC
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `keeper.branches.materialization` | `full` | M1 supports full only: rows copied from the source head or rebuilt from the tree of the start Revision |
+| `keeper.branches.materialization` | `full` | the only value: a copy holds full rows, copied from the source head or rebuilt from the tree of the start Revision; copy or overlay per branch: store.materialize.branch_mode |
 | `keeper.branches.max_materialized_per_domain` | `20` |  |
 | `keeper.branches.name_pattern` | `'^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'` |  |
 | `keeper.branches.max_name_length` | `200` |  |
@@ -730,8 +730,8 @@ Postgres 16 with the pgvector extension. Environment: LOREBASE__DATABASE__DSN, .
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `database.dsn` | `postgresql+asyncpg://lorebase@localhost:5432/lorebase` |  |
-| `database.pool_size` | `10` | alias LOREBASE_DB_DSN; e.g. secret://env/LOREBASE_DB_DSN. postgresql:// URLs are switched to the asyncpg driver; without a password, PGPASSWORD or ~/.pgpass is used connections kept open per process |
+| `database.dsn` | `postgresql+asyncpg://lorebase@localhost:5432/lorebase` | alias LOREBASE_DB_DSN; e.g. secret://env/LOREBASE_DB_DSN. postgresql:// URLs are switched to the asyncpg driver; without a password, PGPASSWORD or ~/.pgpass is used |
+| `database.pool_size` | `10` | connections kept open per process |
 | `database.max_overflow` | `10` | extra connections under load |
 | `database.pool_timeout_s` | `30` | wait for a free pooled connection |
 | `database.pool_recycle_s` | `1800` | replace older connections; -1 never |
@@ -1335,7 +1335,7 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 
 ## `vault`
 
-Personal data vault (design 13.5; docs/security.md): values of `pii` Attributes with `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase` erases them on every Revision. Keeper, Scribe and every committing process need the same keys.
+Personal data vault (design 13.5; docs/threat-model.md): values of `pii` Attributes with `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase` erases them on every Revision. Keeper, Scribe and every committing process need the same keys.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

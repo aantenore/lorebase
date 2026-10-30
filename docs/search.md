@@ -66,7 +66,10 @@ from then on; an existing index keeps its own until rebuilt
 ([operations](operations.md#rebuilding-the-embedding-index)).
 
 The pgvector version is read once per process (`pg_extension.extversion`) and `/readyz` reports
-it in the `vector_search` check, with the case in use. When the list is still shorter than
+it in the `vector_search` check, with the case in use. The check is `degraded` when vectors are
+stored but none under `search.semantic.model` (the setting drifted from
+`inference.embeddings.model`, so semantic search would find nothing); the detail lists the stored
+models. When the list is still shorter than
 `search.candidates` because the scan bound was reached while more Records match the filters,
 the response says `semantic_truncated: true` (`truncated` in Herald): narrow the Kinds or the
 filter, or raise `max_scan_tuples` or `overfetch_factor`. A list short because fewer Records

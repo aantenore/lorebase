@@ -276,8 +276,9 @@ keeper:
     creator_role: admin          # role granted to the creator in a new Domain; null: none
     protect_default_branch: true # the default branch accepts changes only through Proposals
   branches:
-    materialization: full        # M1 supports full only: rows copied from the source head or
-                                 # rebuilt from the tree of the start Revision
+    materialization: full        # the only value: a copy holds full rows, copied from the
+                                 # source head or rebuilt from the tree of the start Revision;
+                                 # copy or overlay per branch: store.materialize.branch_mode
     max_materialized_per_domain: 20
     name_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'
     max_name_length: 200
@@ -600,8 +601,8 @@ inference:
 
 # Postgres 16 with the pgvector extension. Environment: LOREBASE__DATABASE__DSN, ...
 database:
-  dsn: postgresql+asyncpg://lorebase@localhost:5432/lorebase
-                                 # alias LOREBASE_DB_DSN; e.g. secret://env/LOREBASE_DB_DSN.
+  dsn: postgresql+asyncpg://lorebase@localhost:5432/lorebase   # alias
+                                 # LOREBASE_DB_DSN; e.g. secret://env/LOREBASE_DB_DSN.
                                  # postgresql:// URLs are switched to the asyncpg driver; without
                                  # a password, PGPASSWORD or ~/.pgpass is used
   pool_size: 10                  # connections kept open per process
@@ -1042,7 +1043,7 @@ webhooks:
   changed_keys_max: 100          # changed Record keys listed per event payload
   retention_s: 604800.0          # finished deliveries kept (7 days; events: store.outbox)
 
-# Personal data vault (design 13.5; docs/security.md): values of `pii` Attributes with
+# Personal data vault (design 13.5; docs/threat-model.md): values of `pii` Attributes with
 # `vault: true` are stored encrypted here, Records hold tokens, and `lorebase admin erase`
 # erases them on every Revision. Keeper, Scribe and every committing process need the same keys.
 vault:
