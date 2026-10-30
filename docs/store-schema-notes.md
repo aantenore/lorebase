@@ -120,6 +120,16 @@ difference).
 
 ### Search indexes
 
+Revision `0044` adds `ix_mat_records_object_hash` on `(domain_id, branch, object_hash)`
+(per partition, `CREATE INDEX CONCURRENTLY`, attached to an index created `ON ONLY` the
+parent). Semantic search joins the nearest vectors of `embeddings` (keyed by
+`(domain_id, object_hash)`) to the branch's Records through it; without it the planner sorts
+every vector of the model (270 ms at 300,000 vectors, over the budget of design 8.7; 25 ms with
+it). Trade-off: about 40 bytes per row of `mat_records`, no measurable cost on commits and about
+15% on the bulk deletion of a branch (docs/performance.md#filtered-semantic-search).
+`embeddings` gets no new column: a template fingerprint includes the Kind id, so it already
+names the Kind of its vectors.
+
 Revision `0011` replaces the GIN indexes of revision `0001` on `search`
 (`ix_mat_records_search`) and on trigrams of `title` (`ix_mat_records_title`) with
 `ix_mat_records_branch_search` on `(domain_id, branch, search)` and

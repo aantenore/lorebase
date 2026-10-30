@@ -101,6 +101,7 @@ def test_named_indexes_and_constraints() -> None:
     assert {
         "ix_mat_records_branch_search",
         "ix_mat_records_values",
+        "ix_mat_records_object_hash",
         "ix_mat_lexicon_branch_word",
         "ix_mat_links_reverse",
         "ix_revision_parents_domain_id_parent_id",
@@ -120,4 +121,4 @@ def test_comparison_filter_skips_partitions_and_runtime_indexes() -> None:
 
 
 def test_head_revision_is_the_latest_migration() -> None:
-    assert head_revisions() == ("0043",)
+    assert head_revisions() == ("0044",)

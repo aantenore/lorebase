@@ -11,9 +11,9 @@ filtered to the smallest Kind (1% of the rows). Ground truth is the exact cosine
 rows of that Kind, by a sequential scan with the index scans off.
 
 Asserted: the plan reads the HNSW index; with iterative scans the list keeps its limit and
-matches the exact neighbours (recall@k) within a latency budget; without them (over-fetch) the
-shortfall is reported with `semantic_truncated`. The measurements are written to
-`build/perf/filtered-vectors.md` (override with `LOREBASE_PERF_FILTERED_VECTORS_OUT`).
+matches the exact neighbours (recall@k) within a latency budget; the over-fetch path
+fills the list for a one-Kind filter, which restricts the vectors before its limit. The
+measurements are written to `build/perf/filtered-vectors.md` (override with `LOREBASE_PERF_FILTERED_VECTORS_OUT`).
 """
 
 from __future__ import annotations
@@ -431,7 +431,6 @@ async def measured(
 
 
 OVER_FETCH = {"search": {"semantic": {"iterative_scan": "off"}}}
-WIDE_OVER_FETCH = {"search": {"semantic": {"iterative_scan": "off", "overfetch_factor": 100}}}
 HNSW = hnsw_index_name(DIMS, "full")
 
 
@@ -462,12 +461,6 @@ async def test_iterative_scan_keeps_the_limit_of_a_one_percent_filter(dataset: D
     assert not any(run.truncated)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="No index on mat_records (domain_id, branch, object_hash): the planner cannot join "
-    "the Records to the HNSW scan lazily, so the statement reads every vector of the model and "
-    "sorts (exact, correct, linear in the table). Fails the day the index exists.",
-)
 @pytest.mark.parametrize(("label", "kind"), [("no filter", None), ("40% filter", "Supplier")])
 async def test_iterative_scan_reads_the_hnsw_index(
     dataset: Dataset, label: str, kind: str | None
@@ -476,14 +469,15 @@ async def test_iterative_scan_reads_the_hnsw_index(
     assert HNSW in indexes_of(plan), shape(plan)
 
 
-async def test_over_fetch_reads_the_index_and_says_when_it_falls_short(dataset: Dataset) -> None:
+async def test_over_fetch_of_a_one_percent_kind_is_exact(dataset: Dataset) -> None:
+    # The search reads the vectors of the Kind's template fingerprint alone (a Kind has its
+    # own fingerprint): for 1% of the table the planner reads those rows and sorts them, so
+    # the list is complete whatever the over-fetch.
     run, plan = await measured(dataset, "1% filter, over-fetch x4", FILTERED_KIND, **OVER_FETCH)
-    assert HNSW in indexes_of(plan), shape(plan)
-    # 4 x 200 nearest rows hold about 8 rows of a 1% Kind: the list is short, and says so.
-    assert 0 < statistics.mean(run.items) < LIMIT
-    assert all(cut for cut, n in zip(run.truncated, run.items, strict=True) if n < LIMIT)
-    # The shortfall is the filter's, not the scan's: ef_search follows the over-fetch.
-    assert statistics.mean(run.items) > 4
+    assert HNSW not in indexes_of(plan), shape(plan)
+    assert min(run.items) == LIMIT
+    assert statistics.mean(run.recalls) >= MIN_RECALL, run.recalls
+    assert not any(run.truncated)
 
 
 async def test_over_fetch_keeps_the_limit_of_a_broad_filter(dataset: Dataset) -> None:
@@ -492,9 +486,3 @@ async def test_over_fetch_keeps_the_limit_of_a_broad_filter(dataset: Dataset) ->
     assert min(run.items) == LIMIT
     assert statistics.mean(run.recalls) >= MIN_RECALL, run.recalls
     assert run.p95() <= BUDGET_P95_MS, run.latencies_ms
-
-
-async def test_a_wider_over_fetch_is_capped_by_the_index(dataset: Dataset) -> None:
-    run, _ = await measured(dataset, "1% filter, over-fetch x100", FILTERED_KIND, **WIDE_OVER_FETCH)
-    # pgvector caps ef_search at 1000 rows, so x100 of 200 candidates is still 1000 rows.
-    assert statistics.mean(run.items) < LIMIT

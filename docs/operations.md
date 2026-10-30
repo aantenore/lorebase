@@ -206,6 +206,20 @@ first.
 - **Retirement** (`document.retire`, maintainers and admins) keeps the document readable and
   stops its extraction; audited `document.retire`.
 
+## Semantic search index after the upgrade
+
+Migration `0044` builds `ix_mat_records_object_hash` on `mat_records (domain_id, branch,
+object_hash)`, the probe of the join in semantic search (design 8.8). It builds the index per
+hash partition with `CREATE INDEX CONCURRENTLY` (outside a transaction, so writes continue;
+an interrupted run leaves an invalid index that the next run drops and rebuilds), then attaches
+the partition indexes to the parent. Nothing is rewritten and no restart is needed. The
+build time grows with the rows of each partition (a B-tree on three columns; not measured at
+tens of millions of Records) and the index takes about 40 bytes per Record and branch row; on
+a large install plan the migration for a quiet period and follow `pg_stat_progress_create_index`. The migration role must own `mat_records`.
+Writes pay little (commits show no difference; bulk deletes of a branch about 15% longer).
+Until the index exists, semantic search still answers, with the cost of the model's vectors.
+The downgrade drops the index.
+
 ## Ingestion modes and stewards after the upgrade
 
 Migration `0042` adds `proposals.kinds` (the Kinds a Proposal's changes touch, with a GIN

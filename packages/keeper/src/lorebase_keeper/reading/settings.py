@@ -235,8 +235,8 @@ class SemanticSettings(SectionModel):
     overfetch_factor: int = Field(
         default=4,
         ge=1,
-        description="Without iterative scans, the index returns search.candidates * this many "
-        "nearest rows before the filters apply.",
+        description="The index returns search.candidates * this many nearest vectors of the "
+        "searched Kinds before the Records' filters apply.",
     )
 
 
