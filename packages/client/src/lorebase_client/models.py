@@ -155,6 +155,12 @@ class DomainUpdate(RequestModel):
         return body
 
 
+class DomainCan(Model):
+    """What the caller may do with the Domain itself."""
+
+    settings: bool
+
+
 class Domain(Model):
     """A Domain and the head Revision of its default branch."""
 
@@ -167,6 +173,9 @@ class Domain(Model):
     created_at: datetime
     created_by: str
     head: str | None = Field(default=None, description="Head of the default branch (get only).")
+    can: DomainCan | None = Field(
+        default=None, description="What the caller may do (get and patch of one Domain only)."
+    )
 
 
 # Branches and tags ------------------------------------------------------------------------
@@ -991,6 +1000,8 @@ class Approval(Model):
     required_from_stewards: int | None = None
     steward_approvals: int | None = None
     stewards_unavailable: bool = False
+    required_roles: list[str] | None = None
+    missing_roles: list[str] | None = None
 
 
 class Resolution(Model):
