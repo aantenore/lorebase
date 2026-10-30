@@ -688,6 +688,9 @@ store:
                                  # (no more missed than it) or is dropped
     max_phrases_per_caller: 500  # phrases one caller alone may hold per Domain
     max_callers: 20              # distinct callers counted per phrase (digests, never names)
+    caller_key: null             # REQUIRED when enabled: >= 32 characters, e.g.
+                                 # secret://env/LOREBASE_MISS_CALLER_KEY; keys the HMAC-SHA256
+                                 # caller digests. Changing it counts distinct callers afresh
     prune_batch: 5000            # expired phrases deleted per statement
   # Records and missing values per Kind of the default branch head, behind the coverage block
   # of queries and resolutions (design 8.11); counted by Scribe, looked up by reads.

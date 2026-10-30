@@ -29,7 +29,7 @@ disclosure, **D**enial of service, **E**levation of privilege.
 | Asset | Where it lives |
 |-------|----------------|
 | Domain content: Records, Links, schema, history | Postgres (`mat_*`, Revisions, tree nodes and objects) |
-| Credentials: API keys, session ids, provider tokens, webhook secrets, Source secrets, the pepper and the session encryption key | Hashes and ciphertexts in Postgres; secret values in the environment or files referenced by `secret://` |
+| Credentials: API keys, session ids, provider tokens, webhook secrets, Source secrets, the pepper, the session encryption key and the key of resolution-miss caller digests (`store.resolve_misses.caller_key`) | Hashes and ciphertexts in Postgres; secret values in the environment or files referenced by `secret://` |
 | Authorization state: principals, groups, grants | Postgres, installation-wide tables |
 | The audit log | `audit_log`, one hash chain per Domain plus one installation-wide |
 | Documents uploaded for extraction | Postgres, unmasked raw input |

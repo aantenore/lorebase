@@ -146,8 +146,8 @@ async def sessions(
         # something to return.
         await session.execute(
             text(
-                "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
-                "VALUES (:domain, :kind, :attribute, 64)"
+                "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars, "
+                "max_values) VALUES (:domain, :kind, :attribute, 64, 1000)"
             ),
             {"domain": DOMAIN, "kind": SUPPLIER, "attribute": VAT},
         )

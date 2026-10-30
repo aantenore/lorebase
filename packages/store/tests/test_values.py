@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import pytest
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -15,13 +16,13 @@ from lorebase_core.model import Domain, Kind, Record, Sensitivity
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types import TypeSpec
 from lorebase_core.validate import RecordDelete, RecordUpsert
-from lorebase_store import values
+from lorebase_store import migrations, values
 from lorebase_store.commit import CommitResult, SchemaUpsert, commit, create_domain
 from lorebase_store.layout import resolve_layout
 from lorebase_store.materialize import BranchMode, create_branch, delete_branch, promote
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import StoreSettings
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 from .support import DOMAIN, Clock, T, attribute, domain, ident, wait_for_lock_waiter
 
@@ -270,6 +271,9 @@ RECOUNT = text(
     "WHERE m.domain_id = :d AND NOT m.deleted GROUP BY 1, 2, 3"
 )
 INDEXED = text("SELECT branch, attribute_id, value, records FROM mat_values WHERE domain_id = :d")
+SIZES = text(
+    "SELECT branch, attribute_id, size FROM mat_value_sizes WHERE domain_id = :d AND size <> 0"
+)
 
 
 async def agree(sessions: Sessions) -> dict[tuple[str, str, str], int]:
@@ -279,7 +283,12 @@ async def agree(sessions: Sessions) -> dict[tuple[str, str, str], int]:
             (b, a, v): int(n) for b, a, v, n in await session.execute(RECOUNT, {"d": DOMAIN})
         }
         index = {(b, a, v): int(n) for b, a, v, n in await session.execute(INDEXED, {"d": DOMAIN})}
+        sizes = {(b, a): int(n) for b, a, n in await session.execute(SIZES, {"d": DOMAIN})}
     assert index == recount
+    counted: dict[tuple[str, str], int] = {}
+    for b, a, _ in index:
+        counted[(b, a)] = counted.get((b, a), 0) + 1
+    assert sizes == counted
     return index
 
 
@@ -346,6 +355,220 @@ async def test_hysteresis_and_pass_limits(sessions: Sessions, runtime: StoreRunt
     # A branch holding too many values of an Attribute drops it, enums included.
     huge = await sync(sessions, tuned(runtime, hard_max_distinct=2), force=False)
     assert (PRODUCT, SIZE) in huge.removed
+
+
+async def test_a_write_past_the_limit_is_never_served_and_the_pass_drops_it(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    three = tuned(runtime, max_distinct=3, hysteresis=1.0)
+    assert (PRODUCT, COLOR) in (await sync(sessions, three)).added
+    await agree(sessions)
+    # A fourth color takes main past max_values (3): marked at once, no longer read.
+    await run(sessions, runtime, clock, [product(1, color="Giallo")])
+    async with sessions() as session:
+        await scope_to_domain(session, DOMAIN)
+        rows = await values.held_selection(session, DOMAIN)
+        assert rows[(PRODUCT, COLOR)] == values.Held(64, 3, overflowed=True)
+        assert (PRODUCT, COLOR) not in await values.selection(session, DOMAIN)
+        layout = await resolve_layout(session, DOMAIN, "main")
+        exact = await values.exact_values(session, layout, ["rosso", "giallo"], per_term=5)
+        assert exact == []
+        for definer in (True, False):
+            reads = runtime.settings.reads.model_copy(update={"use_definer_functions": definer})
+            similar = await values.similar_values(
+                session,
+                layout,
+                ["rossi"],
+                threshold=0.3,
+                per_term=3,
+                runtime=StoreRuntime.from_settings(
+                    runtime.settings.model_copy(update={"reads": reads})
+                ),
+            )
+            assert all(h.attribute_id != COLOR for h in similar), definer
+    # Writes stop counting it: the table does not grow until the pass drops it.
+    await run(sessions, runtime, clock, [product(2, color="Viola")])
+    assert (COLOR, "Viola") not in await held(sessions)
+    report = await sync(sessions, three)
+    assert (PRODUCT, COLOR) in report.removed
+    assert all(a != COLOR for _, a, _ in await agree(sessions))
+
+
+async def test_a_new_limit_applies_without_a_recount(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, tuned(runtime, max_distinct=3, hysteresis=1.0))
+    report = await sync(sessions, tuned(runtime, max_distinct=3, hysteresis=2.0))
+    assert report.added == []
+    assert report.removed == []
+    async with sessions() as session:
+        rows = await values.held_selection(session, DOMAIN)
+    assert rows[(PRODUCT, COLOR)].max_values == 6
+    assert rows[(PRODUCT, SIZE)].max_values == runtime.settings.values.hard_max_distinct
+    await run(sessions, runtime, clock, [product(1, color="Giallo")])
+    assert ("main", COLOR, "Giallo") in await agree(sessions)
+
+
+async def test_a_schema_change_applies_the_new_limit_in_the_same_commit(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    one = tuned(runtime, max_distinct=1, hysteresis=1.0)
+    report = await sync(sessions, one)
+    assert (PRODUCT, TAGS) in report.added  # resolvable: true, held whatever its values
+    # Tags become a plain string array: limit 1, and main already holds two tags.
+    kind = product_kind()
+    tags = kind.attributes[TAGS].model_copy(update={"resolvable": None})
+    plain = kind.model_copy(update={"attributes": {**kind.attributes, TAGS: tags}})
+    await run(
+        sessions,
+        StoreRuntime.from_settings(one),
+        clock,
+        [],
+        schema_changes=[SchemaUpsert(plain)],
+    )
+    async with sessions() as session:
+        await scope_to_domain(session, DOMAIN)
+        rows = await values.held_selection(session, DOMAIN)
+        assert rows[(PRODUCT, TAGS)] == values.Held(64, 1, overflowed=True)
+        assert rows[(PRODUCT, SIZE)].max_values == one.values.hard_max_distinct
+        assert (PRODUCT, TAGS) not in await values.selection(session, DOMAIN)
+        layout = await resolve_layout(session, DOMAIN, "main")
+        assert await values.exact_values(session, layout, ["sale"], per_term=5) == []
+    assert (PRODUCT, TAGS) in (await sync(sessions, one)).removed
+
+
+async def test_an_upgraded_install_counts_sizes_and_decides_limits_again(
+    engine: AsyncEngine,
+    sessions: Sessions,
+    runtime: StoreRuntime,
+    database_url: str,
+    database: DatabaseSettings,
+    store: StoreSettings,
+) -> None:
+    """Revision 0047 on an index of revision 0045: sizes counted, every held Attribute at
+    `hard_max_distinct` until the next pass (cursors cleared) sets its own limit."""
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    before = await agree(sessions)
+    await engine.dispose()
+    await asyncio.to_thread(
+        migrations.downgrade, "0046", database=database, store=store, url=database_url
+    )
+    await asyncio.to_thread(migrations.upgrade, database=database, store=store, url=database_url)
+    assert await agree(sessions) == before
+    async with sessions() as session, session.begin():
+        rows = await values.held_selection(session, DOMAIN)
+        cursors = await session.scalar(text("SELECT count(*) FROM mat_value_cursors"))
+        # Writers of the previous trigger body during a rolling upgrade moved the sizes.
+        await session.execute(text("UPDATE mat_value_sizes SET size = size + 7"))
+    assert {row.max_values for row in rows.values()} == {store.values.hard_max_distinct}
+    assert cursors == 0
+    # The first pass without a cursor counts the sizes again before deciding.
+    report = await sync(sessions, runtime.settings)
+    assert not report.skipped
+    assert await agree(sessions) == before
+    async with sessions() as session:
+        rows = await values.held_selection(session, DOMAIN)
+    plain = int(store.values.max_distinct * store.values.hysteresis)
+    assert rows[(PRODUCT, COLOR)].max_values == plain
+    assert rows[(PRODUCT, SIZE)].max_values == store.values.hard_max_distinct
+
+
+OWNER = "lb_test_migration_owner"
+
+
+async def test_the_upgrade_rewrites_every_domain_under_forced_row_level_security(
+    engine: AsyncEngine, sessions: Sessions, runtime: StoreRuntime, store: StoreSettings
+) -> None:
+    """Revision 0047's data statements, run as a role that is neither superuser nor exempt
+    from row-level security (as a table owner is under FORCE): they set the bypass themselves."""
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    before = await agree(sessions)
+    tables = "mat_value_attributes, mat_value_sizes, mat_values, mat_value_cursors, resolve_misses"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{OWNER}') "
+                f"THEN CREATE ROLE {OWNER} NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$"
+            )
+        )
+        await connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {OWNER}"))
+        await connection.execute(text(f"GRANT ALL ON {tables} TO {OWNER}"))
+        await connection.execute(
+            text(
+                "INSERT INTO resolve_misses (domain_id, branch, phrase, misses, callers, "
+                "first_seen, last_seen) VALUES (:d, 'main', 'rosy', 2, ARRAY['aa', 'bb'], "
+                "now(), now())"
+            ),
+            {"d": DOMAIN},
+        )
+        await connection.execute(text("UPDATE mat_value_attributes SET max_values = 1"))
+        await connection.execute(text("DELETE FROM mat_value_sizes"))
+    module = ScriptDirectory.from_config(migrations.alembic_config()).get_revision("0047").module
+    limit = store.values.hard_max_distinct
+    async with engine.begin() as connection:
+        await connection.execute(text(f"SET LOCAL ROLE {OWNER}"))
+        await connection.run_sync(lambda sync_connection: module._data(sync_connection, limit))
+    assert await agree(sessions) == before
+    async with sessions() as session:
+        rows = await values.held_selection(session, DOMAIN)
+        cursors = await session.scalar(text("SELECT count(*) FROM mat_value_cursors"))
+        callers = await session.scalar(text("SELECT callers FROM resolve_misses"))
+    assert {row.max_values for row in rows.values()} == {limit}
+    assert not any(row.overflowed for row in rows.values())
+    assert cursors == 0
+    assert callers == []
+
+
+async def test_an_unmarked_branch_past_its_limit_is_never_served(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    """A schema commit lowered the limit while a writer of another branch grew it: the size
+    row is past `max_values` without the mark. Reads skip it and the next pass drops it."""
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "UPDATE mat_value_attributes SET max_values = 2 "
+                "WHERE domain_id = :d AND attribute_id = :a"
+            ),
+            {"d": DOMAIN, "a": COLOR},
+        )
+    async with sessions() as session:
+        await scope_to_domain(session, DOMAIN)
+        layout = await resolve_layout(session, DOMAIN, "main")
+        assert not (await values.held_selection(session, DOMAIN))[(PRODUCT, COLOR)].overflowed
+        assert (PRODUCT, COLOR) not in await values.selection(session, DOMAIN, layout)
+        assert (PRODUCT, SIZE) in await values.selection(session, DOMAIN, layout)
+        assert await values.exact_values(session, layout, ["rosso"], per_term=5) == []
+        assert await values.indexed_counts(session, layout, PRODUCT, COLOR, ["Rosso"]) == {
+            "Rosso": 0
+        }
+        for definer in (True, False):
+            reads = runtime.settings.reads.model_copy(update={"use_definer_functions": definer})
+            similar = await values.similar_values(
+                session,
+                layout,
+                ["rossi"],
+                threshold=0.3,
+                per_term=3,
+                runtime=StoreRuntime.from_settings(
+                    runtime.settings.model_copy(update={"reads": reads})
+                ),
+            )
+            assert all(h.attribute_id != COLOR for h in similar), definer
+    assert (PRODUCT, COLOR) in (await sync(sessions, runtime.settings)).removed
 
 
 async def test_the_fence_waits_for_writers_and_spares_other_domains(
@@ -576,7 +799,12 @@ async def test_the_backfill_stops_at_the_budget(sessions: Sessions, runtime: Sto
     await seeded(sessions, runtime, clock)
     async with sessions() as session, session.begin():
         done, left, written = await values._backfill(
-            session, DOMAIN, [(PRODUCT, COLOR), (PRODUCT, SIZE)], 64, time.monotonic() - 1
+            session,
+            DOMAIN,
+            [(PRODUCT, COLOR), (PRODUCT, SIZE)],
+            64,
+            time.monotonic() - 1,
+            caps={(PRODUCT, COLOR): 10, (PRODUCT, SIZE): 10},
         )
     assert (done, written) == ([], 0)
     assert left == [(PRODUCT, COLOR), (PRODUCT, SIZE)]

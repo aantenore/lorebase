@@ -269,8 +269,8 @@ async def _noise(
     await _commit(sessions, runtime, clock, products(schema, 0, 100), OTHER)
     await _execute(
         owner_url,
-        "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
-        f"SELECT '{NOISE}', 'knd_noise', 'att_' || g, 64 "
+        "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars, "
+        f"max_values) SELECT '{NOISE}', 'knd_noise', 'att_' || g, 64, 1000 "
         f"FROM generate_series(1, {args.noise_selection}) AS g",
         "ANALYZE mat_value_attributes",
     )

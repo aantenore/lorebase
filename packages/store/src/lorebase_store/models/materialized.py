@@ -183,7 +183,9 @@ class MatLexicon(Base):
 
 class MatValueAttribute(Base):
     """An Attribute whose values `mat_values` holds on every branch of the Domain, values
-    longer than `max_chars` left out (revision 0045, `lorebase_store.values`)."""
+    longer than `max_chars` left out (revision 0045, `lorebase_store.values`). A branch holding
+    more than `max_values` of them marks it `overflowed` (revision 0047): no longer counted nor
+    read, dropped by the next pass."""
 
     __tablename__ = "mat_value_attributes"
     __table_args__ = (domain_fk(),)
@@ -192,6 +194,8 @@ class MatValueAttribute(Base):
     kind_id: Mapped[str] = mapped_column(primary_key=True)
     attribute_id: Mapped[str] = mapped_column(primary_key=True)
     max_chars: Mapped[int] = mapped_column(Integer)
+    max_values: Mapped[int] = mapped_column(Integer)
+    overflowed: Mapped[bool] = mapped_column(server_default=text("false"))
 
 
 class MatValue(Base):
@@ -225,6 +229,20 @@ class MatValue(Base):
     value: Mapped[str] = mapped_column(primary_key=True)
     norm: Mapped[str]
     records: Mapped[int] = mapped_column(BigInteger)
+
+
+class MatValueSize(Base):
+    """Per branch, how many values of a selected Attribute `mat_values` holds (revision 0047),
+    kept with it by the triggers and the passes."""
+
+    __tablename__ = "mat_value_sizes"
+    __table_args__ = (_branch_fk(),)
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    attribute_id: Mapped[str] = mapped_column(primary_key=True)
+    size: Mapped[int] = mapped_column(BigInteger)
 
 
 class MatValueCursor(Base):

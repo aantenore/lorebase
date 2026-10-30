@@ -28,10 +28,14 @@ from .support import DOMAIN, Clock, load_domain, rows, scalar, supply_schema
 
 pytestmark = pytest.mark.integration
 
+CALLER_KEY = "k" * 32
+
 
 @pytest.fixture
 def enabled() -> StoreRuntime:
-    return StoreRuntime.from_settings(StoreSettings(resolve_misses={"enabled": True}))
+    return StoreRuntime.from_settings(
+        StoreSettings(resolve_misses={"enabled": True, "caller_key": CALLER_KEY})
+    )
 
 
 @pytest.fixture
@@ -146,6 +150,7 @@ async def test_domain_cap_evicts_the_least_missed_and_bounds_each_caller(
         StoreSettings(
             resolve_misses={
                 "enabled": True,
+                "caller_key": CALLER_KEY,
                 "max_per_domain": 2,
                 "max_callers": 2,
                 "max_phrases_per_caller": 1,

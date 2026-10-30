@@ -13,7 +13,7 @@ Work through it on a branch, merge it, then tag. Items marked with a command hav
 - [ ] Choose the version. Before 1.0 a minor version may change interfaces; say so in the notes.
 - [ ] Set it everywhere it lives: `version` in the root and in each `packages/*/pyproject.toml`, `__version__` in each `packages/*/src/*/__init__.py`, `version` in `apps/web/package.json`, and `appVersion` (and `version`) in `deploy/helm/lorebase/Chart.yaml`.
 - [ ] On a new minor version, move the ranges of the dependencies between workspace packages in each `packages/*/pyproject.toml` (`lorebase-core>=0.1,<0.2` becomes `>=0.2,<0.3`; for a pre-release the lower bound may be the pre-release, `>=0.2.0rc1,<0.3`) and run `uv lock`. In a checkout the workspace resolves them from source; on PyPI they keep `pip install lorebase-keeper` from taking a `lorebase-store` of another minor.
-- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 23 versions and 15 internal ranges agree`. The workflow runs the same check first and stops on a mismatch.
+- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 23 versions and 16 internal ranges agree`. The workflow runs the same check first and stops on a mismatch.
 - [ ] Write the `## X.Y.Z` section of CHANGELOG.md: summary, breaking changes first, then added, changed, fixed, security, not done yet, upgrade notes. Link the pull request or issue of each line. `uv run python scripts/release_tool.py notes X.Y.Z` prints what the GitHub release will say.
 - [ ] A migration, a configuration key or an API response that changed is named in the first lines of the section.
 - [ ] Update the status wording that a release makes false: the "Pre-alpha" banner and "Nothing is released" in [README.md](../README.md) and [roadmap.md](roadmap.md).
@@ -114,14 +114,14 @@ For a new project name, add a pending publisher with the same values before the 
 
 ## Verify a release
 
-Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 was built and published locally, without the release workflow: its images, checksums and assets are not signed and its images carry no SBOM attestation, so these commands apply to every version except 0.2.2. 0.2.3 was published by the release workflow, run by hand on the existing tag, so its signatures carry the `@refs/heads/main` identity.
+Signatures and attestations, with [cosign](https://docs.sigstore.dev/). 0.2.2 was built and published locally, without the release workflow: its images, checksums and assets are not signed and its images carry no SBOM attestation, so these commands apply to every version except 0.2.2. 0.2.3 was published by the release workflow, run by hand on the existing tag, so its signatures carry the `@refs/heads/main` identity; 0.3.0 was published by pushing the tag, so its signatures carry `@refs/tags/v0.3.0`.
 
 ```bash
-VERSION=0.2.3
+VERSION=0.3.0
+# Released by pushing the tag, as 0.3.0 was: the identity ends in @refs/tags/vX.Y.Z.
+IDENTITY="^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v${VERSION}\$"
 # Run by hand (workflow_dispatch), as 0.2.3 was: the identity ends in @refs/heads/main.
-IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/heads/main$'
-# Released by pushing the tag: the identity ends in @refs/tags/vX.Y.Z instead.
-# IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/tags/v'
+# IDENTITY='^https://github.com/aantenore/lorebase/\.github/workflows/release\.yaml@refs/heads/main$'
 ISSUER=https://token.actions.githubusercontent.com
 
 for image in ghcr.io/aantenore/lorebase ghcr.io/aantenore/lorebase-ml ghcr.io/aantenore/lorebase-web; do

@@ -263,8 +263,12 @@ its distinct values stay within `store.values.max_distinct` (1000) and, once its
 `ratio_min_records` (50) Records, within `max_distinct_ratio` (0.2) of them; one already held is
 dropped only past `hysteresis` (1.2) times those limits. Values longer than `max_value_chars`
 (64) are left out. Distinct values are counted again when the schema or these settings change,
-or every `stats_interval_s` (3600 s); other passes read the sizes in `mat_values` only and drop an
-Attribute any branch holds more than `hard_max_distinct` (10,000) values of. A schema change on
+or every `stats_interval_s` (3600 s); other passes read the sizes in `mat_value_sizes` only and
+drop an Attribute any branch holds more than `hard_max_distinct` (10,000) values of, or a plain
+string past its hysteresis limit. Writes hold the same limits between passes: the write that
+takes a branch past one marks the Attribute `overflowed` in `mat_value_attributes`, resolution
+stops returning its values at once, later writes stop indexing it, and the next pass drops it.
+A schema change on
 the default branch that makes an Attribute sensitive, vault, derived, of another type or
 `resolvable: false` removes its values in the same commit and queues a pass.
 
@@ -312,10 +316,18 @@ value, so it stays small unless thresholds are raised. Settings: `store.values` 
 
 The phrases `POST /resolve` matched to nothing can be kept to propose vocabulary
 ([design 8.10](design.md#810-consolidation-from-use-vocabulary-learned-from-resolution-misses)).
-Off by default: set `store.resolve_misses.enabled: true` for Keeper and Scribe alike.
+Off by default: set `store.resolve_misses.enabled: true` for Keeper and Scribe alike, with
+`store.resolve_misses.caller_key` (at least 32 characters, e.g.
+`secret://env/LOREBASE_MISS_CALLER_KEY`); a service refuses to start with recording on and no
+key.
 
 - **What is kept.** Per Domain, branch and phrase (compared form): misses, first and last seen,
-  and up to `max_callers` (20) unkeyed digests of the principals who asked, never their ids.
+  and up to `max_callers` (20) digests of the principals who asked, never their ids: HMAC-SHA256
+  under `caller_key`, which stays out of the database, so the table alone cannot confirm a
+  guessed principal id. Changing the key makes the stored digests incomparable: distinct
+  callers are counted afresh, and a caller seen under both keys counts twice towards
+  `min_callers` until its phrases expire; purge the Domain's misses with the rotation to start
+  clean.
   Only head reads that searched every Kind with every enabled level, only callers holding
   `search.resolve.misses.permission` (default `data.read`) through a grant not narrowed to a
   Kind or a branch, only phrases of `min_phrase_chars` (3) to `max_phrase_chars` (64)
