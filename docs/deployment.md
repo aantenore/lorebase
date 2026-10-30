@@ -229,6 +229,15 @@ more, the same for Keeper and Scribe) and refuses to create a webhook without it
 Webhooks created before the key was set keep working: each delivery pass seals their keys. Rotation goes
 through `webhooks.previous_encryption_keys` ([agents](agents.md)).
 
+## Secret references
+
+Every secret in the settings is a reference, never a value: `secret://env/NAME` reads an
+environment variable and `secret://file/PATH` a file (a mounted Kubernetes or Docker secret).
+Another secret store plugs in as a provider: `lorebase_platform.secrets.register_secret_provider(name,
+resolver)`, called before the settings load, makes `secret://<name>/TARGET` resolve through
+`resolver` (`TARGET` in, the secret value out). `env` and `file` cannot be replaced, and a name
+registered twice is refused unless `replace=True` ([design 13.4](design.md#134-secrets)).
+
 ## Docker compose images and migrations
 
 The compose file builds the backend, backend-ml and web images from the checkout on every `up`

@@ -52,9 +52,9 @@ class BranchSettings(SectionModel):
 
     materialization: Literal["full"] = Field(
         default="full",
-        description="Materialization of new branches. M1 supports `full` only: rows are copied "
+        description="Materialization of copy branches; `full` is the only value: rows are copied "
         "from the source branch when the branch starts at its head, rebuilt from the tree "
-        "otherwise.",
+        "otherwise. Copy or overlay per branch comes from `store.materialize.branch_mode`.",
     )
     max_materialized_per_domain: int = Field(
         default=20, ge=1, description="Fully materialized branches allowed per Domain."
