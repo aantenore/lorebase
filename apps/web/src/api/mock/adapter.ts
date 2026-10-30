@@ -217,13 +217,21 @@ export function createMockApi(options: MockOptions): KeeperApi {
   );
 
   // The change set lands on a copy of the default branch, proposed back into it.
-  const suggestions = createSuggestionsMock(async (id, title) => {
-    const target = domainOf(id).domain.default_branch;
-    suggestionBranches += 1;
-    const branch = `schema/suggestions-${suggestionBranches.toString()}`;
-    await mock.branches.create(id, { name: branch, source: target });
-    return mock.proposals.create(id, { title, source_ref: branch, target_ref: target });
-  });
+  const suggestions = createSuggestionsMock(
+    async (id, title) => {
+      const target = domainOf(id).domain.default_branch;
+      suggestionBranches += 1;
+      const branch = `schema/suggestions-${suggestionBranches.toString()}`;
+      await mock.branches.create(id, { name: branch, source: target });
+      return mock.proposals.create(id, { title, source_ref: branch, target_ref: target });
+    },
+    (id, kind) => {
+      const data = domainOf(id);
+      return data.branches
+        .get(data.domain.default_branch)
+        ?.schema.kinds.find((k) => k.api_name === kind)?.id;
+    },
+  );
 
   // A decision writes on its Branch, or on a copy proposed back into it when the Branch is
   // protected or the decision always needs review (duplicate merges). The queue and its sample

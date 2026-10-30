@@ -7,7 +7,7 @@ import type {
   SuggestionFilter,
   SuggestionProposal,
 } from '../suggestion-types';
-import type { Proposal } from '../types';
+import type { Proposal, SchemaElementChange } from '../types';
 import { decodeCursor, encodeCursor } from './engine';
 import { buildSuggestions, MOCK_MIN_SUPPORT } from './sample/suggestions';
 
@@ -17,16 +17,8 @@ export interface SuggestionsMock {
 
 const ACTOR = 'usr_mock';
 
-/** Aliases and descriptions change the Kind or Attribute they belong to. */
-const SECTION = {
-  kind: 'kinds',
-  attribute: 'attributes',
-  relation: 'relations',
-  kind_alias: 'kinds',
-  attribute_alias: 'attributes',
-  value_alias: 'attributes',
-  attribute_description: 'attributes',
-} as const;
+/** The section of the element a schema suggestion creates. */
+const SECTION = { kind: 'kinds', attribute: 'attributes', relation: 'relations' } as const;
 const PREFIX = { kinds: 'knd', attributes: 'att', relations: 'rel' } as const;
 
 /** Whether a suggestion passes the list filters; pending ones under the support need `all`. */
@@ -54,9 +46,12 @@ function invalid(pointer: string, message: string) {
 /**
  * Schema suggestions in memory. Accepting turns the accepted suggestions of one request into one
  * change set on a new Branch, proposed through `openProposal`; a refusal changes nothing.
+ * Vocabulary suggestions update the existing Kind they belong to, found by `kindIdOf` on the
+ * default Branch: like Keeper, the change set names that Kind once, as an update.
  */
 export function createSuggestionsMock(
   openProposal: (domain: string, title: string) => Promise<Pick<Proposal, 'id' | 'source_ref'>>,
+  kindIdOf: (domain: string, kind: string) => string | undefined,
   seed: Record<string, SchemaSuggestion[]> = buildSuggestions(),
 ): SuggestionsMock {
   const store = new Map(Object.entries(seed));
@@ -101,6 +96,24 @@ export function createSuggestionsMock(
       }
     }
 
+    const changes: SchemaElementChange[] = [];
+    for (const t of accepted) {
+      const { type, kind } = t.found;
+      if (type === 'kind' || type === 'attribute' || type === 'relation') {
+        const section = SECTION[type];
+        const id = `${PREFIX[section]}_${t.found.id.slice(-8)}`;
+        changes.push({ op: 'create', section, id, api_name: t.name });
+        continue;
+      }
+      const owner = kind === null ? undefined : kindIdOf(domain, kind);
+      if (kind === null || owner === undefined) {
+        throw invalid(`${t.pointer}/suggestion`, `${t.name} belongs to no existing Kind.`);
+      }
+      if (!changes.some((c) => c.section === 'kinds' && c.id === owner)) {
+        changes.push({ op: 'update', section: 'kinds', id: owner, api_name: kind });
+      }
+    }
+
     let proposal: SuggestionProposal | null = null;
     if (accepted.length > 0) {
       const title = `Schema suggestions: ${accepted.map((t) => t.name).join(', ')}`;
@@ -109,12 +122,7 @@ export function createSuggestionsMock(
         id: opened.id,
         title,
         branch: opened.source_ref,
-        changes: accepted.map((t) => ({
-          op: 'create' as const,
-          section: SECTION[t.found.type],
-          id: `${PREFIX[SECTION[t.found.type]]}_${t.found.id.slice(-8)}`,
-          api_name: t.name,
-        })),
+        changes,
       };
     }
 
