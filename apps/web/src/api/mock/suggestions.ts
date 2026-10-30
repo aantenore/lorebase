@@ -27,6 +27,7 @@ const SECTION = {
   value_alias: 'attributes',
   attribute_description: 'attributes',
 } as const;
+const PREFIX = { kinds: 'knd', attributes: 'att', relations: 'rel' } as const;
 
 /** Whether a suggestion passes the list filters; pending ones under the support need `all`. */
 export function matches(suggestion: SchemaSuggestion, filter: SuggestionFilter | undefined) {
@@ -111,7 +112,7 @@ export function createSuggestionsMock(
         changes: accepted.map((t) => ({
           op: 'create' as const,
           section: SECTION[t.found.type],
-          id: `${SECTION[t.found.type].slice(0, 3)}_${t.found.id.slice(-8)}`,
+          id: `${PREFIX[SECTION[t.found.type]]}_${t.found.id.slice(-8)}`,
           api_name: t.name,
         })),
       };
