@@ -35,6 +35,7 @@ from lorebase_store.gc import enqueue_gc
 from lorebase_store.jobs import (
     INDEX_JOB,
     SOURCE_SYNC_JOB,
+    VALUE_INDEX_JOB,
     JobRow,
     enqueue_job,
     requeue_stale,
@@ -142,13 +143,28 @@ async def enqueue(sessions: async_sessionmaker[AsyncSession], job_type: str, **k
         return await enqueue_job(session, job_type, **kwargs)
 
 
+async def load_indexed(
+    context: JobContext,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+) -> None:
+    """Load the example Domain and run the `value_index` pass its schema commit queues, so the
+    queue holds only what a test enqueues next."""
+    await load_domain(sessions, runtime, clock, example_schema())
+    queued = await fetch(sessions, "SELECT id, type FROM jobs WHERE status = 'queued'")
+    assert [t for (_, t) in queued] == [VALUE_INDEX_JOB]
+    assert await worker_for(context, sessions).run_once() == 1
+    assert (await job_state(sessions, queued[0][0]))[0] == "succeeded"
+
+
 async def test_worker_runs_a_gc_job(
     context: JobContext,
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
 ) -> None:
-    await load_domain(sessions, runtime, clock, example_schema())
+    await load_indexed(context, sessions, runtime, clock)
     async with sessions() as session, session.begin():
         job_id = await enqueue_gc(session, DOMAIN, dry_run=True)
     assert await worker_for(context, sessions).run_once() == 1
@@ -165,7 +181,7 @@ async def test_worker_runs_a_source_sync_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await load_domain(sessions, runtime, clock, example_schema())
+    await load_indexed(context, sessions, runtime, clock)
     path = tmp_path / "suppliers.csv"
     shutil.copy(EXAMPLE / "data" / "supplier.csv", path)
     monkeypatch.setenv("SUPPLY_APPROVED_SUPPLIERS_CSV", str(path))
@@ -508,7 +524,7 @@ async def test_worker_runs_a_store_index_job(
     runtime: StoreRuntime,
     clock: Clock,
 ) -> None:
-    await load_domain(sessions, runtime, clock, example_schema())
+    await load_indexed(context, sessions, runtime, clock)
     name = "mat_records_attr_unplanned"
     payload = {"action": "create", "name": name, "branch": "main", "kind": "k_none"}
     job_id = await enqueue(sessions, INDEX_JOB, domain_id=DOMAIN, payload=payload)
@@ -575,13 +591,14 @@ class Recorder:
 
 
 async def test_scheduler_leader_election_and_schedules(
+    context: JobContext,
     engine: AsyncEngine,
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await load_domain(sessions, runtime, clock, example_schema())
+    await load_indexed(context, sessions, runtime, clock)
     gc_scheduled = Recorder()
     monkeypatch.setattr(scheduler_module, "GC_SCHEDULED", gc_scheduled)
     time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
@@ -611,7 +628,7 @@ async def test_scheduler_leader_election_and_schedules(
         assert not second.is_leader
         # The leader queued the interval jobs; cron jobs whose firing precedes the
         # leadership wait for their next firing.
-        types = await fetch(sessions, "SELECT type FROM jobs ORDER BY id")
+        types = await fetch(sessions, "SELECT type FROM jobs WHERE status = 'queued' ORDER BY id")
         assert [t for (t,) in types] == [WEBHOOK_DELIVERY_JOB, AUDIT_VERIFY_JOB]
         assert len(queued) == 2
         # The gc counter starts at 0 with the schedule's mode before any firing.
@@ -623,7 +640,7 @@ async def test_scheduler_leader_election_and_schedules(
         scheduled = await fetch(
             sessions,
             "SELECT type, domain_id, payload ->> 'source', run_after FROM jobs "
-            "WHERE domain_id IS NOT NULL ORDER BY type",
+            "WHERE domain_id IS NOT NULL AND status = 'queued' ORDER BY type",
         )
         erp = example_schema().source_by_api_name("erp.purchase_orders")
         assert erp is not None
@@ -633,7 +650,13 @@ async def test_scheduler_leader_election_and_schedules(
         ]
         assert gc_scheduled.calls[-1] == (1, {"dry_run": "false"})
         await first.tick()  # nothing new is due
-        assert await scalar(sessions, "SELECT count(*) FROM jobs WHERE domain_id IS NOT NULL") == 2
+        assert (
+            await scalar(
+                sessions,
+                "SELECT count(*) FROM jobs WHERE domain_id IS NOT NULL AND status = 'queued'",
+            )
+            == 2
+        )
 
         await first.release()
         assert not first.is_leader
