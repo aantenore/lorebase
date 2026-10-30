@@ -31,7 +31,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lorebase_core.infer.phrases import normalize
 from lorebase_keeper.reading.settings import ResolveMissRecording
-from lorebase_store.resolve_misses import MissSighting, phrase_allowed, record_misses
+from lorebase_store.resolve_misses import (
+    MissSighting,
+    caller_digest,
+    phrase_allowed,
+    record_misses,
+)
 from lorebase_store.settings import ResolveMissSettings
 
 logger = logging.getLogger("lorebase.keeper.resolve_misses")
@@ -107,6 +112,14 @@ class MissRecorder:
             description="Resolution misses dropped, by reason (queue_full, domain_full, "
             "caller_limit, write_failed, shutdown).",
         )
+
+    def caller(self, domain_id: str, principal_id: str) -> str:
+        """The digest under which `principal_id` is counted in `domain_id`, keyed by
+        `store.resolve_misses.caller_key`."""
+        key = self.store.caller_key
+        if key is None:
+            raise RuntimeError("store.resolve_misses.caller_key is not set")
+        return caller_digest(domain_id, principal_id, key)
 
     def offer(self, domain_id: str, branch: str, phrases: Sequence[str], caller: str) -> int:
         """Count `phrases` missed by `caller` (a digest) without waiting; the number taken."""

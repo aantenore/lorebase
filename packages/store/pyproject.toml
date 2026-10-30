@@ -1,11 +1,11 @@
 [project]
 name = "lorebase-store"
-version = "0.2.3"
+version = "0.3.0"
 description = "Lorebase store: persistence, repositories, migrations and materializer"
 requires-python = ">=3.12"
 dependencies = [
-  "lorebase-core>=0.2,<0.3",
-  "lorebase-platform>=0.2,<0.3",
+  "lorebase-core>=0.3,<0.4",
+  "lorebase-platform>=0.3,<0.4",
   "sqlalchemy[asyncio]>=2.0.30",
   "asyncpg>=0.29",
   "alembic>=1.13",

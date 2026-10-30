@@ -12,8 +12,10 @@ than it, or is dropped. A caller that alone holds `max_phrases_per_caller` phras
 the only one of each) adds no new ones. Writers of one Domain take its transaction advisory
 lock (`lock_domain`), so the bounds hold across Keeper replicas. Each row keeps at most
 `max_callers` caller digests (`caller_digest`), so `callers` counts distinct callers up to that
-bound; the digests are unkeyed and name nobody, though an administrator who knows a principal
-id can recompute its digest, so they stay in the database like the phrases.
+bound. The digests are HMAC-SHA256 keyed by `store.resolve_misses.caller_key`, which never
+reaches the database: a reader of the table who guesses a principal id cannot confirm it. A
+new key makes the stored digests incomparable, so distinct callers are counted afresh (a
+caller seen under both keys counts twice until its phrases expire or are purged).
 
 Phrases are what callers typed: they are deleted with their Domain (foreign key) and by
 `purge_misses`, kept no longer than the retention period, and the vocabulary suggestions that
@@ -23,10 +25,12 @@ quote them follow (`repositories.suggestions.SchemaSuggestionRepository.sweep_vo
 from __future__ import annotations
 
 import hashlib
+import hmac
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,12 +64,15 @@ class MissRow:
     last_seen: datetime
 
 
-def caller_digest(domain_id: str, principal_id: str) -> str:
-    """The digest counting a caller of a Domain (16 hex digits); never the principal id."""
-    digest = hashlib.blake2b(
-        f"{domain_id}\x1f{principal_id}".encode(), digest_size=8, person=b"lb.miss"
+def caller_digest(domain_id: str, principal_id: str, key: SecretStr) -> str:
+    """The digest counting a caller of a Domain (16 hex digits): HMAC-SHA256 under `key`
+    (`store.resolve_misses.caller_key`), never the principal id."""
+    digest = hmac.new(
+        key.get_secret_value().encode(),
+        f"lb.miss\x1f{domain_id}\x1f{principal_id}".encode(),
+        hashlib.sha256,
     )
-    return digest.hexdigest()
+    return digest.hexdigest()[:16]
 
 
 _COUNT = text("SELECT count(*) FROM resolve_misses WHERE domain_id = :domain")

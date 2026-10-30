@@ -713,7 +713,7 @@ async def _embedded(
     nearest = [(by_name[h.kind], h.key, h.score) for h in hits.items if h.kind in by_name]
     if not nearest:
         return []
-    held = await value_index.selection(session, point.domain.id)
+    held = await value_index.selection(session, point.domain.id, point.layout)
     statement = text(_RECORD_VALUES.format(rows=escape_colons(point.layout.records_from("m"))))
     rows = await session.execute(
         statement,
@@ -816,7 +816,7 @@ async def _count(
             )
         elif any(n == 0 for n in match.values.values()):
             if held is None:
-                held = await value_index.selection(session, context.point.domain.id)
+                held = await value_index.selection(session, context.point.domain.id, layout)
             if (match.kind_id, attribute.id) not in held:
                 match.uncounted = True
                 continue

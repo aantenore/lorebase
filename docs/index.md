@@ -14,7 +14,7 @@ keywords: versioned knowledge graph, open-source ontology platform, knowledge ba
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
-> **Pre-alpha, v0.2.3.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](quickstart.md) is the place to start and the [validation record](validation.md) the place to check the claims.
+> **Pre-alpha, v0.3.0.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](quickstart.md) is the place to start and the [validation record](validation.md) the place to check the claims.
 
 ## What it is
 
@@ -221,7 +221,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. [v0.2.3](https://github.com/aantenore/lorebase/releases/tag/v0.2.3) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](project/changelog.md) and the [release process](release.md). Interfaces may change, and before 1.0 any minor version may change them.
+Pre-alpha. [v0.3.0](https://github.com/aantenore/lorebase/releases/tag/v0.3.0) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](project/changelog.md) and the [release process](release.md). Interfaces may change, and before 1.0 any minor version may change them.
 
 What runs on `main` is described above. The [validation record](validation.md) lists the runs behind it: performance at 100k, 1M and 10M Records, the five-day scenario (79 checks in CI), the security reviews and live runs with language models.
 

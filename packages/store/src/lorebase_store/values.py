@@ -14,7 +14,11 @@ come and go. Sensitive, vault, derived, `resolvable: false` and non-string Attri
 (`eligible`). Distinct values are counted when the fingerprint (schema hash and settings)
 changed, or every `stats_interval_s`; in between a pass only checks sizes: any branch holding
 more than `hard_max_distinct` values of one Attribute (or a plain string past its hysteresis
-limit) drops it, so a branch with many distinct values cannot grow the table without bound.
+limit) drops it. The same limit is the Attribute's `max_values` in the selection, and the
+triggers enforce it between passes: a write that takes a branch past it marks the Attribute
+`overflowed`, after which no write counts it, no read returns it, and the next pass drops it.
+So a branch with many distinct values cannot grow the table without bound, and reads never
+serve an Attribute past its limit.
 
 **Fence.** A pass that changes anything takes the Domain's value lock exclusively
 (`lb_values_lock_key`, a transaction advisory lock) before it deletes or writes a row; every
@@ -147,12 +151,19 @@ _SAVE_CURSOR = text(
     "head = EXCLUDED.head, fingerprint = EXCLUDED.fingerprint, updated_at = EXCLUDED.updated_at"
 )
 _SELECTION = text(
-    "SELECT kind_id, attribute_id, max_chars FROM mat_value_attributes WHERE domain_id = :domain"
+    "SELECT kind_id, attribute_id, max_chars, max_values, overflowed FROM mat_value_attributes "
+    "WHERE domain_id = :domain"
+)
+_SERVED = text(
+    "SELECT s.kind_id, s.attribute_id, s.max_chars FROM mat_value_attributes s "
+    "WHERE s.domain_id = :domain AND NOT s.overflowed AND NOT EXISTS (SELECT 1 "
+    "FROM mat_value_sizes z WHERE z.domain_id = s.domain_id "
+    "AND z.branch = ANY(CAST(:branches AS text[])) AND z.kind_id = s.kind_id "
+    "AND z.attribute_id = s.attribute_id AND z.size > s.max_values)"
 )
 _SIZES = text(
-    "SELECT c.kind_id, c.attribute_id, max(c.n) FROM (SELECT v.kind_id, v.attribute_id, "
-    "v.branch, count(*) AS n FROM mat_values v WHERE v.domain_id = :domain "
-    "GROUP BY v.kind_id, v.attribute_id, v.branch) AS c GROUP BY c.kind_id, c.attribute_id"
+    "SELECT kind_id, attribute_id, max(size) FROM mat_value_sizes WHERE domain_id = :domain "
+    "GROUP BY kind_id, attribute_id"
 )
 _STATS = text(
     "SELECT (SELECT count(*) FROM mat_records m WHERE m.domain_id = :domain "
@@ -167,16 +178,31 @@ _STATEMENT_TIMEOUT = text("SELECT set_config('statement_timeout', :statement, tr
 _FENCE = text("SELECT pg_advisory_xact_lock(lb_values_lock_key(:domain))")
 _SHARED_FENCE = text("SELECT pg_advisory_xact_lock_shared(lb_values_lock_key(:domain))")
 _ADD = text(
-    "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
-    "SELECT :domain, :kind, a, :max_chars FROM unnest(CAST(:attributes AS text[])) AS a "
-    "ON CONFLICT (domain_id, kind_id, attribute_id) DO UPDATE SET max_chars = EXCLUDED.max_chars"
+    "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars, max_values, "
+    "overflowed) SELECT :domain, :kind, a.a, :max_chars, a.cap, false "
+    "FROM unnest(CAST(:attributes AS text[]), CAST(:caps AS integer[])) AS a(a, cap) "
+    "ON CONFLICT (domain_id, kind_id, attribute_id) DO UPDATE SET max_chars = EXCLUDED.max_chars, "
+    "max_values = EXCLUDED.max_values, overflowed = false"
 )
+_RECAP = text(
+    "UPDATE mat_value_attributes s SET max_values = c.cap, overflowed = s.overflowed OR EXISTS ("
+    "SELECT 1 FROM mat_value_sizes z WHERE z.domain_id = s.domain_id AND z.kind_id = s.kind_id "
+    "AND z.attribute_id = s.attribute_id AND z.size > c.cap) "
+    "FROM unnest(CAST(:kinds AS text[]), CAST(:attributes AS text[]), CAST(:caps AS integer[])) "
+    "AS c(kind_id, attribute_id, cap) "
+    "WHERE s.domain_id = :domain AND s.kind_id = c.kind_id AND s.attribute_id = c.attribute_id"
+)
+"""A lower limit marks at once an Attribute a branch grew past it after the pass decided."""
 _DROP = text(
     "DELETE FROM mat_value_attributes WHERE domain_id = :domain AND kind_id = :kind "
     "AND attribute_id = ANY(CAST(:attributes AS text[]))"
 )
 _DROP_VALUES = text(
     "DELETE FROM mat_values WHERE domain_id = :domain AND kind_id = :kind "
+    "AND attribute_id = ANY(CAST(:attributes AS text[]))"
+)
+_DROP_SIZES = text(
+    "DELETE FROM mat_value_sizes WHERE domain_id = :domain AND kind_id = :kind "
     "AND attribute_id = ANY(CAST(:attributes AS text[]))"
 )
 _HAS_ORPHANS = text(
@@ -189,6 +215,11 @@ _ORPHANS = text(
     "SELECT 1 FROM mat_value_attributes s WHERE s.domain_id = v.domain_id "
     "AND s.kind_id = v.kind_id AND s.attribute_id = v.attribute_id)"
 )
+_ORPHAN_SIZES = text(
+    "DELETE FROM mat_value_sizes z WHERE z.domain_id = :domain AND NOT EXISTS ("
+    "SELECT 1 FROM mat_value_attributes s WHERE s.domain_id = z.domain_id "
+    "AND s.kind_id = z.kind_id AND s.attribute_id = z.attribute_id)"
+)
 _BACKFILL = text(
     "INSERT INTO mat_values (domain_id, branch, kind_id, attribute_id, value, norm, records) "
     "SELECT m.domain_id, m.branch, m.kind_id, a.attribute_id, v.v, lb_value_norm(v.v), "
@@ -200,12 +231,61 @@ _BACKFILL = text(
     "ON CONFLICT (domain_id, branch, kind_id, attribute_id, value) "
     "DO UPDATE SET records = EXCLUDED.records"
 )
+_COUNT_SIZES = text(
+    "WITH z AS (INSERT INTO mat_value_sizes (domain_id, branch, kind_id, attribute_id, size) "
+    "SELECT v.domain_id, v.branch, v.kind_id, v.attribute_id, count(*) FROM mat_values v "
+    "WHERE v.domain_id = :domain AND v.kind_id = :kind "
+    "AND v.attribute_id = ANY(CAST(:attributes AS text[])) "
+    "GROUP BY v.domain_id, v.branch, v.kind_id, v.attribute_id "
+    "ON CONFLICT (domain_id, branch, kind_id, attribute_id) DO UPDATE SET size = EXCLUDED.size "
+    "RETURNING domain_id, kind_id, attribute_id, size) "
+    "UPDATE mat_value_attributes s SET overflowed = true FROM z WHERE s.domain_id = z.domain_id "
+    "AND s.kind_id = z.kind_id AND s.attribute_id = z.attribute_id AND z.size > s.max_values"
+)
+"""The sizes of freshly counted Attributes; one a branch holds too many values of is marked
+`overflowed` in the same transaction, so no read sees it past its limit."""
+_CLEAR_DOMAIN_SIZES = text("DELETE FROM mat_value_sizes WHERE domain_id = :domain")
+_COUNT_DOMAIN_SIZES = text(
+    "WITH z AS (INSERT INTO mat_value_sizes (domain_id, branch, kind_id, attribute_id, size) "
+    "SELECT v.domain_id, v.branch, v.kind_id, v.attribute_id, count(*) FROM mat_values v "
+    "JOIN mat_value_attributes s ON s.domain_id = v.domain_id AND s.kind_id = v.kind_id "
+    "AND s.attribute_id = v.attribute_id WHERE v.domain_id = :domain "
+    "GROUP BY v.domain_id, v.branch, v.kind_id, v.attribute_id "
+    "RETURNING domain_id, kind_id, attribute_id, size) "
+    "UPDATE mat_value_attributes s SET overflowed = true FROM z WHERE s.domain_id = z.domain_id "
+    "AND s.kind_id = z.kind_id AND s.attribute_id = z.attribute_id AND z.size > s.max_values"
+)
+"""Every size of the Domain counted again from `mat_values` (a pass without a cursor: the
+first after revision 0047, whose sizes writers of an older trigger body may have moved)."""
 
 
-async def selection(session: AsyncSession, domain_id: str) -> dict[Pair, int]:
-    """The Attributes the index holds, by `(kind id, attribute id)`, with their `max_chars`."""
+@dataclass(frozen=True, slots=True)
+class Held:
+    """A selection row: the value length and count limits, and whether a branch went past the
+    count (then it is neither counted nor read until a pass drops it)."""
+
+    max_chars: int
+    max_values: int
+    overflowed: bool = False
+
+
+async def held_selection(session: AsyncSession, domain_id: str) -> dict[Pair, Held]:
+    """Every selection row of the Domain, overflowed ones included."""
     rows = await session.execute(_SELECTION, {"domain": domain_id})
-    return {(kind, attribute): int(chars) for kind, attribute, chars in rows.all()}
+    return {(k, a): Held(int(c), int(n), bool(o)) for k, a, c, n, o in rows.all()}
+
+
+async def selection(
+    session: AsyncSession, domain_id: str, layout: BranchLayout | None = None
+) -> dict[Pair, int]:
+    """The Attributes the index holds and serves, by `(kind id, attribute id)`, with their
+    `max_chars`: overflowed ones left out and, with `layout`, those a branch it reads holds
+    more than `max_values` values of (a commit lowering the limit races with other writers)."""
+    if layout is not None:
+        rows = await session.execute(_SERVED, {"domain": domain_id, "branches": _branches(layout)})
+        return {(kind, attribute): int(chars) for kind, attribute, chars in rows.all()}
+    held = await held_selection(session, domain_id)
+    return {pair: row.max_chars for pair, row in held.items() if not row.overflowed}
 
 
 async def _within_thresholds(
@@ -266,19 +346,21 @@ async def wanted_selection(
     return wanted
 
 
+def _cap(pair: Pair, schema: Schema | None, settings: ValueIndexSettings) -> int:
+    """The values of the Attribute one branch may hold (`max_values`): `hard_max_distinct`
+    for those always held, the hysteresis limit for plain strings."""
+    kind = None if schema is None else schema.kinds.get(pair[0])
+    attribute = None if kind is None else kind.attributes.get(pair[1])
+    if attribute is not None and eligible(attribute) is True:
+        return settings.hard_max_distinct
+    return int(settings.max_distinct * settings.hysteresis)
+
+
 def _oversized(
     sizes: Mapping[Pair, int], schema: Schema | None, settings: ValueIndexSettings
 ) -> set[Pair]:
     """Held Attributes some branch holds too many values of (module doc)."""
-    found: set[Pair] = set()
-    for (kind_id, attribute_id), size in sizes.items():
-        kind = None if schema is None else schema.kinds.get(kind_id)
-        attribute = None if kind is None else kind.attributes.get(attribute_id)
-        forced = attribute is not None and eligible(attribute) is True
-        limit = settings.hard_max_distinct if forced else settings.max_distinct
-        if size > limit * (1 if forced else settings.hysteresis):
-            found.add((kind_id, attribute_id))
-    return found
+    return {pair for pair, size in sizes.items() if size > _cap(pair, schema, settings)}
 
 
 async def sync_selection(
@@ -307,7 +389,9 @@ async def sync_selection(
     schema_hash = await branch_schema_hash(session, domain_id, branch)
     marker = fingerprint(schema_hash, values)
     cursor = (await session.execute(_CURSOR, {"domain": domain_id})).one_or_none()
-    current = await selection(session, domain_id)
+    current = await held_selection(session, domain_id)
+    # No cursor: a new Domain, or the first pass after revision 0047 (which clears them).
+    recount = cursor is None and bool(current)
     fresh = (
         not force
         and cursor is not None
@@ -316,12 +400,16 @@ async def sync_selection(
     )
     schema = await branch_schema(session, domain_id, branch)
     wanted = await _decide(session, domain_id, branch, schema, values, current, fresh=fresh)
-    if fresh and wanted == set(current):
+    caps = {pair: _cap(pair, schema, values) for pair in wanted}
+    if fresh and wanted == set(current) and not _recapped(current, caps):
         report.skipped = True
         report.selected = sorted(current)
         return report
-    if not any(_changes(current, wanted, values.max_value_chars)) and not await _orphaned(
-        session, domain_id
+    if (
+        not recount
+        and not any(_changes(current, wanted, values.max_value_chars))
+        and not _recapped(current, caps)
+        and not await _orphaned(session, domain_id)
     ):
         report.selected = sorted(current)
         await _save_cursor(session, domain_id, head, marker, now)
@@ -334,22 +422,31 @@ async def sync_selection(
     if moved != schema_hash:
         marker = fingerprint(moved, values)
         schema = await branch_schema(session, domain_id, branch)
-        current = await selection(session, domain_id)
+        current = await held_selection(session, domain_id)
         wanted = await _decide(session, domain_id, branch, schema, values, current, fresh=False)
+        caps = {pair: _cap(pair, schema, values) for pair in wanted}
     else:
-        current = await selection(session, domain_id)
+        current = await held_selection(session, domain_id)
+    if recount:
+        await _within(session, deadline)
+        await session.execute(_CLEAR_DOMAIN_SIZES, {"domain": domain_id})
+        await session.execute(_COUNT_DOMAIN_SIZES, {"domain": domain_id})
+        current = await held_selection(session, domain_id)
+        wanted -= await _over(session, domain_id, schema, values, current)
     removed, todo = _changes(current, wanted, values.max_value_chars)
     await _within(session, deadline)
     await _drop(session, domain_id, removed)
     report.removed = removed
+    await _recap(session, domain_id, _recapped(current, caps))
     added = todo[: values.max_added_per_pass]
     report.pending = todo[values.max_added_per_pass :]
     report.added, rest, report.backfilled = await _backfill(
-        session, domain_id, added, values.max_value_chars, deadline
+        session, domain_id, added, values.max_value_chars, deadline, caps=caps
     )
     report.pending = [*rest, *report.pending]
     await _within(session, deadline)
     report.orphans = max((await session.execute(_ORPHANS, {"domain": domain_id})).rowcount, 0)  # type: ignore[attr-defined]
+    await session.execute(_ORPHAN_SIZES, {"domain": domain_id})
     report.selected = sorted(wanted - set(report.pending))
     if not report.pending:
         await _save_cursor(session, domain_id, head, marker, now)
@@ -362,32 +459,77 @@ async def _decide(
     branch: str,
     schema: Schema | None,
     values: ValueIndexSettings,
-    current: Mapping[Pair, int],
+    current: Mapping[Pair, Held],
     *,
     fresh: bool,
 ) -> set[Pair]:
     """The wanted selection: counted again unless `fresh` (then the current one), less the
-    Attributes some branch holds too many values of."""
-    sizes = {
-        (kind, attribute): int(n)
-        for kind, attribute, n in (await session.execute(_SIZES, {"domain": domain_id})).all()
-    }
-    oversized = _oversized(sizes, schema, values)
+    Attributes some branch holds too many values of (`_over`)."""
+    oversized = await _over(session, domain_id, schema, values, current)
     if fresh:
         return set(current) - oversized
     if schema is None:
         return set()
-    wanted = await wanted_selection(session, domain_id, branch, schema, values, current)
+    chars = {pair: row.max_chars for pair, row in current.items()}
+    wanted = await wanted_selection(session, domain_id, branch, schema, values, chars)
     return wanted - oversized
 
 
+async def _over(
+    session: AsyncSession,
+    domain_id: str,
+    schema: Schema | None,
+    values: ValueIndexSettings,
+    current: Mapping[Pair, Held],
+) -> set[Pair]:
+    """Held Attributes some branch holds more values of than the settings allow, or than their
+    own `max_values`, or marked overflowed since the last pass."""
+    sizes = {
+        (kind, attribute): int(n)
+        for kind, attribute, n in (await session.execute(_SIZES, {"domain": domain_id})).all()
+    }
+    found = _oversized(sizes, schema, values)
+    return found | {
+        pair
+        for pair, row in current.items()
+        if row.overflowed or sizes.get(pair, 0) > row.max_values
+    }
+
+
 def _changes(
-    current: Mapping[Pair, int], wanted: set[Pair], chars: int
+    current: Mapping[Pair, Held], wanted: set[Pair], chars: int
 ) -> tuple[list[Pair], list[Pair]]:
     """(pairs to drop, pairs to count: those whose max_chars changed, then the new ones)."""
     removed = sorted(pair for pair in current if pair not in wanted)
-    changed = sorted(pair for pair, held in current.items() if pair in wanted and held != chars)
+    changed = sorted(
+        pair for pair, row in current.items() if pair in wanted and row.max_chars != chars
+    )
     return removed, [*changed, *sorted(wanted - set(current))]
+
+
+def _recapped(current: Mapping[Pair, Held], caps: Mapping[Pair, int]) -> dict[Pair, int]:
+    """Held pairs whose `max_values` the schema or the settings changed, with the new one."""
+    return {
+        pair: cap
+        for pair, cap in caps.items()
+        if pair in current and current[pair].max_values != cap
+    }
+
+
+async def _recap(session: AsyncSession, domain_id: str, caps: Mapping[Pair, int]) -> None:
+    """Set the new `max_values` of held pairs, under the fence (`_RECAP`)."""
+    if not caps:
+        return
+    pairs = sorted(caps)
+    await session.execute(
+        _RECAP,
+        {
+            "domain": domain_id,
+            "kinds": [k for k, _ in pairs],
+            "attributes": [a for _, a in pairs],
+            "caps": [caps[p] for p in pairs],
+        },
+    )
 
 
 async def _orphaned(session: AsyncSession, domain_id: str) -> bool:
@@ -439,6 +581,7 @@ async def _drop(session: AsyncSession, domain_id: str, pairs: Sequence[Pair]) ->
         params = {"domain": domain_id, "kind": kind, "attributes": attributes}
         await session.execute(_DROP, params)
         await session.execute(_DROP_VALUES, params)
+        await session.execute(_DROP_SIZES, params)
 
 
 async def _backfill(
@@ -447,11 +590,14 @@ async def _backfill(
     pairs: Sequence[Pair],
     chars: int,
     deadline: float | None = None,
+    *,
+    caps: Mapping[Pair, int],
 ) -> tuple[list[Pair], list[Pair], int]:
-    """Select `pairs` and count their values on every branch: one scan per Kind. The caller
-    holds the fence. With `deadline`, Kinds are counted while budget is left; returns (pairs
-    done, pairs left, rows written). A scan that outlives the budget fails the pass (rolled
-    back, retried)."""
+    """Select `pairs` with their `caps` (`max_values`) and count
+    their values and sizes on every branch: one scan per Kind; a pair some branch holds more
+    than its cap of is marked overflowed. The caller holds the fence. With `deadline`, Kinds
+    are counted while budget is left; returns (pairs done, pairs left, rows written). A scan
+    that outlives the budget fails the pass (rolled back, retried)."""
     written = 0
     done: list[Pair] = []
     grouped = sorted(_by_kind(pairs).items())
@@ -461,35 +607,46 @@ async def _backfill(
             return done, left, written
         if deadline is not None:
             await _within(session, deadline)
+        names = sorted(attributes)
         params: dict[str, Any] = {
             "domain": domain_id,
             "kind": kind,
-            "attributes": sorted(attributes),
+            "attributes": names,
+            "caps": [caps[(kind, a)] for a in names],
             "max_chars": chars,
         }
         await session.execute(_DROP_VALUES, params)
+        await session.execute(_DROP_SIZES, params)
         await session.execute(_ADD, params)
         result = await session.execute(_BACKFILL, params)
         written += max(result.rowcount or 0, 0)  # type: ignore[attr-defined]
+        await session.execute(_COUNT_SIZES, params)
         done += [(kind, a) for a in sorted(attributes)]
     return done, [], written
 
 
 async def drop_ineligible(
-    session: AsyncSession, domain_id: str, branch: str, schema: Schema
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    schema: Schema,
+    *,
+    settings: ValueIndexSettings,
 ) -> list[Pair]:
     """In the transaction of a commit or merge that changed the schema of `branch`: when it
     is the default branch, drop at once the Attributes `schema` no longer lets the index hold
     (sensitive, vault, retyped, derived, `resolvable: false`, or gone) with their values, and
     queue a `value_index` pass for the rest (additions, thresholds, stragglers a concurrent
-    writer counted). Takes the Domain's value lock shared first, like the triggers, so it waits
+    writer counted). The `max_values` of the Attributes left follow `schema` at once (one
+    always held that becomes a plain string gets the plain limit, marked overflowed if a branch
+    already holds more). Takes the Domain's value lock shared first, like the triggers, so it waits
     for a running pass and a later pass sees this schema; the deletes use the selection's key
     and `ix_mat_values_attribute`."""
     found = (await session.execute(_DEFAULT_HEAD, {"domain": domain_id})).one_or_none()
     if found is None or found[0] != branch:
         return []
     await session.execute(_SHARED_FENCE, {"domain": domain_id})
-    held = await selection(session, domain_id)
+    held = await held_selection(session, domain_id)
     gone: list[Pair] = []
     for kind_id, attribute_id in sorted(held):
         kind = schema.kinds.get(kind_id)
@@ -497,6 +654,8 @@ async def drop_ineligible(
         if attribute is None or eligible(attribute) is False:
             gone.append((kind_id, attribute_id))
     await _drop(session, domain_id, gone)
+    left = set(held) - set(gone)
+    await _recap(session, domain_id, _recapped(held, {p: _cap(p, schema, settings) for p in left}))
     # Not deduplicated against a running pass: it decided on the schema before this one.
     await enqueue_job(
         session,
@@ -517,17 +676,19 @@ async def rebuild(
     report = await sync_selection(session, domain_id, settings=settings, force=True, now=now)
     deadline = time.monotonic() + settings.values.pass_timeout_ms / 1000
     await _fence(session, domain_id, settings, deadline)
-    held = await selection(session, domain_id)
+    held = await held_selection(session, domain_id)
     for kind, attributes in sorted(_by_kind(sorted(held)).items()):
         await session.execute(
             _DROP_VALUES, {"domain": domain_id, "kind": kind, "attributes": attributes}
         )
     report.backfilled = 0
     by_chars: dict[int, list[Pair]] = defaultdict(list)
-    for pair, chars in held.items():
-        by_chars[chars].append(pair)
+    for pair, row in held.items():
+        by_chars[row.max_chars].append(pair)
+    caps = {pair: row.max_values for pair, row in held.items()}
     for chars, pairs in sorted(by_chars.items()):
-        report.backfilled += (await _backfill(session, domain_id, sorted(pairs), chars))[2]
+        _, _, written = await _backfill(session, domain_id, sorted(pairs), chars, caps=caps)
+        report.backfilled += written
     return report
 
 
@@ -567,9 +728,13 @@ def _branches(layout: BranchLayout) -> list[str]:
 
 _SELECTED = (
     "JOIN mat_value_attributes s ON s.domain_id = v.domain_id AND s.kind_id = v.kind_id "
-    "AND s.attribute_id = v.attribute_id "
+    "AND s.attribute_id = v.attribute_id AND NOT s.overflowed AND NOT EXISTS (SELECT 1 "
+    "FROM mat_value_sizes z WHERE z.domain_id = v.domain_id AND z.branch = v.branch "
+    "AND z.kind_id = v.kind_id AND z.attribute_id = v.attribute_id AND z.size > s.max_values) "
 )
-"""Reads see values of selected Attributes only, whatever rows a race left behind."""
+"""Reads see values of selected Attributes only, whatever rows a race left behind, and none
+of an Attribute marked overflowed or whose branch holds more than `max_values` of it, marked
+or not (a commit lowering the limit races with writers of other branches)."""
 _PAIRS = (
     "(CAST(:pair_kinds AS text[]) IS NULL OR (v.kind_id, v.attribute_id) IN ("
     "SELECT * FROM unnest(CAST(:pair_kinds AS text[]), CAST(:pair_attributes AS text[])))) "

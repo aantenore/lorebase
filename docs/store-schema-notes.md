@@ -236,6 +236,25 @@ as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
   definer read function with the checks and grants of revision 0008 (bounded `p_limit`, at
   most 64 terms, Domain in scope, fixed `search_path`). Row-level security as for the other
   Domain tables; `mat_values` rows go with their ref.
+- (Revision `0047`, design 8.9.) The value limit holds between passes. `mat_value_attributes`
+  gains `max_values` (set by the pass and by a schema commit on the default branch:
+  `hard_max_distinct` for Attributes always held, `max_distinct * hysteresis` for plain strings)
+  and `overflowed`. `mat_value_sizes(domain_id, branch, kind_id, attribute_id, size)` counts per
+  branch the values `mat_values` holds of each selected Attribute; rows go with their ref.
+  `lb_values_maintain` skips overflowed Attributes, and its upsert of `mat_values` is one
+  statement whose `RETURNING` (inserted rows, `xmax = 0`; existing rows dropping to 0) feeds the
+  size changes, upserted in key order, and marks `overflowed` an Attribute whose size passes
+  `max_values`; an update between values a branch already holds writes no size. Reads and
+  `lb_values_similar` join the selection on `NOT overflowed` and skip a pair whose size row on
+  the row's branch is past `max_values` (a primary key probe of `mat_value_sizes`), marked or
+  not: a schema commit lowering a limit races with writers of other branches. The next pass
+  drops the Attribute. The upgrade (with `lorebase.bypass_rls`, row-level security being forced
+  on the owner) sets `max_values` to `hard_max_distinct`, counts the sizes from `mat_values`,
+  marks rows past it and clears `mat_value_cursors`; the first pass of each Domain without a
+  cursor counts its sizes again under the exclusive fence before deciding (writers of the old
+  trigger body during a rolling upgrade) and sets every limit. It also empties
+  `resolve_misses.callers`: digests stored before keyed caller digests were plain hashes of
+  principal ids (phrases and counts stay). The downgrade restores revision 0045's functions.
 - `mat_lexicon(domain_id, branch, kind_id, word, records)`: per Kind, the lexemes of the
   branch's own search vectors and the number of its rows that hold each, without lexemes that
   have a digit or more than 64 characters (`lb_lexicon_word`; codes and keys are not

@@ -1,12 +1,12 @@
 [project]
 name = "lorebase-keeper"
-version = "0.2.3"
+version = "0.3.0"
 description = "Lorebase Keeper: REST API service"
 requires-python = ">=3.12"
 dependencies = [
-  "lorebase-core>=0.2,<0.3",
-  "lorebase-store>=0.2,<0.3",
-  "lorebase-platform>=0.2,<0.3",
+  "lorebase-core>=0.3,<0.4",
+  "lorebase-store>=0.3,<0.4",
+  "lorebase-platform>=0.3,<0.4",
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "pydantic>=2.7",

@@ -815,6 +815,7 @@ Phrases POST /resolve matched to nothing (design 8.10), kept for vocabulary sugg
 | `store.resolve_misses.max_per_domain` | `10000` | phrases kept per Domain; a new one evicts the least missed (no more missed than it) or is dropped |
 | `store.resolve_misses.max_phrases_per_caller` | `500` | phrases one caller alone may hold per Domain |
 | `store.resolve_misses.max_callers` | `20` | distinct callers counted per phrase (digests, never names) |
+| `store.resolve_misses.caller_key` | `null` | REQUIRED when enabled: &gt;= 32 characters, e.g. secret://env/LOREBASE_MISS_CALLER_KEY; keys the HMAC-SHA256 caller digests. Changing it counts distinct callers afresh |
 | `store.resolve_misses.prune_batch` | `5000` | expired phrases deleted per statement |
 
 ### `store.coverage`

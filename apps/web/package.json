@@ -1,6 +1,6 @@
 {
   "name": "@lorebase/web",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "packageManager": "pnpm@11.13.0",
   "type": "module",

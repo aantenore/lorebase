@@ -58,7 +58,6 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_keeper.services.reads import ReadGuard
-from lorebase_store.resolve_misses import caller_digest
 
 router = APIRouter(tags=["read"])
 
@@ -567,5 +566,8 @@ async def _record_misses(
     ):
         return
     recorder.offer(
-        point.domain.id, point.branch, phrases, caller_digest(point.domain.id, access.principal.id)
+        point.domain.id,
+        point.branch,
+        phrases,
+        recorder.caller(point.domain.id, access.principal.id),
     )

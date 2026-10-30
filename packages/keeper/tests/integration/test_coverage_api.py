@@ -45,7 +45,7 @@ SECTION = {
     }
 }
 OVERLAY = "agent/coverage"
-RECORDING = {"resolve_misses": {"enabled": True}}
+RECORDING = {"resolve_misses": {"enabled": True, "caller_key": "k" * 32}}
 
 
 def without(schema: Schema, changes: list[RecordUpsert], kind: str, name: str) -> list[Any]:

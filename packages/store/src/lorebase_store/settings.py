@@ -39,6 +39,8 @@ PGVECTOR_HNSW_MAX_DIMS = 2000
 PGVECTOR_HNSW_DEFAULT_M = 16
 PGVECTOR_HNSW_DEFAULT_EF_CONSTRUCTION = 64
 """pgvector's HNSW build parameters when an index sets none."""
+MIN_CALLER_KEY_LENGTH = 32
+"""Shortest `store.resolve_misses.caller_key` accepted."""
 
 
 class DatabaseSettings(SectionModel):
@@ -163,7 +165,7 @@ class ResolveMissSettings(SectionModel):
     off by default, kept at most `retention_days` after they were last seen (and so are the
     vocabulary suggestions quoting them), deleted with their Domain, and never recorded for
     callers without `search.resolve.misses.permission` or for requests that opt out. Only
-    unkeyed digests of the callers are kept, to count them.
+    digests of the callers keyed by `caller_key` (HMAC-SHA256) are kept, to count them.
     """
 
     enabled: bool = Field(
@@ -212,9 +214,28 @@ class ResolveMissSettings(SectionModel):
         description="Distinct callers counted per phrase (by digest, never by name); the "
         "count stops at this bound.",
     )
+    caller_key: SecretValue | None = Field(
+        default=None,
+        description="Server-side key of the HMAC-SHA256 digests that count callers; required "
+        "when enabled, at least 32 characters, e.g. secret://env/LOREBASE_MISS_CALLER_KEY. "
+        "Changing it makes the stored digests incomparable: distinct callers are counted "
+        "afresh (a caller seen under both keys counts twice until its phrases expire).",
+    )
     prune_batch: int = Field(
         default=5000, ge=1, description="Expired phrases deleted per statement of a pass."
     )
+
+    @model_validator(mode="after")
+    def _keyed(self) -> ResolveMissSettings:
+        if self.enabled and (
+            self.caller_key is None
+            or len(self.caller_key.get_secret_value()) < MIN_CALLER_KEY_LENGTH
+        ):
+            raise ValueError(
+                "store.resolve_misses.caller_key is required when recording is enabled "
+                f"(at least {MIN_CALLER_KEY_LENGTH} characters)"
+            )
+        return self
 
 
 class CoverageSettings(SectionModel):

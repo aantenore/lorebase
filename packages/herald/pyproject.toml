@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-herald"
-version = "0.2.3"
+version = "0.3.0"
 description = "Lorebase Herald: MCP server over the Keeper REST API"
 requires-python = ">=3.12"
 # mcp: the official Model Context Protocol SDK (tools, resources and prompts; stdio and
@@ -11,8 +11,8 @@ requires-python = ">=3.12"
 # opentelemetry-api: trace context of Herald's own spans, propagated to Keeper as `traceparent`.
 # lorebase-platform: layered settings, secret references and structured logging.
 dependencies = [
-  "lorebase-platform>=0.2,<0.3",
-  "lorebase-client>=0.2,<0.3",
+  "lorebase-platform>=0.3,<0.4",
+  "lorebase-client>=0.3,<0.4",
   "mcp>=2.3,<3",
   "httpx>=0.27",
   "opentelemetry-api>=1.25",
