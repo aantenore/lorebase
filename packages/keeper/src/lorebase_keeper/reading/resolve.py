@@ -325,6 +325,16 @@ class _Context:
         attribute = self.attribute(kind_id, attribute_id)
         return attribute is not None and not self.point.masking.hidden(attribute, [kind_id])
 
+    def value_pairs(self) -> list[tuple[str, str]]:
+        """The (Kind, Attribute) pairs whose values the caller may be shown: lookups are
+        restricted to them before their limits, so others cannot crowd them out."""
+        return [
+            (kind_id, attribute_id)
+            for kind_id, kind in sorted(self.kinds.items())
+            for attribute_id in sorted(kind.attributes)
+            if self.resolvable(kind_id, attribute_id)
+        ]
+
     def resolvable(self, kind_id: str, attribute_id: str) -> bool:
         attribute = self.attribute(kind_id, attribute_id)
         return (
@@ -444,7 +454,7 @@ async def _exact(
             session,
             context.point.layout,
             terms,
-            kind_ids=sorted(context.kinds),
+            pairs=context.value_pairs(),
             per_term=settings.exact_per_phrase,
         ):
             hits[hit.term].append(hit)
@@ -556,7 +566,7 @@ async def _similar(
         [p.text for p in open_],
         threshold=settings.trigram_threshold,
         per_term=per_term,
-        kind_ids=sorted(context.kinds),
+        pairs=context.value_pairs(),
         runtime=runtime.store,
     ):
         hits[hit.term].append(hit)

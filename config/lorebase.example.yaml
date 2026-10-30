@@ -673,7 +673,7 @@ store:
     hard_max_distinct: 10000     # values of one Attribute any branch may hold, enums included
     stats_interval_s: 3600.0     # distinct values counted again this often (schema change: at once)
     max_added_per_pass: 20       # Attributes one pass adds; the rest go to the next pass
-    pass_statement_timeout_ms: 120000   # bounds how long the Domain's writers wait for a pass
+    pass_timeout_ms: 120000      # budget of a pass once it holds the Domain's lock (writers wait)
   writes:
     insert_batch_rows: 1000      # rows per multi-row INSERT
     copy_threshold_rows: 5000    # larger batches use COPY into a staging table; 0 disables COPY

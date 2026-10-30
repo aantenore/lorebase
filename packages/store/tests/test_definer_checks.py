@@ -66,7 +66,7 @@ CALLS = {
     "lb_search_corrections": f"SELECT * FROM lb_search_corrections(:domain, '{OVERLAY}', "
     "NULL, 'simple', 'bearng', CAST(0.3 AS real), CAST(:p_candidates AS integer), 3)",
     # Likewise: it adds the base's values on an overlay.
-    "lb_values_similar": f"SELECT * FROM lb_values_similar(:domain, '{OVERLAY}', NULL, "
+    "lb_values_similar": f"SELECT * FROM lb_values_similar(:domain, '{OVERLAY}', NULL, NULL, "
     "ARRAY['bearng'], CAST(0.3 AS real), CAST(:p_limit AS integer))",
 }
 COUNTS = {
