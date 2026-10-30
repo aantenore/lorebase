@@ -102,6 +102,8 @@ def test_valid_schema_has_no_resolution_issues() -> None:
         ({"notes": {"value_aliases": {"x": ["y"]}}}, "value_aliases"),
         ({"size": {"value_aliases": {"XL": ["huge"]}}}, "XL"),
         ({"color": {"sensitivity": ["confidential"]}}, "resolvable"),
+        ({"color": {"sensitivity": ["pii"], "vault": True}}, "resolvable"),
+        ({"color": {"derivation_id": new_id(IdPrefix.DERIVATION)}}, "resolvable"),
     ],
 )
 def test_invalid_resolution_settings_are_reported(

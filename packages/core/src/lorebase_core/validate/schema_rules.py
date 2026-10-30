@@ -515,8 +515,8 @@ class _Checker:
         relation_id: str | None,
     ) -> None:
         """`resolvable` and `value_aliases` (design 8.9): Kind Attributes of a value-indexable
-        type, not sensitive (their values never enter the index); value aliases of an enum name
-        its values."""
+        type, not sensitive, not in the vault (their values never enter the index), and for
+        `resolvable` not derived; value aliases of an enum name its values."""
         flagged = [
             name
             for name, present in (
@@ -531,6 +531,10 @@ class _Checker:
                 problem = "link attributes are not resolved to values"
             elif not attribute.value_resolvable:
                 problem = f"{attribute.type.describe()} values are not indexed for resolution"
+            elif attribute.in_vault:
+                problem = "vault values are not indexed for resolution"
+            elif attribute.is_derived and name == "resolvable":
+                problem = "derived values are not indexed for resolution"
             elif attribute.sensitivity:
                 problem = "values of sensitive attributes are not indexed for resolution"
             if problem is not None:
