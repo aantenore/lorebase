@@ -1,4 +1,4 @@
-import type { GuideAuth } from '@/features/retrieval-lab/guide-client';
+import type { GuideAuth } from '@/api/guide-client';
 import { explore as exploreMessages } from '@/messages/explore';
 import { parseExploreEvent, type ExploreEvent } from './events';
 import { readSse } from './sse';

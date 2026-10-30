@@ -1,6 +1,6 @@
 import { useCredentials, useSession } from '@/api/provider';
 import { useConfig } from '@/config/context';
-import type { GuideAuth } from '@/features/retrieval-lab/guide-client';
+import type { GuideAuth } from '@/api/guide-client';
 import type { ExploreTransport } from './explore-client';
 import { liveTransport } from './explore-client';
 import { mockTransport } from '@/api/mock/explore';

@@ -10,7 +10,7 @@ import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
 import { Button } from '@/ui/button';
 import { Input, Select, Textarea } from '@/ui/field';
 import { FormAction, FormRow, PageHeader, QueryBoundary, Section } from '@/ui/layout';
-import { embed, parseVector } from './guide-client';
+import { embed, parseVector } from '@/api/guide-client';
 import { LabCanvas } from './lab-canvas';
 import { involvedRefs } from './lab-graph';
 import { PackPanel } from './pack-panel';
