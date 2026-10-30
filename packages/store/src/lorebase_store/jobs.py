@@ -71,6 +71,10 @@ EMBEDDINGS_JOB = "embeddings"
 DOCUMENT_VERSION_CHECK_JOB = "document_version_check"
 """Job type of the evidence check of a new document version or a retired document run by
 Scribe (design 9.2); payload from `document_version_check_payload`."""
+VALUE_INDEX_JOB = "value_index"
+"""Job type of a value index pass over one Domain run by Scribe (design 8.9): the selection
+of indexed Attributes brought in line with the default branch, or a rebuild; payload from
+`value_index_payload`."""
 RECONCILE_SWEEP_JOB = "reconcile_sweep"
 """Job type of a reconciliation sweep of one branch of a Domain run by Scribe (design 10.6);
 payload from `reconcile_sweep_payload`."""
@@ -247,6 +251,13 @@ def embeddings_payload(
     if resume is not None:
         payload["resume"] = list(resume)
     return payload
+
+
+def value_index_payload(*, rebuild: bool = False) -> dict[str, Any]:
+    """Payload of a `value_index` job: `rebuild` recounts every value from the rows. The
+    scheduler queues the default, `{}`, so identical scheduled passes are recognized by
+    `enqueue_job(unique)`."""
+    return {"rebuild": True} if rebuild else {}
 
 
 def reconcile_sweep_payload(

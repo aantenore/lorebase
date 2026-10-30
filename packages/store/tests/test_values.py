@@ -177,8 +177,8 @@ async def test_selection_upkeep_lookups_and_rebuild(
 
     # The triggers and a recount agree.
     before = await held(sessions)
-    async with sessions() as session, session.begin():
-        await values.rebuild(session, DOMAIN, settings=settings)
+    report = await values.run_value_index(sessions, DOMAIN, settings=settings, rebuild_all=True)
+    assert report.backfilled == len(before)
     assert await held(sessions) == before
 
 

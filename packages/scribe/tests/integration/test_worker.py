@@ -586,7 +586,10 @@ async def test_scheduler_leader_election_and_schedules(
     monkeypatch.setattr(scheduler_module, "GC_SCHEDULED", gc_scheduled)
     time = Stepper(datetime(2026, 10, 21, 1, 0, tzinfo=UTC))
     settings = SchedulerSettings(
-        webhook_interval_s=10, embeddings_interval_s=0, audit_verify_interval_s=86400
+        webhook_interval_s=10,
+        embeddings_interval_s=0,
+        value_index_interval_s=0,
+        audit_verify_interval_s=86400,
     )
 
     def scheduler() -> Scheduler:
