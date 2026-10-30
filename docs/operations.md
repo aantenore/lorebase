@@ -279,16 +279,27 @@ lorebase-scribe value-index DOMAIN            # decide the selection and backfil
 lorebase-scribe value-index DOMAIN --rebuild  # recount every value from the Records
 ```
 
-A pass that adds or drops Attributes takes the Domain's value lock (a transaction advisory lock)
-exclusively: writers of that Domain wait at their next statement until the pass commits;
-readers and other Domains do not wait. The backfill reads each Kind once for all its added
+A pass decides without locks. Only when its decision changes the selection (or rows of
+Attributes no longer held are left) does it take the Domain's value lock (a transaction advisory
+lock) exclusively, read the schema and the selection again, and apply the change: writers of
+that Domain wait at their next statement until the pass commits; readers and other Domains do
+not wait. The backfill reads each Kind once for all its added
 Attributes, at most `store.values.max_added_per_pass` (20) Attributes per pass, the rest
 queued as the next pass; 1.5 s for five Attributes over 100,000 Records
 ([performance](performance.md#resolution)), so plan the first pass of a Domain of tens of
-millions of Records for a quiet period, or lower `max_added_per_pass`. The pass runs under
-`store.values.pass_statement_timeout_ms` (120 s), which bounds how long writers can wait; the
-wait for the lock itself is bounded by `store.commit.lock_timeout_ms`, and a pass that times
-out fails and is retried like any job. `--rebuild` is
+millions of Records for a quiet period, or lower `max_added_per_pass`. Once it holds the lock
+the pass has a time budget of `store.values.pass_timeout_ms` (120 s) for everything it does
+under it: each statement runs with what is left as its `statement_timeout`, and Kinds not
+reached are left to the next pass, queued at once. So the Domain's writers wait at most about
+that long (they have no lock timeout of their own); a single Kind whose scan exceeds the budget
+fails the pass, which is rolled back and retried, so raise the budget for such a Kind. The wait
+for the lock itself is bounded by `store.commit.lock_timeout_ms` (a waiting pass also queues the
+writers that arrive after it).
+
+The fence assumes writers run at READ COMMITTED, the Postgres default and what Lorebase uses: a
+trigger statement must see a selection committed while it waited. Do not set
+`default_transaction_isolation` to `repeatable read` or `serializable` for the roles Lorebase
+connects with. `--rebuild` is
 the repair path: it recounts the Domain from its Records and should leave the table unchanged
 (the tests check that triggers and recount agree). `store.values.enabled: false` drops every
 selection on the next pass; resolution then matches schema names and aliases only.

@@ -799,7 +799,7 @@ Value index of POST /resolve (design 8.9): distinct short values per branch, kep
 | `store.values.hard_max_distinct` | `10000` | values of one Attribute any branch may hold, enums included |
 | `store.values.stats_interval_s` | `3600.0` | distinct values counted again this often (schema change: at once) |
 | `store.values.max_added_per_pass` | `20` | Attributes one pass adds; the rest go to the next pass |
-| `store.values.pass_statement_timeout_ms` | `120000` | bounds how long the Domain's writers wait for a pass |
+| `store.values.pass_timeout_ms` | `120000` | budget of a pass once it holds the Domain's lock (writers wait) |
 
 ### `store.writes`
 
