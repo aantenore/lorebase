@@ -40,9 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
-import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -54,6 +52,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.types import Text
 
+from lorebase_core.infer.phrases import normalize as normalize
 from lorebase_core.model import Attribute, Kind, Schema
 from lorebase_core.types import AttributeType
 from lorebase_store.embeddings import branch_schema, branch_schema_hash
@@ -66,26 +65,6 @@ from lorebase_store.telemetry import record_definer_call
 
 MAX_TERMS = 64
 """Terms one call of `lb_values_similar` compares (revision 0045)."""
-
-_COMBINING = re.compile(f"[{chr(0x300)}-{chr(0x36F)}]")
-BLANKS = "".join(
-    chr(c)
-    for c in (
-        *range(0x09, 0x0E), *range(0x1C, 0x21), 0x85, 0xA0, 0x1680, *range(0x2000, 0x200B),
-        0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
-    )
-)  # fmt: skip
-"""The blanks `lb_value_norm` collapses: what `str.split()` takes for white space."""
-_BLANKS = re.compile(f"[{re.escape(BLANKS)}]+")
-
-
-def normalize(value: str) -> str:
-    """The compared form of a value or a word, as `lb_value_norm` computes it: lower case
-    (final sigma folded), Latin combining marks dropped after NFD, blanks collapsed."""
-    lowered = value.lower().replace(chr(0x3C2), chr(0x3C3))  # final sigma
-    decomposed = unicodedata.normalize("NFD", lowered)
-    return _BLANKS.sub(" ", _COMBINING.sub("", decomposed)).strip(" ")
-
 
 # Selection --------------------------------------------------------------------------------
 

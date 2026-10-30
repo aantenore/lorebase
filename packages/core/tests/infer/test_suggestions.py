@@ -23,6 +23,7 @@ from lorebase_core.infer.suggestions import (
     name_similarity,
     proposed_kind,
     suggestion_patch,
+    vocabulary_open,
 )
 from lorebase_core.model import Schema, load_schema, schema_from_document, schema_to_document
 from lorebase_core.model.attribute import Sensitivity
@@ -252,3 +253,139 @@ def test_only_free_text_fields_pointing_to_nothing_name_a_dropped_kind(schema: S
     assert "risk_score" not in names
     assert "onboarded_on" not in names
     assert "status" not in names  # an enum
+
+
+# Vocabulary suggestions (design 8.10) -------------------------------------------------------
+
+
+def attribute(schema: Schema, kind_name_: str, name: str) -> str:
+    owner = schema.kind_by_api_name(kind_name_)
+    assert owner is not None
+    found = next(a for a in owner.attributes.values() if a.api_name == name)
+    return found.id
+
+
+def test_vocabulary_fingerprints_are_per_alias_and_target() -> None:
+    alias = Observation(
+        SuggestionType.VALUE_ALIAS,
+        "on hold",
+        "miss:main:on hold",
+        0.4,
+        "resolve_misses",
+        kind="k",
+        target="a",
+        payload={"value": "suspended"},
+        weight=7,
+    )
+    assert alias.name == "on hold"
+    assert alias.fingerprint == "value_alias:k:a:suspended:on hold"
+    assert fingerprint(SuggestionType.KIND_ALIAS, "Vendors", "k") == "kind_alias:k:vendors"
+    assert fingerprint(SuggestionType.ATTRIBUTE_DESCRIPTION, "x", "k", "a") == (
+        "attribute_description:k:a"
+    )
+
+
+def test_vocabulary_duplicates_are_existing_names_and_aliases(schema: Schema) -> None:
+    supplier = kind(schema, "Supplier")
+    status = attribute(schema, "Supplier", "status")
+    assert existing_match(
+        schema, SuggestionType.KIND_ALIAS, "part", kind=supplier, options=OPTIONS
+    ) == existing_match(schema, SuggestionType.KIND, "Part", options=OPTIONS)
+    found = existing_match(
+        schema,
+        SuggestionType.ATTRIBUTE_ALIAS,
+        "legal name",
+        kind=supplier,
+        target=status,
+        options=OPTIONS,
+    )
+    assert found is not None
+    assert found.api_name == "legal_name"
+    assert (
+        existing_match(
+            schema,
+            SuggestionType.ATTRIBUTE_ALIAS,
+            "standing",
+            kind=supplier,
+            target=status,
+            options=OPTIONS,
+        )
+        is None
+    )
+
+
+def test_vocabulary_is_closed_for_sensitive_vault_and_derived_attributes(
+    schema: Schema,
+) -> None:
+    supplier = schema.kinds[kind(schema, "Supplier")]
+    part = schema.kinds[kind(schema, "Part")]
+    vat = supplier.attributes[attribute(schema, "Supplier", "vat_number")]
+    derived = part.attributes[attribute(schema, "Part", "supplier_count")]
+    status = supplier.attributes[attribute(schema, "Supplier", "status")]
+    cost = part.attributes[attribute(schema, "Part", "unit_cost")]
+    assert not vocabulary_open(vat)
+    assert not vocabulary_open(derived)
+    assert not vocabulary_open(status, frozenset({Sensitivity.PII}))
+    assert vocabulary_open(status, values=True)
+    assert vocabulary_open(cost)
+    assert not vocabulary_open(cost, values=True)
+
+
+def test_vocabulary_patch_adds_aliases_and_descriptions(schema: Schema) -> None:
+    supplier = kind(schema, "Supplier")
+    status = attribute(schema, "Supplier", "status")
+    tier = attribute(schema, "Supplier", "tier")
+    suggestions = [
+        Suggestion("s1", SuggestionType.KIND_ALIAS, "vendor", kind=supplier),
+        Suggestion("s2", SuggestionType.ATTRIBUTE_ALIAS, "Standing", kind=supplier, target=status),
+        Suggestion(
+            "s3",
+            SuggestionType.VALUE_ALIAS,
+            "Paused",
+            kind=supplier,
+            target=status,
+            payload={"value": "on_hold"},
+        ),
+        Suggestion(
+            "s4",
+            SuggestionType.ATTRIBUTE_DESCRIPTION,
+            "tier",
+            kind=supplier,
+            target=tier,
+            payload={"description": "Strategic importance of the supplier."},
+        ),
+    ]
+    patch = suggestion_patch(schema, suggestions, OPTIONS)
+    assert set(patch) == {"kinds"}
+    changed = patch["kinds"]["Supplier"]
+    assert changed["aliases"] == ["vendor"]
+    assert changed["attributes"]["status"]["aliases"] == ["standing"]
+    assert changed["attributes"]["status"]["value_aliases"] == {"on_hold": ["paused"]}
+    assert changed["attributes"]["tier"]["description"] == "Strategic importance of the supplier."
+    document = schema_to_document(schema)
+    document["kinds"] = {**document["kinds"], **patch["kinds"]}
+    target = schema_from_document(document, base=schema)
+    rules = SchemaRules(allow_expressions=True)
+    assert [(i.code, i.message) for i in validate_schema(target, rules) if i.is_error] == []
+
+
+def test_vocabulary_patch_refuses_sensitive_attributes(schema: Schema) -> None:
+    supplier = kind(schema, "Supplier")
+    vat = attribute(schema, "Supplier", "vat_number")
+    with pytest.raises(SuggestionError) as error:
+        suggestion_patch(
+            schema,
+            [
+                Suggestion(
+                    "s9",
+                    SuggestionType.VALUE_ALIAS,
+                    "eu vat",
+                    kind=supplier,
+                    target=vat,
+                    payload={"value": "IT123"},
+                )
+            ],
+            OPTIONS,
+        )
+    assert error.value.suggestion == "s9"
+    assert "sensitive" in str(error.value)

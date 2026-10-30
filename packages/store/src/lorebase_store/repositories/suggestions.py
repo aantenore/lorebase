@@ -3,8 +3,10 @@ aggregated by fingerprint, and the reviewer's decisions.
 
 `record` folds a job's observations into the stored rows: per fingerprint, each document's
 share (`observations[document_id] = {"n": count, "c": summed confidence}`) is replaced, so
-extracting a document again does not count it twice; examples of that document are replaced,
-samples, labels and sources are united, each within its bound. A decided suggestion keeps
+extracting a document again does not count it twice (an observation counts `weight` times: the
+consolidation of resolution misses keys shares by phrase, `miss:<phrase>`, and weighs each by
+its misses, so a pass replaces what the previous one recorded); examples of that document are
+replaced, samples, labels and sources are united, each within its bound. A decided suggestion keeps
 counting observations but stays decided. New fingerprints beyond `max_tracked` rows are
 dropped and counted.
 
@@ -74,6 +76,7 @@ class SuggestionRow:
     examples: list[dict[str, Any]]
     samples: list[str]
     sources: list[str]
+    payload: dict[str, Any]
     status: str
     decided_by: str | None
     decided_at: datetime | None
@@ -140,8 +143,8 @@ def fold(
     batch: dict[str, dict[str, float]] = defaultdict(lambda: {"n": 0, "c": 0.0})
     for observation in observations:
         share = batch[observation.document_id]
-        share["n"] += 1
-        share["c"] = round(share["c"] + observation.confidence, 6)
+        share["n"] += observation.weight
+        share["c"] = round(share["c"] + observation.confidence * observation.weight, 6)
     shares.update({k: {"n": int(v["n"]), "c": v["c"]} for k, v in batch.items()})
     support = sum(int(v.get("n", 0)) for v in shares.values())
     total = sum(float(v.get("c", 0.0)) for v in shares.values())
@@ -443,6 +446,7 @@ class SchemaSuggestionRepository:
                         name=names[key],
                         kind_ref=first.kind,
                         target_ref=first.target,
+                        payload=dict(first.payload or {}),
                         last_job_id=job_id,
                         created_at=now,
                         updated_at=now,

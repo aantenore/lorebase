@@ -20,6 +20,16 @@ This module holds the pure parts:
   activates them; Attributes added to an existing Kind are active.
 
 A Kind proposed by another suggestion is referred to as ``+<KindName>`` until it exists.
+
+**Vocabulary suggestions** (design 8.10) change elements that exist instead of adding new ones:
+an alias of a Kind (``kind_alias``), of an Attribute (``attribute_alias``) or of a stored value
+(``value_alias``), or a new description of an Attribute (``attribute_description``). Scribe's
+consolidation pass proposes them from the words agents asked `lorebase_resolve` for that matched
+nothing. ``name`` is the alias as compared (``lorebase_core.infer.phrases.normalize``), ``kind``
+the Kind id, ``target`` the Attribute id, and ``payload`` holds what else the change needs (the
+stored ``value`` an alias stands for, the proposed ``description``). They are never proposed or
+applied for Attributes whose values are sensitive, kept in the vault or not resolvable
+(``vocabulary_open``).
 """
 
 from __future__ import annotations
@@ -37,8 +47,10 @@ from lorebase_core.expr.sensitivity import effective_tags
 from lorebase_core.infer.columns import analyze_column, shape_pattern
 from lorebase_core.infer.names import humanize, normalize, pascal, plural, singular, unique_name
 from lorebase_core.infer.options import InferenceOptions
+from lorebase_core.infer.phrases import name_words as phrase_of_name
+from lorebase_core.infer.phrases import normalize as phrase_form
 from lorebase_core.infer.profile import ColumnProfile
-from lorebase_core.model.attribute import Attribute, Sensitivity
+from lorebase_core.model.attribute import MAX_ALIASES, Attribute, Sensitivity
 from lorebase_core.model.base import ElementStatus, snake_case
 from lorebase_core.model.ids import IdPrefix, new_id
 from lorebase_core.model.kind import Kind
@@ -55,6 +67,30 @@ class SuggestionType(StrEnum):
     KIND = "kind"
     ATTRIBUTE = "attribute"
     RELATION = "relation"
+    KIND_ALIAS = "kind_alias"
+    ATTRIBUTE_ALIAS = "attribute_alias"
+    VALUE_ALIAS = "value_alias"
+    ATTRIBUTE_DESCRIPTION = "attribute_description"
+
+
+VOCABULARY = frozenset(
+    {
+        SuggestionType.KIND_ALIAS,
+        SuggestionType.ATTRIBUTE_ALIAS,
+        SuggestionType.VALUE_ALIAS,
+        SuggestionType.ATTRIBUTE_DESCRIPTION,
+    }
+)
+"""Suggestion types that change existing elements (module doc)."""
+_ORDER = (
+    SuggestionType.KIND,
+    SuggestionType.ATTRIBUTE,
+    SuggestionType.RELATION,
+    SuggestionType.KIND_ALIAS,
+    SuggestionType.ATTRIBUTE_ALIAS,
+    SuggestionType.VALUE_ALIAS,
+    SuggestionType.ATTRIBUTE_DESCRIPTION,
+)
 
 
 def _type_inference() -> InferenceOptions:
@@ -191,6 +227,10 @@ class Observation:
     ``kind`` is the owner Kind of an Attribute or the from Kind of a Relation, ``target`` the
     to Kind of a Relation: a Kind id, or ``+<KindName>`` for a proposed Kind. ``value`` is a
     sample value (an Attribute value, the key or name of a thing of a new Kind).
+
+    For vocabulary types (module doc) ``label`` is the alias as compared, ``kind`` the Kind id,
+    ``target`` the Attribute id and ``payload`` what the change needs. ``weight`` is how many
+    sightings the observation stands for (the misses of a phrase).
     """
 
     type: SuggestionType
@@ -202,25 +242,45 @@ class Observation:
     target: str | None = None
     value: str | None = None
     evidence: Mapping[str, Any] | None = None
+    payload: Mapping[str, Any] | None = None
+    weight: int = 1
 
     @property
     def name(self) -> str:
+        if self.type in VOCABULARY:
+            return self.label
         return kind_name(self.label) if self.type is SuggestionType.KIND else field_name(self.label)
 
     @property
     def fingerprint(self) -> str:
-        return fingerprint(self.type, self.name, self.kind, self.target)
+        value = (self.payload or {}).get("value")
+        return fingerprint(
+            self.type, self.name, self.kind, self.target, value if isinstance(value, str) else None
+        )
 
 
 def fingerprint(
-    type_: SuggestionType, name: str, kind: str | None = None, target: str | None = None
+    type_: SuggestionType,
+    name: str,
+    kind: str | None = None,
+    target: str | None = None,
+    value: str | None = None,
 ) -> str:
-    """Identity of a suggestion: observations with the same fingerprint aggregate."""
+    """Identity of a suggestion: observations with the same fingerprint aggregate. A
+    vocabulary suggestion is one per alias and element (per Attribute for a description)."""
     if type_ is SuggestionType.KIND:
         return f"kind:{_canonical(name)}"
     if type_ is SuggestionType.ATTRIBUTE:
         return f"attribute:{kind}:{_canonical(name)}"
-    return f"relation:{kind}:{_canonical(name)}:{target}"
+    if type_ is SuggestionType.RELATION:
+        return f"relation:{kind}:{_canonical(name)}:{target}"
+    if type_ is SuggestionType.KIND_ALIAS:
+        return f"kind_alias:{kind}:{phrase_form(name)}"
+    if type_ is SuggestionType.ATTRIBUTE_ALIAS:
+        return f"attribute_alias:{kind}:{target}:{phrase_form(name)}"
+    if type_ is SuggestionType.VALUE_ALIAS:
+        return f"value_alias:{kind}:{target}:{value}:{phrase_form(name)}"
+    return f"attribute_description:{kind}:{target}"
 
 
 # Deduplication ----------------------------------------------------------------------------------
@@ -453,6 +513,7 @@ def existing_match(
     *,
     kind: str | None = None,
     target: str | None = None,
+    value: str | None = None,
     options: SuggestionOptions,
     tags: Mapping[str, frozenset[Sensitivity]] | None = None,
 ) -> ExistingMatch | None:
@@ -463,8 +524,15 @@ def existing_match(
     (a field naming another Kind refers to it). A Relation matches a Relation between its
     Kinds, in either direction, by name or by the name of its far Kind. ``tags`` are the
     sensitivity tags by Attribute id (``effective_tags`` of the schema by default).
+
+    An alias matches the element whose name or alias it is already: any Kind for a Kind
+    alias, any Attribute of the Kind for an Attribute alias, the Attribute holding it as a
+    stored value's alias (or that value itself) for a value alias (``value``: the stored
+    value it would stand for). A description never duplicates.
     """
     tags = effective_tags(schema) if tags is None else tags
+    if type_ in VOCABULARY:
+        return _vocabulary_match(schema, type_, name, kind, target, tags)
     if type_ is SuggestionType.KIND:
         return _best_kind(schema, name, options)
     owner = resolve_kind(schema, kind, options)
@@ -506,6 +574,100 @@ def sensitive_attributes(schema: Schema) -> dict[str, frozenset[Sensitivity]]:
     return {k: v for k, v in effective_tags(schema).items() if v}
 
 
+# Vocabulary -------------------------------------------------------------------------------------
+
+
+def kind_phrases(kind: Kind) -> frozenset[str]:
+    """The compared forms that name a Kind: api name as words, display name, aliases."""
+    return frozenset(
+        p
+        for p in (
+            phrase_of_name(kind.api_name),
+            phrase_form(kind.display_name),
+            *(phrase_form(a) for a in kind.aliases or ()),
+        )
+        if p
+    )
+
+
+def attribute_phrases(attribute: Attribute) -> frozenset[str]:
+    """The compared forms that name an Attribute: api name as words, display name, aliases."""
+    return frozenset(
+        p
+        for p in (
+            phrase_of_name(attribute.api_name),
+            phrase_form(attribute.display_name),
+            *(phrase_form(a) for a in attribute.aliases or ()),
+        )
+        if p
+    )
+
+
+def value_phrases(attribute: Attribute) -> frozenset[str]:
+    """The compared forms of the stored values that carry aliases and of their aliases."""
+    found: set[str] = set()
+    for stored, aliases in (attribute.value_aliases or {}).items():
+        found.add(phrase_form(stored))
+        found.update(phrase_form(a) for a in aliases)
+    return frozenset(p for p in found if p)
+
+
+def vocabulary_open(
+    attribute: Attribute, tags: frozenset[Sensitivity] = frozenset(), *, values: bool = False
+) -> bool:
+    """Whether aliases or a description may be proposed for ``attribute``: it carries no
+    sensitivity tag (``tags``: its effective tags, through Derivations), is not kept in the
+    vault, not derived and not marked ``resolvable: false``; with ``values``, its values are
+    strings or enums (value aliases)."""
+    if tags or attribute.sensitivity or attribute.in_vault or attribute.is_derived:
+        return False
+    if attribute.resolvable is False:
+        return False
+    return attribute.value_resolvable or not values
+
+
+def _vocabulary_match(
+    schema: Schema,
+    type_: SuggestionType,
+    name: str,
+    kind: str | None,
+    target: str | None,
+    tags: Mapping[str, frozenset[Sensitivity]],
+) -> ExistingMatch | None:
+    owner = schema.kinds.get(kind or "")
+    phrase = phrase_form(name)
+    if owner is None or type_ is SuggestionType.ATTRIBUTE_DESCRIPTION:
+        return None
+    if type_ is SuggestionType.KIND_ALIAS:
+        for other in schema.kinds.values():
+            if phrase in kind_phrases(other):
+                return ExistingMatch("kinds", other.id, other.api_name, 1.0)
+        return None
+    attribute = owner.attributes.get(target or "")
+    if attribute is None:
+        return None
+    if type_ is SuggestionType.ATTRIBUTE_ALIAS:
+        for sibling in owner.attributes.values():
+            if phrase in attribute_phrases(sibling):
+                return ExistingMatch(
+                    "attributes",
+                    sibling.id,
+                    sibling.api_name,
+                    1.0,
+                    tags.get(sibling.id, frozenset()),
+                )
+        return None
+    if phrase in value_phrases(attribute):
+        return ExistingMatch(
+            "attributes",
+            attribute.id,
+            attribute.api_name,
+            1.0,
+            tags.get(attribute.id, frozenset()),
+        )
+    return None
+
+
 # Types ------------------------------------------------------------------------------------------
 
 
@@ -543,6 +705,7 @@ class Suggestion:
     target: str | None = None
     samples: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
+    payload: Mapping[str, Any] = field(default_factory=dict)
 
 
 class SuggestionError(ValueError):
@@ -632,6 +795,68 @@ def _relation_names(schema: Schema, extra: Iterable[Relation]) -> set[str]:
     return names
 
 
+def _with_alias(
+    aliases: tuple[str, ...] | None, alias: str, suggestion: Suggestion
+) -> tuple[str, ...]:
+    kept = tuple(aliases or ())
+    if alias in kept:
+        return kept
+    if len(kept) >= MAX_ALIASES:
+        raise SuggestionError(suggestion.id, f"the element has {MAX_ALIASES} aliases already")
+    return (*kept, alias)
+
+
+def _vocabulary_change(
+    draft: _Draft, suggestion: Suggestion, tags: Mapping[str, frozenset[Sensitivity]]
+) -> None:
+    """Apply an alias or description suggestion to the draft copy of its Kind."""
+    owner = draft.kind(suggestion.kind, suggestion)
+    alias = phrase_form(suggestion.name)
+    if suggestion.type is SuggestionType.KIND_ALIAS:
+        if not alias:
+            raise SuggestionError(suggestion.id, "the alias is empty")
+        changed = owner.model_copy(
+            update={"aliases": _with_alias(owner.aliases, alias, suggestion)}
+        )
+        draft.kinds[owner.api_name] = changed
+        draft.touched_kinds.add(owner.api_name)
+        return
+    attribute = owner.attributes.get(suggestion.target or "")
+    if attribute is None:
+        raise SuggestionError(
+            suggestion.id, f"Kind {owner.api_name!r} has no Attribute {suggestion.target!r}"
+        )
+    values = suggestion.type is SuggestionType.VALUE_ALIAS
+    if not vocabulary_open(attribute, tags.get(attribute.id, frozenset()), values=values):
+        raise SuggestionError(
+            suggestion.id,
+            f"Attribute {attribute.api_name!r} is sensitive, kept in the vault, derived or not "
+            "resolvable: no alias or description is proposed for it",
+        )
+    update: dict[str, Any]
+    if suggestion.type is SuggestionType.ATTRIBUTE_DESCRIPTION:
+        description = suggestion.payload.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise SuggestionError(suggestion.id, "the suggestion holds no description")
+        update = {"description": description.strip()}
+    elif suggestion.type is SuggestionType.ATTRIBUTE_ALIAS:
+        if not alias:
+            raise SuggestionError(suggestion.id, "the alias is empty")
+        update = {"aliases": _with_alias(attribute.aliases, alias, suggestion)}
+    else:
+        value = suggestion.payload.get("value")
+        if not isinstance(value, str) or not value or not alias:
+            raise SuggestionError(suggestion.id, "the suggestion names no stored value")
+        current = dict(attribute.value_aliases or {})
+        current[value] = _with_alias(current.get(value), alias, suggestion)
+        update = {"value_aliases": current}
+    changed_attribute = attribute.model_copy(update=update)
+    draft.kinds[owner.api_name] = owner.model_copy(
+        update={"attributes": {**owner.attributes, attribute.id: changed_attribute}}
+    )
+    draft.touched_kinds.add(owner.api_name)
+
+
 def suggestion_patch(
     schema: Schema, suggestions: Sequence[Suggestion], options: SuggestionOptions
 ) -> dict[str, Any]:
@@ -639,16 +864,12 @@ def suggestion_patch(
     ``relations`` sections holding the new and the changed elements (whole, as the patch
     replaces elements by api name). Raises ``SuggestionError``."""
     draft = _Draft(schema, options)
-    ordered = sorted(
-        suggestions,
-        key=lambda s: [
-            SuggestionType.KIND,
-            SuggestionType.ATTRIBUTE,
-            SuggestionType.RELATION,
-        ].index(s.type),
-    )
+    ordered = sorted(suggestions, key=lambda s: _ORDER.index(s.type))
+    tags = effective_tags(schema)
     for suggestion in ordered:
-        if suggestion.type is SuggestionType.KIND:
+        if suggestion.type in VOCABULARY:
+            _vocabulary_change(draft, suggestion, tags)
+        elif suggestion.type is SuggestionType.KIND:
             if schema.kind_by_api_name(suggestion.name) or suggestion.name in draft.kinds:
                 raise SuggestionError(suggestion.id, f"Kind {suggestion.name!r} exists")
             kind = _new_kind(suggestion, options)
@@ -703,6 +924,7 @@ def suggestion_patch(
 
 __all__ = [
     "PROPOSED",
+    "VOCABULARY",
     "AttributeGuess",
     "AttributeSighting",
     "ExistingMatch",
@@ -711,6 +933,7 @@ __all__ = [
     "SuggestionError",
     "SuggestionOptions",
     "SuggestionType",
+    "attribute_phrases",
     "dangling_reference_names",
     "existing_match",
     "field_name",
@@ -720,6 +943,7 @@ __all__ = [
     "kind_is_independent",
     "kind_is_noise",
     "kind_name",
+    "kind_phrases",
     "merge_attributes",
     "name_similarity",
     "proposed_kind",
@@ -727,5 +951,7 @@ __all__ = [
     "sensitive_attributes",
     "suggestion_patch",
     "value_classes",
+    "value_phrases",
+    "vocabulary_open",
     "word_overlap",
 ]

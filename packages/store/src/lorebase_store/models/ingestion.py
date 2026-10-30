@@ -1,5 +1,5 @@
-"""Source runs, documents, extraction, schema suggestions and the personal data vault (design
-7.4, 9, 13.5)."""
+"""Source runs, documents, extraction, schema suggestions, resolution misses and the personal
+data vault (design 7.4, 8.10, 9, 13.5)."""
 
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lorebase_store.models.base import H32, Base, DomainKey, domain_fk, h32_check
@@ -276,6 +277,12 @@ class SchemaSuggestion(Base):
     counts. `examples` holds evidence (`document_id`, `chunk`, `start`, `end`, `quote`) and
     `samples` distinct sample values, both bounded. Accepting a suggestion opens a schema change
     Proposal (`proposal_id`, `branch`); nothing applies it to a schema by itself.
+
+    Vocabulary suggestions (design 8.10) come from the consolidation of resolution misses: an
+    alias of a Kind, an Attribute or a value, or an Attribute description. Their shares are
+    keyed by missed phrase (`miss:<phrase>`), `kind_ref` is the Kind id, `target_ref` the
+    Attribute id and `payload` holds the stored `value` an alias stands for or the proposed
+    `description` (revision 0046).
     """
 
     __tablename__ = "schema_suggestions"
@@ -284,7 +291,9 @@ class SchemaSuggestion(Base):
         Index(None, "domain_id", "fingerprint", unique=True),
         Index(None, "domain_id", "status", "support"),
         CheckConstraint(
-            "suggestion_type IN ('kind', 'attribute', 'relation')", name="suggestion_type"
+            "suggestion_type IN ('kind', 'attribute', 'relation', 'kind_alias', "
+            "'attribute_alias', 'value_alias', 'attribute_description')",
+            name="suggestion_type",
         ),
         CheckConstraint("status IN ('pending', 'accepted', 'rejected')", name="status"),
     )
@@ -305,6 +314,7 @@ class SchemaSuggestion(Base):
     examples: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     samples: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     sources: Mapped[Any] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    payload: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
     status: Mapped[str] = mapped_column(server_default=text("'pending'"))
     decided_by: Mapped[str | None]
     decided_at: Mapped[datetime | None]
@@ -313,6 +323,29 @@ class SchemaSuggestion(Base):
     last_job_id: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+
+
+class ResolveMiss(Base):
+    """A phrase `POST /resolve` matched to nothing, per Domain and branch (design 8.10,
+    `lorebase_store.resolve_misses`): how often, when first and last, and digests of the
+    callers who asked (at most `store.resolve_misses.max_callers`, so `callers` counts distinct
+    callers up to that bound and names none). Pruned `retention_days` after `last_seen`
+    (revision 0046)."""
+
+    __tablename__ = "resolve_misses"
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "last_seen"),
+        Index(None, "domain_id", "branch", "misses"),
+    )
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    phrase: Mapped[str] = mapped_column(primary_key=True)
+    misses: Mapped[int] = mapped_column(BigInteger)
+    callers: Mapped[list[str]] = mapped_column(ARRAY(Text()), server_default=text("'{}'::text[]"))
+    first_seen: Mapped[datetime]
+    last_seen: Mapped[datetime]
 
 
 class VaultEntry(Base):

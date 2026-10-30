@@ -14,7 +14,14 @@ from sqlalchemy import BigInteger, CheckConstraint, ForeignKeyConstraint, Index,
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
-from lorebase_store.models.base import H32, HASH_PARTITIONED, Base, DomainKey, domain_fk
+from lorebase_store.models.base import (
+    H32,
+    HASH_PARTITIONED,
+    Base,
+    DomainKey,
+    domain_fk,
+    h32_check,
+)
 
 
 def _branch_fk() -> ForeignKeyConstraint:
@@ -231,6 +238,28 @@ class MatValueCursor(Base):
     head: Mapped[bytes]
     fingerprint: Mapped[str]
     updated_at: Mapped[datetime]
+
+
+class MatCoverage(Base):
+    """Per Kind of a branch head, the Records and, per Attribute id, how many of them miss a
+    value (`missing`), and per incremental Source with `stale_after`, how many of the Records it
+    owns no run has seen for that long (`unseen`): the statistics behind the `coverage` block of
+    reads (design 8.11, `lorebase_store.coverage`). `revision` is the head they were counted at;
+    `sampled` marks counts over the first `store.coverage.max_records_per_kind` Records
+    (revision 0046)."""
+
+    __tablename__ = "mat_coverage"
+    __table_args__ = (_branch_fk(), h32_check("revision"))
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    revision: Mapped[H32]
+    computed_at: Mapped[datetime]
+    records: Mapped[int] = mapped_column(BigInteger)
+    sampled: Mapped[bool] = mapped_column(server_default=text("false"))
+    missing: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    unseen: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
 
 
 class MatHistory(Base):
