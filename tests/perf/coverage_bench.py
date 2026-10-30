@@ -9,11 +9,14 @@ pipeline), a tenth of them without a color. The coverage statistics pass
   off. The same filtered query (`color`, `brand`, ordered by `price`, 20 Records) is sent with
   `coverage: true` and `coverage: false`, alternating, each timed client side.
 - Lookup: the statements the block adds (`read_coverage` and `last_runs` for one Source), timed
-  alone in a read-only transaction as that role: the overhead without HTTP and JSON noise.
+  alone in a read-only transaction as that role: the overhead without HTTP and JSON noise. The
+  Source has `--runs` runs (a third failed, the newest a dry run), so the probe of
+  `ix_source_runs_last_succeeded` is measured against a long history; the earlier statement
+  shape (`ORDER BY started_at DESC NULLS LAST`, which sorted every run) is timed for contrast.
 
 Usage (Docker for a Postgres 16 container, or LOREBASE_TEST_DATABASE_URL for a server):
     uv run python tests/perf/coverage_bench.py [--records 100000] [--iterations 500] \
-        [--warmup 50] [--out build/perf/coverage.md]
+        [--warmup 50] [--runs 600000] [--out build/perf/coverage.md]
 """
 
 from __future__ import annotations
@@ -117,7 +120,18 @@ async def run(args: argparse.Namespace, owner_url: str, app_url: str) -> dict[st
         report = await coverage.run_coverage(sessions, DOMAIN, settings=CoverageSettings())
         result["pass_ms"] = (time.perf_counter() - started) * 1000
         assert report.counted, report.as_dict()
+        await _execute(
+            owner_url,
+            "INSERT INTO source_runs (domain_id, id, source_id, status, started_at, "
+            "finished_at, stats) SELECT 'retail', 'run_' || g, 'src_perf', "
+            "CAST(CASE WHEN g % 3 = 0 THEN 'failed' ELSE 'succeeded' END AS run_status), "
+            "now() - make_interval(secs => g), now() - make_interval(secs => g), "
+            "CASE WHEN g = 1 THEN '{\"dry_run\": true}'::jsonb ELSE '{}'::jsonb END "
+            f"FROM generate_series(1, {args.runs}) AS g",
+            "ANALYZE source_runs",
+        )
         result["lookup"] = await _lookup(args, app_sessions, product.id)
+        result["old_runs"] = await _old_runs(args, app_sessions)
         result["query"] = await _queries(args, app_url)
     finally:
         await engine.dispose()
@@ -136,6 +150,29 @@ async def _lookup(
             started = time.perf_counter()
             await coverage.read_coverage(session, DOMAIN, "main", [kind_id])
             await coverage.last_runs(session, DOMAIN, ["src_perf"])
+            elapsed = (time.perf_counter() - started) * 1000
+        if index >= args.warmup:
+            measurement.samples_ms.append(elapsed)
+    return measurement
+
+
+OLD_LAST_RUNS = text(
+    "SELECT s.id, (SELECT r.finished_at FROM source_runs r WHERE r.domain_id = :domain "
+    "AND r.source_id = s.id AND r.status = 'succeeded' "
+    "AND coalesce(r.stats ->> 'dry_run', 'false') <> 'true' "
+    "ORDER BY r.started_at DESC NULLS LAST LIMIT 1) "
+    "FROM unnest(CAST(:sources AS text[])) AS s(id)"
+)
+
+
+async def _old_runs(args: argparse.Namespace, sessions: async_sessionmaker[Any]) -> Measurement:
+    measurement = Measurement("last run, earlier statement shape (for contrast)")
+    for index in range(args.warmup + min(args.iterations, 100)):
+        async with sessions() as session, session.begin():
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            await scope_to_domain(session, DOMAIN)
+            started = time.perf_counter()
+            await session.execute(OLD_LAST_RUNS, {"domain": DOMAIN, "sources": ["src_perf"]})
             elapsed = (time.perf_counter() - started) * 1000
         if index >= args.warmup:
             measurement.samples_ms.append(elapsed)
@@ -178,7 +215,7 @@ def render(args: argparse.Namespace, result: dict[str, Any], server: str) -> str
         f"# Coverage benchmark, {date.today().isoformat()}",
         "",
         f"- {args.records} Products, a tenth without a color; statistics pass "
-        f"{result['pass_ms']:.0f} ms.",
+        f"{result['pass_ms']:.0f} ms; {args.runs} runs of the Source.",
         f"- {args.iterations} timed calls each after {args.warmup} warm-up calls; Keeper in "
         "process, role subject to row-level security.",
         f"- {platform.platform()}, Python {platform.python_version()}, Postgres: {server}.",
@@ -186,7 +223,7 @@ def render(args: argparse.Namespace, result: dict[str, Any], server: str) -> str
         "| Measure | p50 ms | p95 ms | p99 ms |",
         "|---|---:|---:|---:|",
     ]
-    for measurement in (off, on, lookup):
+    for measurement in (off, on, lookup, result["old_runs"]):
         lines.append(
             f"| {measurement.name} | {measurement.p50:.2f} | {measurement.p95:.2f} | "
             f"{measurement.p99:.2f} |"
@@ -204,6 +241,7 @@ def main() -> None:
     parser.add_argument("--records", type=int, default=100_000)
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--warmup", type=int, default=50)
+    parser.add_argument("--runs", type=int, default=600_000)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
     with testing.postgres_server() as server, testing.scratch_database(server) as url:

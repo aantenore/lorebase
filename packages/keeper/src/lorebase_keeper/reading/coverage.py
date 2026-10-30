@@ -18,7 +18,8 @@ isolates Domains, grants narrow to Kinds and branches), so a count tells nothing
 `lorebase_query` aggregate would not. Statistics exist for the default branch head only: on
 another branch or at another Revision the block keeps the unknown phrases and says why the
 rest is omitted, since a grant narrowed to one branch must not see the default branch's
-counts. Statistics counted at an older head are marked `approximate`.
+counts. Statistics counted at an older head, sampled ones and Records unseen by Sources
+counted more than `read.coverage.max_unseen_age_s` ago are marked `approximate`.
 """
 
 from __future__ import annotations
@@ -79,7 +80,8 @@ def plan_uses(plan: QueryPlan) -> dict[tuple[str, str], set[Use]]:
 
 
 def _share(missing: int, records: int) -> float:
-    return round(missing / records, 4) if records else 0.0
+    """`missing` over `records`, clamped to 0..1."""
+    return round(min(max(missing / records, 0.0), 1.0), 4) if records else 0.0
 
 
 def _percent(share: float) -> str:
@@ -119,7 +121,10 @@ def _source_note(item: SourceFreshness) -> list[str]:
 
 
 def unknown_notes(unknown: Iterable[str]) -> list[str]:
-    return [f"'{p}' matched nothing in this Domain (no Kind, Attribute or value)" for p in unknown]
+    return [
+        f"'{p}' matched nothing you can read in this Domain (no Kind, Attribute or value)"
+        for p in unknown
+    ]
 
 
 async def build(
@@ -148,11 +153,16 @@ async def build(
         session, point.domain.id, point.branch, [k.id for k in readable]
     )
     settings = runtime.read.coverage
+    moment = now or datetime.now(UTC)
     for kind in readable:
         found = stats.get(kind.id)
         if found is None:
             continue
-        approximate = found.sampled or found.revision != point.revision.id
+        aged = bool(found.unseen) and (
+            found.unseen_at is None
+            or (moment - found.unseen_at).total_seconds() > settings.max_unseen_age_s
+        )
+        approximate = found.sampled or found.revision != point.revision.id or aged
         out.kinds.append(
             KindCoverage(
                 kind=kind.api_name,
@@ -168,7 +178,7 @@ async def build(
                 continue
             if point.masking.hidden(attribute, [kind.id]) or attribute_id not in found.missing:
                 continue
-            missing = found.missing[attribute_id]
+            missing = min(found.missing[attribute_id], found.records)
             item = AttributeCoverage(
                 kind=kind.api_name,
                 attribute=attribute.api_name,
@@ -181,7 +191,7 @@ async def build(
                 out.notes.append(_note(item, approximate))
     if len(out.kinds) < len(readable):
         out.omitted = "statistics not counted yet for some Kinds"
-    await _sources(session, point, readable, stats, out, now or datetime.now(UTC))
+    await _sources(session, point, readable, stats, out, moment)
     return out
 
 

@@ -260,6 +260,8 @@ class MatCoverage(Base):
     sampled: Mapped[bool] = mapped_column(server_default=text("false"))
     missing: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
     unseen: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    #: When `unseen` was counted: every pass recounts it, the head moved or not.
+    unseen_at: Mapped[datetime]
 
 
 class MatHistory(Base):

@@ -29,7 +29,20 @@ class SourceRun(Base):
     """One synchronization run of a structured Source."""
 
     __tablename__ = "source_runs"
-    __table_args__ = (domain_fk(), Index(None, "domain_id", "source_id", "started_at"))
+    __table_args__ = (
+        domain_fk(),
+        Index(None, "domain_id", "source_id", "started_at"),
+        # The last successful run of a Source in one probe (coverage, revision 0046).
+        Index(
+            "ix_source_runs_last_succeeded",
+            "domain_id",
+            "source_id",
+            text("started_at DESC"),
+            postgresql_where=text(
+                "status = 'succeeded' AND coalesce(stats ->> 'dry_run', 'false') <> 'true'"
+            ),
+        ),
+    )
 
     domain_id: Mapped[DomainKey]
     id: Mapped[str] = mapped_column(primary_key=True)

@@ -14665,7 +14665,7 @@
             },
             "type": "array",
             "title": "Unknown",
-            "description": "Resolution: phrases that matched nothing in this Domain (no Kind, Attribute or indexed value)."
+            "description": "Resolution: phrases that matched nothing the caller can read in this Domain (no Kind, Attribute or indexed value)."
           },
           "notes": {
             "items": {

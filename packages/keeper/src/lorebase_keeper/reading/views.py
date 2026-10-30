@@ -127,8 +127,8 @@ class CoverageOut(BaseModel):
     sources: list[SourceFreshness] = Field(default_factory=list)
     unknown: list[str] = Field(
         default_factory=list,
-        description="Resolution: phrases that matched nothing in this Domain (no Kind, "
-        "Attribute or indexed value).",
+        description="Resolution: phrases that matched nothing the caller can read in this "
+        "Domain (no Kind, Attribute or indexed value).",
     )
     notes: list[str] = Field(
         default_factory=list, description="One line per signal, for agents and people."
