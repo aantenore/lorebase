@@ -12,8 +12,9 @@ from __future__ import annotations
 import logging
 import uuid
 
-from lorebase_client import AsyncLorebaseClient
-from lorebase_client.core import Call, parse_json
+import httpx
+
+from lorebase_client import AsyncLorebaseClient, Call
 from lorebase_client.errors import LorebaseError
 from lorebase_guide.settings import TraceSettings
 
@@ -25,6 +26,10 @@ SESSION_PREFIX = "guide-"
 def new_session_id() -> str:
     """A session id in the shape Keeper accepts (`[A-Za-z0-9._:-]{1,128}`)."""
     return SESSION_PREFIX + uuid.uuid4().hex
+
+
+def _ignore(response: httpx.Response) -> None:
+    """Notes are fire and forget: the answer is not read."""
 
 
 class TraceSession:
@@ -57,7 +62,7 @@ class TraceSession:
         path = self.settings.notes_path.replace("{session}", self.session_id)
         body = {"text": text[: self.settings.max_note_chars], "domain_id": self.domain}
         try:
-            await client.send(Call("POST", path, parse_json, body=body))
+            await client.send(Call("POST", path, _ignore, body=body))
         except LorebaseError as exc:
             self._notes_enabled = False
             logger.info(

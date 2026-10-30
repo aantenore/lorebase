@@ -29,6 +29,7 @@ PREFIX = "/api/v1"
 
 RESPONSES: dict[type[m.Model], str] = {
     m.WhoAmI: "WhoAmI",
+    m.SessionInfo: "SessionInfo",
     m.QuotaReport: "QuotaReport",
     m.QuotaUse: "QuotaUse",
     m.HealthSummary: "HealthSummary",
@@ -287,6 +288,7 @@ def sample_calls() -> list[Any]:
     query = m.QueryRequest(kind="Part")
     return [
         ep.whoami(),
+        ep.session_info(),
         ep.create_domain(m.DomainCreate(id="supply")),
         ep.list_domains(),
         ep.get_domain(d),
@@ -445,10 +447,9 @@ def test_every_builder_targets_a_documented_operation() -> None:
 BROWSER_ONLY = {
     ("GET", f"{PREFIX}/auth/login"),
     ("GET", f"{PREFIX}/auth/callback"),
-    ("GET", f"{PREFIX}/auth/session"),
     ("POST", f"{PREFIX}/auth/logout"),
 }
-"""Web sign-in routes: cookie sessions of a browser, not something the client calls."""
+"""Web sign-in routes of a browser, not something the client calls."""
 
 
 def test_every_documented_operation_has_a_builder() -> None:

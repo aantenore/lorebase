@@ -102,7 +102,17 @@ class FakeKeeper:
                 },
             )
         if path == f"{API}/auth/session":
-            return httpx.Response(200, json={"csrf_token": CSRF, "csrf_header": "X-CSRF-Token"})
+            return httpx.Response(
+                200,
+                json={
+                    "principal_id": "web-user",
+                    "display_name": "Reader",
+                    "csrf_header": "X-CSRF-Token",
+                    "csrf_token": CSRF,
+                    "expires_at": "2026-10-01T18:00:00Z",
+                    "idle_timeout_s": 1800,
+                },
+            )
         if path.startswith(f"{API}/trace/sessions/") and path.endswith("/notes"):
             self.notes.append({"path": path, **body})
             return httpx.Response(202, json={"recorded": True})

@@ -201,6 +201,11 @@ class LorebaseClient:
         """The authenticated caller."""
         return self.send(ep.whoami())
 
+    def session_info(self) -> m.SessionInfo:
+        """The browser session the caller's session cookie belongs to; 401 for API keys and
+        bearer tokens."""
+        return self.send(ep.session_info())
+
     def idempotency_key(self, prefix: str | None = None) -> str:
         """A fresh key to pass as `idempotency_key=` to a write."""
         return new_idempotency_key(prefix)

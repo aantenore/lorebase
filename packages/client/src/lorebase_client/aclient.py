@@ -182,6 +182,11 @@ class AsyncLorebaseClient:
         """The authenticated caller."""
         return await self.send(ep.whoami())
 
+    async def session_info(self) -> m.SessionInfo:
+        """The browser session the caller's session cookie belongs to; 401 for API keys and
+        bearer tokens."""
+        return await self.send(ep.session_info())
+
     def idempotency_key(self, prefix: str | None = None) -> str:
         """A fresh key to pass as `idempotency_key=` to a write."""
         return new_idempotency_key(prefix)
