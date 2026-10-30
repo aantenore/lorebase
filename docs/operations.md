@@ -315,24 +315,35 @@ The phrases `POST /resolve` matched to nothing can be kept to propose vocabulary
 Off by default: set `store.resolve_misses.enabled: true` for Keeper and Scribe alike.
 
 - **What is kept.** Per Domain, branch and phrase (compared form): misses, first and last seen,
-  and up to `max_callers` (20) digests of the principals who asked, never their ids. Only head
-  reads, only callers holding `search.resolve.misses.permission` (default `data.read`) through a
-  grant not narrowed to a Kind or a branch, only phrases of `min_phrase_chars` (3) to
-  `max_phrase_chars` (64) characters that are not in `ignore_words`, at most `max_per_domain`
-  (10,000) phrases per Domain. Requests opt out with `"record_misses": false`. Keeper writes off
+  and up to `max_callers` (20) unkeyed digests of the principals who asked, never their ids.
+  Only head reads that searched every Kind with every enabled level, only callers holding
+  `search.resolve.misses.permission` (default `data.read`) through a grant not narrowed to a
+  Kind or a branch, only phrases of `min_phrase_chars` (3) to `max_phrase_chars` (64)
+  characters that are not in `ignore_words`. Requests opt out with `"record_misses": false`.
+- **Bounds.** At most `max_per_domain` (10,000) phrases per Domain: a new phrase evicts the
+  least missed one missed no more often than it, or is dropped. One caller holds at most
+  `max_phrases_per_caller` (500) phrases alone and adds at most
+  `search.resolve.misses.max_new_per_caller` (100) new ones between two writes. Writers take
+  the Domain's miss lock, so the bounds hold across Keeper replicas. Keeper writes off
   the request path every `search.resolve.misses.flush_interval_s` (5 s); a full queue
   (`queue_size`) or a failed write drops misses, counted in `lorebase.resolve.misses.dropped`
   (`lorebase.resolve.misses.recorded` counts what was written).
 - **Privacy.** Phrases are free text and may name a person. They are deleted `retention_days`
-  (30) after they were last seen by the next consolidation pass, with their Domain, and at once
-  by `lorebase-scribe misses purge DOMAIN`. Erasure by value does not search them; keep the
+  (30) after they were last seen by the next consolidation pass, together with their share of
+  vocabulary suggestions (a suggestion left without phrases is deleted, decided or not), with
+  their Domain, and at once by `lorebase-scribe misses purge DOMAIN`, which also deletes every
+  vocabulary suggestion of the Domain. Erasure by value does not search them; keep the
   retention short where callers type personal data, or leave recording off.
 - **Consolidation.** Scribe queues a `vocabulary_consolidation` pass per Domain every
   `scribe.scheduler.consolidation_interval_s` (3600 s) while recording is on; run one now with
-  `lorebase-scribe consolidate DOMAIN` (it prints what it pruned, linked and proposed). Tune
-  `scribe.consolidation` (`min_misses`, `min_callers`, `value_similarity`, `name_similarity`);
-  `scribe.consolidation.llm.enabled` adds description proposals through the chat model of task
-  `inference.llm.tasks.schema_consolidation` (names and phrases only, never values).
+  `lorebase-scribe consolidate DOMAIN` (it prints what it pruned, swept, linked and proposed;
+  concurrent passes of one Domain take turns). Tune `scribe.consolidation` (`min_misses`,
+  `min_callers` 2, `value_similarity` 0.4, `name_similarity`; `min_callers: 1` for a
+  single-agent installation); vocabulary suggestions have their own cap,
+  `schema.suggestions.max_vocabulary_tracked` (500 pending). `scribe.consolidation.llm.enabled`
+  adds description proposals through the chat model of task
+  `inference.llm.tasks.schema_consolidation` (names and the phrases linked to Attribute names,
+  never values; phrases may hold personal data, so route it to a model they may reach).
 
 ## Coverage statistics
 
@@ -340,11 +351,14 @@ The `coverage` block of queries and resolutions
 ([design 8.11](design.md#811-coverage-signals-knowing-what-the-data-does-not-hold)) reads
 `mat_coverage`, counted per Kind of the default branch head by a Scribe `coverage` pass every
 `scribe.scheduler.coverage_interval_s` (300 s; a Domain whose head did not move costs one read).
-Run one now with `lorebase-scribe coverage DOMAIN [--force]`. Each Kind is one statement under
-`store.coverage.statement_timeout_ms` (120 s; a Kind that times out keeps its previous
-statistics); Kinds of more than `max_records_per_kind` (1,000,000) Records are counted over a
-sample and reported approximate. 100,000 Records take about 0.3 s
-([performance](performance.md#coverage)). After the upgrade (migration `0046`) the table is
+Run one now with `lorebase-scribe coverage DOMAIN [--force]`. Each Kind is counted in one
+REPEATABLE READ transaction under `store.coverage.statement_timeout_ms` (120 s; a Kind that
+times out keeps its previous statistics), at most once per `min_interval_s` (300 s) while the
+head moves; Kinds of more than `max_records_per_kind` (1,000,000) Records are counted over
+the first that many in key order and reported approximate. Records unseen by Sources are
+recounted by every pass. 100,000 Records take about 0.4 s
+([performance](performance.md#coverage)). Migration `0046` also adds the partial index
+`ix_source_runs_last_succeeded` that keeps the Source freshness lookup one probe. After the upgrade (migration `0046`) the table is
 empty: queries say `statistics not counted yet` until the first pass. `read.coverage.enabled:
 false` makes the block opt-in per request; `store.coverage.enabled: false` stops the counts.
 
