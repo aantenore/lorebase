@@ -59,7 +59,8 @@ BLOCKED_CONFLICTS = "conflicts"
 BLOCKED_RECONCILIATION = "reconciliation"
 BLOCKED_PROTECTED = "protected"
 BLOCKED_APPROVALS = HELD_BY_APPROVALS
-"""The protected target's approval rules require a person (`lorebase_store.approval_rules`)."""
+"""The protected target's steward or role rules require a person
+(`lorebase_store.approval_rules`)."""
 DIRECT_MERGE_MODE = "direct"
 """`mode` of the `proposal.merge` audit entry of a merge Scribe ran in `direct` mode."""
 

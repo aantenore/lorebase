@@ -23,7 +23,6 @@ from lorebase_store.repositories import (
 from lorebase_store.runtime import StoreRuntime
 
 from .support import (
-    AUTO_MERGE,
     DOMAIN,
     Clock,
     commit_on,
@@ -112,12 +111,7 @@ async def setup(
 ) -> SourceSync:
     await load_domain(sessions, runtime, clock, schema)
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(csv_path.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(csv_path.parent), principal="svc_scribe", clock=clock
     )
     first = await sync.run(DOMAIN, SUPPLIERS)
     assert first.proposal_status == "merged"
@@ -412,12 +406,7 @@ async def test_keep_decides_again_a_conflict_a_person_reopened(
     schema = schema_with(LocalEdits.KEEP, SourcePolicy.PROPOSAL)
     await load_domain(sessions, runtime, clock, schema)
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
     await sync.run(DOMAIN, SUPPLIERS)
     proposal_id = await scalar(sessions, "SELECT id FROM proposals WHERE status = 'open'")
@@ -480,12 +469,7 @@ async def test_seeding_over_imported_data_compares_only(
     await load_domain(sessions, runtime, clock, schema, kinds={"Supplier": "supplier.csv"})
     rewrite(suppliers_csv, set_column("S-1001", "legal_name", "Upstream Name"))
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
     dry = await sync.run(DOMAIN, SUPPLIERS, dry_run=True)
     assert dry.local_edits == {"conflict": 1}

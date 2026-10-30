@@ -306,8 +306,9 @@ class SourceSettings(SectionModel):
     auto_merge_protected: bool = Field(
         default=True,
         description="Sources with an automatic merge policy merge into protected target "
-        "branches too, when the target's approval rules (keeper.proposals, Domain overrides) "
-        "require no approval; false leaves those Proposals open for review.",
+        "branches too, waiving the required_approvals count but not steward approvals or "
+        "required roles (keeper.proposals, Domain overrides); false leaves those Proposals "
+        "open for review.",
     )
     csv: CsvSourceSettings = Field(default_factory=CsvSourceSettings)
     json_files: JsonSourceSettings = Field(default_factory=JsonSourceSettings)

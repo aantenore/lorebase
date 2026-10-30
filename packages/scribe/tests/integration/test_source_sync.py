@@ -21,7 +21,6 @@ from lorebase_store.repositories import DomainRepository, RefRepository, scope_t
 from lorebase_store.runtime import StoreRuntime
 
 from .support import (
-    AUTO_MERGE,
     DOMAIN,
     EXAMPLE,
     Clock,
@@ -103,12 +102,7 @@ async def test_csv_source_proposal_flow(
     schema = supply_schema({SUPPLIERS: SourcePolicy.PROPOSAL})
     await load_domain(sessions, runtime, clock, schema)
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
 
     first = await sync.run(DOMAIN, SUPPLIERS)
@@ -175,12 +169,7 @@ async def test_direct_merge_snapshot_deletes_and_refresh(
     schema = supply_schema()  # approved.suppliers: auto_when_clean
     await load_domain(sessions, runtime, clock, schema)
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
 
     first = await sync.run(DOMAIN, SUPPLIERS)
@@ -229,12 +218,7 @@ async def test_dry_run_writes_nothing(
 ) -> None:
     await load_domain(sessions, runtime, clock, supply_schema())
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
     report = await sync.run(DOMAIN, SUPPLIERS, dry_run=True)
     assert report.counts["added"] == 30
@@ -254,12 +238,7 @@ async def test_bad_rows_are_skipped_and_block_deletions(
 ) -> None:
     await load_domain(sessions, runtime, clock, supply_schema())
     sync = SourceSync(
-        sessions,
-        runtime,
-        settings_for(suppliers_csv.parent),
-        principal="svc_scribe",
-        clock=clock,
-        approval_rules=AUTO_MERGE,
+        sessions, runtime, settings_for(suppliers_csv.parent), principal="svc_scribe", clock=clock
     )
     await sync.run(DOMAIN, SUPPLIERS)
 
@@ -322,7 +301,6 @@ async def test_postgres_source(
             SourceSettings(allowed_connections=CONNECTIONS),
             principal="svc_scribe",
             clock=clock,
-            approval_rules=AUTO_MERGE,
         )
 
         first = await sync.run(DOMAIN, "erp.purchase_orders")
@@ -374,28 +352,25 @@ async def protect_main(sessions: async_sessionmaker[AsyncSession], **domain_sett
             await domains.update(DOMAIN, settings={**domain.settings, **domain_settings})
 
 
-NO_APPROVALS = ApprovalRuleSettings(required_approvals=0)
-
-
 @pytest.mark.parametrize(
     ("rules", "domain_settings", "held_by"),
     [
-        (ApprovalRuleSettings(), {}, ["required_approvals"]),
         (
-            ApprovalRuleSettings(required_approvals=0, required_approvals_from_stewards=1),
+            ApprovalRuleSettings(required_approvals_from_stewards=1),
             {},
             ["required_approvals_from_stewards"],
         ),
+        (ApprovalRuleSettings(required_roles=["data_steward"]), {}, ["required_roles"]),
+        (ApprovalRuleSettings(), {"required_roles": ["data_steward"]}, ["required_roles"]),
         (
-            ApprovalRuleSettings(required_approvals=0, required_roles=["data_steward"]),
-            {},
-            ["required_roles"],
+            ApprovalRuleSettings(),
+            {"required_approvals_from_stewards": 2},
+            ["required_approvals_from_stewards"],
         ),
-        (NO_APPROVALS, {"required_approvals": 2}, ["required_approvals"]),
     ],
-    ids=["approvals", "stewards", "roles", "domain-override"],
+    ids=["stewards", "roles", "domain-roles", "domain-stewards"],
 )
-async def test_an_auto_merge_waits_for_the_approvals_a_protected_target_requires(
+async def test_an_auto_merge_waits_for_the_approvers_a_protected_target_names(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
@@ -421,21 +396,22 @@ async def test_an_auto_merge_waits_for_the_approvals_a_protected_target_requires
     assert await count_records(sessions, "main") == 0
 
 
-async def test_an_auto_merge_into_a_protected_target_without_approval_rules_merges(
+async def test_the_approvals_count_alone_does_not_hold_an_auto_merge(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
     suppliers_csv: Path,
 ) -> None:
+    # `auto_merge_protected` waives the plain count, from the operator or the Domain.
     await load_domain(sessions, runtime, clock, supply_schema())
-    await protect_main(sessions)
+    await protect_main(sessions, required_approvals=3)
     sync = SourceSync(
         sessions,
         runtime,
         settings_for(suppliers_csv.parent),
         principal="svc_scribe",
         clock=clock,
-        approval_rules=NO_APPROVALS,
+        approval_rules=ApprovalRuleSettings(required_approvals=2),
     )
     report = await sync.run(DOMAIN, SUPPLIERS)
     assert (report.proposal_status, report.merge_blocked) == ("merged", None)

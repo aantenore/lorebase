@@ -235,8 +235,8 @@ class SyncReport:
     proposal_id: str | None = None
     proposal_status: str | None = None
     merge_status: str | None = None
-    #: Why an automatic merge was not performed: `approvals` (the protected target's approval
-    #: rules, named in `blocking_rules`, require a person).
+    #: Why an automatic merge was not performed: `approvals` (the protected target's steward
+    #: or role rules, named in `blocking_rules`, require a person).
     merge_blocked: str | None = None
     blocking_rules: list[str] = field(default_factory=list)
     conflicts: int = 0
@@ -1099,7 +1099,7 @@ class SourceSync:
             if target.protected and not self._settings.auto_merge_protected:
                 automatic = False
             elif target.protected:
-                # No person reviewed it: the target's approval rules hold it for review.
+                # No person reviewed it: rules naming who must approve hold it for review.
                 rules = effective_rules(domain.settings, self._approval_rules).requiring
                 if rules:
                     report.merge_blocked = HELD_BY_APPROVALS
