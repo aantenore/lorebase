@@ -113,8 +113,3 @@ export function budgetReport(budget: ContextPack['budget']): BudgetReport {
     capped: budget.capped,
   };
 }
-
-/** Every Record the pack carries, seeds and neighbors. */
-export function packRefs(pack: ContextPack): string[] {
-  return [...pack.seeds.map((s) => s.ref), ...pack.neighbors.map((n) => n.ref)];
-}

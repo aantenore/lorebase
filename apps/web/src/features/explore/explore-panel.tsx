@@ -6,7 +6,7 @@ import { useScope, useScopeSearch } from '@/app/scope';
 import { useConfig } from '@/config/context';
 import { explore as exploreMessages } from '@/messages/explore';
 import { retrievalLab as retrievalLabMessages } from '@/messages/retrieval-lab';
-import { LabCanvas } from '@/features/retrieval-lab/lab-canvas';
+import { LabCanvas } from '@/features/canvas/lab-canvas';
 import { Button } from '@/ui/button';
 import { Input, Textarea } from '@/ui/field';
 import { Badge, FormAction, FormRow, type BadgeTone } from '@/ui/layout';

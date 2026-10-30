@@ -1,7 +1,11 @@
 import type { ContextPack, SearchResult } from '@/api/types';
-import type { GraphData } from '@/features/canvas/graph-model';
-import type { GraphHighlight } from '@/features/canvas/highlight';
-import { packRefs } from './pack-explain';
+import type { GraphData } from './graph-model';
+import type { GraphHighlight } from './highlight';
+
+/** Every Record the pack carries, seeds and neighbors. */
+export function packRefs(pack: ContextPack): string[] {
+  return [...pack.seeds.map((s) => s.ref), ...pack.neighbors.map((n) => n.ref)];
+}
 
 /** The Records the lab involved: hits of both parameter sets and the Records of the pack. */
 export function involvedRefs(
