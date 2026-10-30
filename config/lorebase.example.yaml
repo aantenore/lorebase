@@ -646,6 +646,9 @@ store:
     attribute_indexes: null      # all | constraints (null: constraints with compact)
     lexicon_index: null          # trigram index of the typo lexicon (null: off with compact)
     embedding_precision: null    # half | full HNSW index (null: half with compact)
+    hnsw_m: null                 # HNSW links per node, 2-100 (null: pgvector's 16)
+    hnsw_ef_construction: null   # HNSW build candidate list, >= 2 * hnsw_m (null: pgvector's 64);
+                                 #   both apply to indexes built from then on (docs/operations.md)
     compression: null            # lz4 | pglz for values above ~2 kB (null: pglz with compact)
     records_fillfactor: null     # 50-100 (null: 90 with fast, 100 otherwise)
     prewarm: null                # apply ends with `storage prewarm` (null: on with fast)
@@ -922,8 +925,9 @@ search:
                                  #   (see /readyz); off: over-fetch by overfetch_factor instead
     max_scan_tuples: 20000       # hnsw.max_scan_tuples of an iterative scan; past it the
                                  #   response says semantic_truncated
-    overfetch_factor: 4          # without iterative scans: candidates * factor nearest rows
-                                 #   are fetched before the filters apply
+    overfetch_factor: 4          # the index returns candidates * factor nearest vectors of the
+                                 #   searched Kinds before the Records' filters apply; it also
+                                 #   sets hnsw.ef_search (capped at 1000), which bounds recall
   hybrid:                        # reciprocal rank fusion: w / (rrf_k + rank) per list
     rrf_k: 60
     lexical_weight: 1.0
@@ -1165,6 +1169,7 @@ scribe:
     max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
     error_samples: 20            # row errors kept in the run record
     auto_merge_protected: true   # automatic merge policies also merge into protected branches
+                                 #   whose approval rules (keeper.proposals) require no approval
     # What an upstream change does to a value someone else set since the last sync is set per
     # Source in the schema: `local_edits: review` (default: a Conflict), `keep` or `source_wins`.
     csv:
@@ -1218,7 +1223,8 @@ scribe:
                                  # here, a Domain's settings.extraction may choose it
     domain_may_loosen: [mode]    # members a Domain may set looser than these (mode,
                                  # auto_accept_threshold, min_confidence); []: none
-    direct_merge_protected: true # direct-mode jobs may merge into a protected branch; false:
+    direct_merge_protected: true # direct-mode jobs may merge into a protected branch whose
+                                 # approval rules (keeper.proposals) require no approval; false:
                                  # their Proposals wait for approvals
     new_record_kinds: null       # Kinds that may get new Records; null: every natural-key Kind
     value_cue_words: 8           # a rule-found value needs a cue word this close before it
