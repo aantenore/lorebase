@@ -74,6 +74,7 @@ describe('Review: schema suggestions', () => {
     const link = within(outcome).getByRole('link', { name: /Schema suggestions: QualityNotice/ });
     expect(link).toHaveAttribute('href', expect.stringMatching(/\/supply\/review\/\d+/));
     expect(within(outcome).getByText('create kinds.QualityNotice')).toBeInTheDocument();
+    expect(within(outcome).queryByText(/attributes\./)).toBeNull();
     // Accepted suggestions leave the pending list.
     expect(within(await tableOf()).queryByText('QualityNotice')).not.toBeInTheDocument();
   });
@@ -99,6 +100,17 @@ describe('Review: schema suggestions', () => {
     await user.click(screen.getByRole('button', { name: 'Accept selected' }));
     const outcome = await screen.findByRole('region', { name: 'Last decision' });
     expect(within(outcome).getAllByText('update kinds.Supplier')).toHaveLength(1);
+    expect(within(outcome).queryByText(/^create /)).toBeNull();
+  });
+
+  it('updates the existing Kind for an accepted attribute', async () => {
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const table = await tableOf();
+    await user.click(within(table).getByLabelText('Select ends'));
+    await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+    const outcome = await screen.findByRole('region', { name: 'Last decision' });
+    expect(within(outcome).getByText('update kinds.Supplier')).toBeInTheDocument();
     expect(within(outcome).queryByText(/^create /)).toBeNull();
   });
 

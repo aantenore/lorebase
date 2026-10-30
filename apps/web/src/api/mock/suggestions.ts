@@ -18,8 +18,8 @@ export interface SuggestionsMock {
 const ACTOR = 'usr_mock';
 
 /** The section of the element a schema suggestion creates. */
-const SECTION = { kind: 'kinds', attribute: 'attributes', relation: 'relations' } as const;
-const PREFIX = { kinds: 'knd', attributes: 'att', relations: 'rel' } as const;
+const SECTION = { kind: 'kinds', relation: 'relations' } as const;
+const PREFIX = { kinds: 'knd', relations: 'rel' } as const;
 
 /** Whether a suggestion passes the list filters; pending ones under the support need `all`. */
 export function matches(suggestion: SchemaSuggestion, filter: SuggestionFilter | undefined) {
@@ -46,8 +46,9 @@ function invalid(pointer: string, message: string) {
 /**
  * Schema suggestions in memory. Accepting turns the accepted suggestions of one request into one
  * change set on a new Branch, proposed through `openProposal`; a refusal changes nothing.
- * Vocabulary suggestions update the existing Kind they belong to, found by `kindIdOf` on the
- * default Branch: like Keeper, the change set names that Kind once, as an update.
+ * Attribute and vocabulary suggestions update the existing Kind they belong to, found by
+ * `kindIdOf` on the default Branch: like Keeper, the change set names that Kind once, as an
+ * update.
  */
 export function createSuggestionsMock(
   openProposal: (domain: string, title: string) => Promise<Pick<Proposal, 'id' | 'source_ref'>>,
@@ -99,12 +100,14 @@ export function createSuggestionsMock(
     const changes: SchemaElementChange[] = [];
     for (const t of accepted) {
       const { type, kind } = t.found;
-      if (type === 'kind' || type === 'attribute' || type === 'relation') {
+      if (type === 'kind' || type === 'relation') {
         const section = SECTION[type];
         const id = `${PREFIX[section]}_${t.found.id.slice(-8)}`;
         changes.push({ op: 'create', section, id, api_name: t.name });
         continue;
       }
+      // An attribute of a Kind accepted in the same request is part of that Kind's creation.
+      if (type === 'attribute' && kind?.startsWith('+') === true) continue;
       const owner = kind === null ? undefined : kindIdOf(domain, kind);
       if (kind === null || owner === undefined) {
         throw invalid(`${t.pointer}/suggestion`, `${t.name} belongs to no existing Kind.`);
