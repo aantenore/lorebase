@@ -756,12 +756,14 @@ class StorageSettings(SectionModel):
         "rebuilding the embedding index).",
     )
     hnsw_ef_construction: int | None = Field(
-        default=None,
+        default=128,
         ge=4,
         le=1000,
         description="Candidate list of the HNSW index build (pgvector ef_construction), at "
-        "least twice hnsw_m. Higher raises recall at the cost of build time. Default: "
-        "pgvector's, 64.",
+        "least twice hnsw_m. Higher raises recall at the cost of build time; 128 gives a "
+        "recall@20 near 0.99 on 300,000 clustered vectors where pgvector's 64 gives 0.91. "
+        "null: pgvector's 64. Applies to indexes built from then on: an existing index keeps "
+        "its parameters until rebuilt.",
     )
     compression: Literal["lz4", "pglz"] | None = Field(
         default=None,

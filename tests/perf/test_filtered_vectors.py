@@ -58,7 +58,7 @@ from lorebase_store.embeddings import (
     template_fingerprints,
 )
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import DatabaseSettings, StoreSettings
+from lorebase_store.settings import DatabaseSettings, StorageSettings, StoreSettings
 from lorebase_store.storage import hnsw_index_name, hnsw_index_sql
 
 from . import harness
@@ -67,14 +67,18 @@ pytestmark = pytest.mark.perf
 
 RECORDS = int(os.environ.get("LOREBASE_PERF_VECTOR_RECORDS", "100000"))
 """Records (and vectors) loaded."""
-HNSW_M = int(os.environ["LOREBASE_PERF_HNSW_M"]) if os.environ.get("LOREBASE_PERF_HNSW_M") else None
-"""`store.storage.hnsw_m` of the index built (default: pgvector's, 16)."""
+HNSW_M = (
+    int(os.environ["LOREBASE_PERF_HNSW_M"])
+    if os.environ.get("LOREBASE_PERF_HNSW_M")
+    else StorageSettings().hnsw_m
+)
+"""`store.storage.hnsw_m` of the index built (default: the setting's default)."""
 HNSW_EF_CONSTRUCTION = (
     int(os.environ["LOREBASE_PERF_HNSW_EF_CONSTRUCTION"])
     if os.environ.get("LOREBASE_PERF_HNSW_EF_CONSTRUCTION")
-    else None
+    else StorageSettings().hnsw_ef_construction
 )
-"""`store.storage.hnsw_ef_construction` of the index built (default: pgvector's, 64)."""
+"""`store.storage.hnsw_ef_construction` of the index built (default: the setting's default)."""
 CLUSTERS = 400
 """Centres the vectors are drawn around."""
 SPREAD = 0.1

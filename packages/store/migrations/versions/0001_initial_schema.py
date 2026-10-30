@@ -7,7 +7,8 @@ Besides the tables, this revision installs what model metadata cannot express:
 - native enum types, created once and shared by several tables;
 - `store.layout.hash_partitions` hash partitions on `domain_id`;
 - lz4 TOAST compression of `tree_nodes.body`;
-- the HNSW index of `embeddings` for `store.embeddings.dims`;
+- the HNSW index of `embeddings` for `store.embeddings.dims`, with the build parameters of
+  `store.storage` (`hnsw_m`, `hnsw_ef_construction`);
 - row-level security on `domain_id` keyed to the transaction setting `lorebase.domain_ids`
   (comma-separated Domain ids), bypassed when `lorebase.bypass_rls` is `on`.
 
@@ -98,6 +99,21 @@ def _settings() -> tuple[int, int]:
         raise RuntimeError("run this migration through the Lorebase Alembic environment")
     store = config.attributes["store_settings"]
     return store.layout.hash_partitions, store.embeddings.dims
+
+
+def _hnsw_options() -> str:
+    """`WITH (...)` of the HNSW index from `store.storage.hnsw_m` and `hnsw_ef_construction`
+    (null: pgvector's default)."""
+    storage = op.get_context().config.attributes["store_settings"].storage
+    options = [
+        f"{name} = {value}"
+        for name, value in (
+            ("m", storage.hnsw_m),
+            ("ef_construction", storage.hnsw_ef_construction),
+        )
+        if value is not None
+    ]
+    return f" WITH ({', '.join(options)})" if options else ""
 
 
 def _create_partitions(partitions: int) -> None:
@@ -1024,7 +1040,8 @@ def upgrade() -> None:
     _compress(partitions)
     op.execute(
         f"CREATE INDEX embeddings_hnsw_{dims} ON embeddings "
-        f"USING hnsw ((embedding::vector({dims})) vector_cosine_ops) WHERE dims = {dims}"
+        f"USING hnsw ((embedding::vector({dims})) vector_cosine_ops){_hnsw_options()} "
+        f"WHERE dims = {dims}"
     )
     _enable_row_security(partitions)
 
