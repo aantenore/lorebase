@@ -17,11 +17,15 @@ from lorebase_core.model.yaml_schema import load_schema
 from lorebase_core.revision import Author, Origin
 from lorebase_core.types import AttributeType, encode_value
 from lorebase_core.validate import DataChange, LinkUpsert, RecordUpsert
+from lorebase_store.approval_rules import ApprovalRuleSettings
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.runtime import StoreRuntime
 
 EXAMPLE = Path(__file__).resolve().parents[4] / "examples" / "supply"
 DOMAIN = "supply"
+AUTO_MERGE = ApprovalRuleSettings(required_approvals=0)
+"""Approval rules under which automatic merges reach the protected `main`
+(`keeper.proposals.required_approvals: 0`); the default rules hold them for review."""
 AUTHOR = Author(principal="usr_loader")
 
 

@@ -47,6 +47,7 @@ from lorebase_store.webhooks import WebhookRepository, WebhookSettings, signing_
 from lorebase_store.webhooks.keys import StoredKey
 
 from .support import (
+    AUTO_MERGE,
     DOMAIN,
     EXAMPLE,
     Clock,
@@ -127,6 +128,7 @@ async def context(
             ),
             http=http,
             worker_id="test-worker",
+            approval_rules=AUTO_MERGE,
         )
 
 

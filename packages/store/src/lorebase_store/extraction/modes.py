@@ -25,6 +25,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from lorebase_store.approval_rules import HELD_BY_APPROVALS
+
 SETTING_KEY = "extraction"
 """Key of the extraction setting in a Domain's settings."""
 RULES_KEY = "rules"
@@ -56,6 +58,8 @@ BLOCKED_PENDING = "pending_items"
 BLOCKED_CONFLICTS = "conflicts"
 BLOCKED_RECONCILIATION = "reconciliation"
 BLOCKED_PROTECTED = "protected"
+BLOCKED_APPROVALS = HELD_BY_APPROVALS
+"""The protected target's approval rules require a person (`lorebase_store.approval_rules`)."""
 DIRECT_MERGE_MODE = "direct"
 """`mode` of the `proposal.merge` audit entry of a merge Scribe ran in `direct` mode."""
 

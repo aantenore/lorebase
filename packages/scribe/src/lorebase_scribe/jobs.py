@@ -91,6 +91,7 @@ from lorebase_scribe.sources.sync import utc_now
 from lorebase_scribe.telemetry import AUDIT_CHECKPOINTS, AUDIT_VERIFICATIONS
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
+from lorebase_store.approval_rules import ApprovalRuleSettings
 from lorebase_store.auth import AuditRepository, AuditStream, Chains
 from lorebase_store.embeddings import SchemaCache
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
@@ -160,7 +161,9 @@ class JobContext:
     the models built from `inference` (tests). `embedding_models` is the process's embedding
     model, created on first use from `inference` unless given; `embedding_templates` the
     process's cache of resolved embedding templates (one per pass when not given).
-    `checkpoint_sink` replaces the sink of `scribe.audit_checkpoints` (tests)."""
+    `checkpoint_sink` replaces the sink of `scribe.audit_checkpoints` (tests).
+    `approval_rules` are the operator's approval rules of protected branches
+    (`keeper.proposals`), which hold automatic merges for review."""
 
     engine: AsyncEngine
     sessions: async_sessionmaker[AsyncSession]
@@ -177,6 +180,7 @@ class JobContext:
     embedding_models: EmbeddingModels | None = None
     embedding_templates: SchemaCache[Templates] | None = None
     checkpoint_sink: CheckpointSink | None = None
+    approval_rules: ApprovalRuleSettings = field(default_factory=ApprovalRuleSettings)
 
     def embedding_pass(self) -> EmbeddingPass:
         """An embedding pass sharing the process's model."""
@@ -234,6 +238,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             clock=context.clock,
             reconciliation=context.settings.reconciliation,
             semantic=context.semantic_stage(),
+            approval_rules=context.approval_rules,
         )
         report = await sync.run(
             _domain(job), reference, dry_run=bool(job.payload.get("dry_run", False))
@@ -318,6 +323,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
             clock=context.clock,
             reconciliation=context.settings.reconciliation,
             semantic=context.semantic_stage(),
+            approval_rules=context.approval_rules,
         )
         requested_by = job.payload.get("requested_by")
         report = await run.run(

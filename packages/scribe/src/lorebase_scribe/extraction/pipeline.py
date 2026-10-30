@@ -97,6 +97,7 @@ from lorebase_scribe.reconcile.detector import Detector, SemanticStage, effectiv
 from lorebase_scribe.reconcile.extraction import ExtractionCheck
 from lorebase_scribe.sources.sync import POLICY_KEY, domain_merge_policy
 from lorebase_scribe.telemetry import EVIDENCE_WITHHELD, EXTRACTION_ITEMS
+from lorebase_store.approval_rules import ApprovalRuleSettings, effective_rules
 from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, BlobStore, PostgresBlobStore
 from lorebase_store.commit import ValidationFailedError
@@ -389,6 +390,9 @@ class ExtractionReport:
     """Effective ingestion mode, after the tier cap (design 9.2)."""
     mode_capped: str | None = None
     direct_blocked: str | None = None
+    blocking_rules: list[str] = field(default_factory=list)
+    """With `direct_blocked: approvals`: the approval rules of the target that require a
+    person."""
     direct_merged: bool = False
     merged_revision: str | None = None
     ignored_settings: list[str] = field(default_factory=list)
@@ -416,6 +420,7 @@ class ExtractionReport:
             "mode": self.mode,
             "mode_capped": self.mode_capped,
             "direct_blocked": self.direct_blocked,
+            "blocking_rules": list(self.blocking_rules),
             "direct_merged": self.direct_merged,
             "merged_revision": self.merged_revision,
             "ignored_settings": list(self.ignored_settings),
@@ -438,10 +443,12 @@ class ExtractionRun:
         clock: Clock = utc_now,
         reconciliation: ReconcileOptions | None = None,
         semantic: SemanticStage | None = None,
+        approval_rules: ApprovalRuleSettings | None = None,
     ) -> None:
         self._sessions = sessions
         self._reconciliation = reconciliation
         self._semantic = semantic
+        self._approval_rules = approval_rules or ApprovalRuleSettings()
         self._runtime = runtime
         self._settings = settings
         self._inference = inference
@@ -698,7 +705,8 @@ class ExtractionRun:
     ) -> None:
         """Merge the Proposal without a person when the job is in `direct` mode (design 9.2):
         only when every item came from tier 0, none is pending, the target may take it and the
-        merge is clean and not held back by contradictions. Otherwise the reason is recorded
+        merge is clean and not held back by contradictions; into a protected target only when
+        its approval rules require no approval. Otherwise the reason is recorded
         and the Proposal waits for review."""
         if modes.tier_capped([item.tier for item in items]):
             # Text a model read never reaches a branch without a person (AC-19).
@@ -721,6 +729,13 @@ class ExtractionRun:
             if target.protected and not self._settings.direct_merge_protected:
                 report.direct_blocked = modes.BLOCKED_PROTECTED
                 return
+            if target.protected:
+                # No person reviewed it: the target's approval rules hold it for review.
+                rules = effective_rules(domain.settings, self._approval_rules).requiring
+                if rules:
+                    report.direct_blocked = modes.BLOCKED_APPROVALS
+                    report.blocking_rules = list(rules)
+                    return
             result = await MergeService(
                 session, domain.id, runtime=self._runtime, clock=self._clock
             ).merge(

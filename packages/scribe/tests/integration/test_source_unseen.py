@@ -22,7 +22,7 @@ from lorebase_scribe.settings import SourceSettings
 from lorebase_scribe.sources import SourceSync
 from lorebase_store.runtime import StoreRuntime
 
-from .support import DOMAIN, Clock, fetch, load_domain, supply_schema
+from .support import AUTO_MERGE, DOMAIN, Clock, fetch, load_domain, supply_schema
 
 pytestmark = pytest.mark.integration
 
@@ -123,6 +123,7 @@ async def test_records_unseen_by_an_incremental_source_become_stale_candidates(
             SourceSettings(allowed_connections=CONNECTIONS),
             principal="svc_scribe",
             clock=clock,
+            approval_rules=AUTO_MERGE,
         )
 
         first = await sync.run(DOMAIN, ORDERS)
