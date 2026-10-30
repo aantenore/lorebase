@@ -117,6 +117,7 @@ nav:
       - Inference providers: inference-providers.md
       - Document extraction: extraction.md
       - Scribe: scribe.md
+      - Governance and ingestion: governance.md
       - Operations: operations.md
       - Metrics: metrics.md
       - Deployment: deployment.md
