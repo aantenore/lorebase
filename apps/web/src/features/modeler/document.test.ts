@@ -268,6 +268,26 @@ describe('schema YAML', () => {
   });
 });
 
+describe('resolution members of Kinds and Attributes', () => {
+  it('are carried unchanged through the Modeler, which does not model them', async () => {
+    const schema = await sample('main');
+    const document = structuredClone(schemaToDocument(schema));
+    const kind = document.kinds?.['Supplier'];
+    const attribute = kind?.attributes?.['tier'];
+    if (!kind || !attribute) throw new Error('No Supplier.tier');
+    kind.aliases = ['vendor', 'fornitore'];
+    attribute.aliases = ['level'];
+    attribute.value_aliases = { '1': ['gold', 'oro'], '2': ['silver'] };
+    attribute.resolvable = false;
+    const { schema: read, issues } = documentToSchema(document, schema, mint);
+    expect(issues).toEqual([]);
+    const written = schemaToDocument(read);
+    expect(written.kinds?.['Supplier']?.aliases).toEqual(['vendor', 'fornitore']);
+    expect(written.kinds?.['Supplier']?.attributes?.['tier']).toEqual(attribute);
+    expect(JSON.stringify(written)).not.toContain('"extra"');
+  });
+});
+
 describe('members the Modeler does not model, inside nested objects', () => {
   async function nested(): Promise<Schema> {
     const schema = structuredClone(await sample('model/risk'));
