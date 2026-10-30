@@ -184,6 +184,35 @@ def routes(fake: FakeKeeper) -> None:
         ),
         (
             "POST",
+            f"{API}/resolve",
+            served(
+                candidates=[
+                    {
+                        "target": "value",
+                        "kind": "Part",
+                        "attribute": "category",
+                        "type": "string",
+                        "values": ["bearing", "cuscinetto"],
+                        "predicate": {"attr": "category", "op": "in", "value": ["bearing"]},
+                        "score": 0.87654321,
+                        "level": "synonym",
+                        "matched": "bearings",
+                        "records": 12,
+                    },
+                    {
+                        "target": "kind",
+                        "kind": "Part",
+                        "score": 1.0,
+                        "level": "exact",
+                        "matched": "part",
+                    },
+                ],
+                unmatched=["the"],
+                skipped=[{"level": "embedding", "reason": "no query vector"}],
+            ),
+        ),
+        (
+            "POST",
             f"{API}/neighborhood",
             served(
                 nodes=[
@@ -227,6 +256,8 @@ CASES: dict[str, tuple[str, Arguments]] = {
     "search-text": ("lorebase_search", {"query": "bearing", "kinds": ["Part"], "limit": 5}),
     "search-json": ("lorebase_search", {"query": "bearing", "format": "json"}),
     "search-vector-text": ("lorebase_search", {"query_vector": [0.1, 0.2]}),
+    "resolve-text": ("lorebase_resolve", {"text": "the bearings", "kinds": ["Part"], "limit": 5}),
+    "resolve-json": ("lorebase_resolve", {"text": "the bearings", "format": "json"}),
     "neighborhood-text": ("lorebase_neighborhood", {"seeds": ["Part/P-1"], "depth": 2}),
     "neighborhood-values-json": (
         "lorebase_neighborhood",

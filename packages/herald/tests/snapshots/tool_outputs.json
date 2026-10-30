@@ -159,6 +159,14 @@
     "error": true,
     "text": "Error executing tool lorebase_query: [validation-failed] Invalid query.\n- /body/where/op: unknown operator [invalid]\nnext: fix the listed members and call again"
   },
+  "resolve-json": {
+    "error": false,
+    "text": "{\"revision\":\"abababababababababababababababababababababababababababababababab\",\"candidates\":[{\"target\":\"value\",\"ref\":\"Part.category\",\"type\":\"string\",\"values\":[\"bearing\",\"cuscinetto\"],\"predicate\":{\"attr\":\"category\",\"op\":\"in\",\"value\":[\"bearing\"]},\"records\":12,\"level\":\"synonym\",\"score\":0.8765,\"matched\":\"bearings\"},{\"target\":\"kind\",\"ref\":\"Part\",\"level\":\"exact\",\"score\":1.0,\"matched\":\"part\"}],\"unmatched\":[\"the\"],\"skipped\":[{\"level\":\"embedding\",\"reason\":\"no query vector\"}]}"
+  },
+  "resolve-text": {
+    "error": false,
+    "text": "rev abababababababababababababababababababababababababababababababab: 2 candidates\n1. value Part.category (string) = bearing, cuscinetto | synonym 0.8765 for 'bearings', 12 records\n   where: {\"attr\":\"category\",\"op\":\"in\",\"value\":[\"bearing\"]}\n2. kind Part | exact 1.0 for 'part'\nunmatched: the\nskipped embedding: no query vector"
+  },
   "resources": {
     "error": false,
     "text": "schema supply@main rev abababababababababababababababababababababababababababababababab\nKINDS\nSupplier [key supplier_code; title legal_name] - A company that supplies parts.\n  supplier_code: string! \u00b7 legal_name: string! \u00b7 tier: enum(1|2|3)\n  ops: create_supplier, update_supplier, delete_supplier\nPurchaseOrder [key po_number] - An order.\n  po_number: string! \u00b7 total: decimal(12,2) \u00b7 supplier: ref(Supplier)\n  ops: create_purchase_order\nRELATIONS (from -> to; inverse name reads to -> from)\nissued_to: PurchaseOrder -> Supplier (many_to_one; inverse purchase_orders) - The supplier an order is issued to.\nOPERATIONS (writes; run with lorebase_execute)\nflag_supplier_risk(supplier: ref(Supplier)!) [review: expression] - Flag a supplier as a risk.\nbuilt-in: per Kind ops above, link_/unlink_<relation> for explicit Relations, import_records(kind, rows), import_links(relation, rows), delete_records(kind, keys)\nSEARCH modes lexical, semantic, hybrid\n  semantic and hybrid need a query_vector of 384 dimensions made by the embedding model BAAI/bge-small-en-v1.5\n--\nSupplier/S-1001 \"Kavsen Alloys\" rev abababababababababababababababababababababababababababababababab\nsupplier_code: S-1001\ntier: 1\nlinks: purchase_orders=2"

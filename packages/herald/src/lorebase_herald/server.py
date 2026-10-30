@@ -179,7 +179,10 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         'lt|lte|gt|gte|in|between|contains|prefix|exists|match, "value": v}, combined with '
         '{"and": [...]}, {"or": [...]}, {"not": p}; {"via": relation, "where": p} filters on '
         'linked Records; {"derived": name, ...} on derived values. include: {relation: '
-        '{"select": [...], "limit": n}}. order_by: [{"attr": name, "dir": "asc"|"desc"}].',
+        '{"select": [...], "limit": n}}. order_by: [{"attr": name, "dir": "asc"|"desc"}]. '
+        'Count with "aggregate": {"group_by": attr}: Records per value of attr (omit group_by '
+        "for a count per Kind). Unsure which Kind, Attribute or value "
+        "the words of a question mean? Call lorebase_resolve first.",
         annotations=READ,
         structured_output=False,
     )
@@ -247,6 +250,52 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
             traits=traits,
             lens=lens,
             where=where,
+            query_vector=query_vector,
+            limit=limit,
+            at=at,
+            domain=domain,
+            branch=branch,
+            fmt=format,
+        )
+
+    @server.tool(
+        name="lorebase_resolve",
+        description="Ground the words of a question in this Domain before querying: returns "
+        "ranked candidate Kinds, Attributes (by name or alias, with type) and stored values "
+        "(with a ready-to-use `where` predicate and Record count) the words of `text` may "
+        "stand for, e.g. 'red shoes' -> Product.color in [Rosso, red], Product.category = "
+        "Calzature. It never runs a query or interprets the question: pick the candidates "
+        "that fit and write lorebase_query yourself. Levels: exact names and values, synonyms "
+        "(schema aliases), similar spelling and, only when nothing else matched and you pass "
+        "`query_vector`, values of the nearest Records. `unmatched` lists words nothing covers.",
+        annotations=READ,
+        structured_output=False,
+    )
+    async def lorebase_resolve(
+        ctx: Context,
+        text: Annotated[str, Field(min_length=1, description="The question or phrase.")],
+        kinds: NamesArg = None,
+        levels: Annotated[
+            list[Literal["exact", "synonym", "trigram", "embedding"]] | None,
+            Field(description="Matching levels to use. Default: those Keeper enables."),
+        ] = None,
+        query_vector: Annotated[
+            list[float] | None,
+            Field(description="Embedding of `text`; enables the embedding level."),
+        ] = None,
+        limit: Annotated[
+            int | None, Field(ge=1, le=output.max_items, description="Candidates returned.")
+        ] = None,
+        at: AtArg = None,
+        domain: DomainArg = None,
+        branch: BranchArg = None,
+        format: FormatArg = None,
+    ) -> str:
+        return await tools.resolve(
+            credential(ctx, "lorebase_resolve"),
+            text=text,
+            kinds=kinds,
+            levels=levels,
             query_vector=query_vector,
             limit=limit,
             at=at,
