@@ -91,7 +91,10 @@ difference).
 - `embeddings.embedding` is a dimensionless `vector`, as in design 7.2, with the check
   `vector_dims(embedding) = dims`; models of different sizes coexist. Revision `0001` creates
   the HNSW cosine index `embeddings_hnsw_<dims> ... WHERE dims = <dims>` for the configured
-  dimension. Index names starting with `embeddings_hnsw_` or `mat_records_attr_` (per-Attribute
+  dimension, with pgvector's build parameters (m 16, ef_construction 64). Indexes that
+  `storage apply` builds later take `store.storage.hnsw_m` and `hnsw_ef_construction` when set
+  (`WITH (m = ..., ef_construction = ...)`); an existing index keeps its own until rebuilt
+  (operations, "Rebuilding the embedding index"). Index names starting with `embeddings_hnsw_` or `mat_records_attr_` (per-Attribute
   indexes of the materializer) are managed at runtime and ignored by schema comparison.
 - Per-Attribute indexes (`lorebase_store.indexes`) are created on the hash partition that holds
   the Domain, not on the partitioned parent: one partition is scanned and locked, `CONCURRENTLY`

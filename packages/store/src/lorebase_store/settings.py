@@ -36,6 +36,9 @@ DEFAULT_DSN = "postgresql+asyncpg://lorebase@localhost:5432/lorebase"
 
 PGVECTOR_HNSW_MAX_DIMS = 2000
 """Largest `vector` dimension pgvector can index with HNSW."""
+PGVECTOR_HNSW_DEFAULT_M = 16
+PGVECTOR_HNSW_DEFAULT_EF_CONSTRUCTION = 64
+"""pgvector's HNSW build parameters when an index sets none."""
 
 
 class DatabaseSettings(SectionModel):
@@ -743,6 +746,23 @@ class StorageSettings(SectionModel):
         "smaller, a few points of recall lost) or full. Stored vectors keep full precision "
         "either way. Default: half with compact.",
     )
+    hnsw_m: int | None = Field(
+        default=None,
+        ge=2,
+        le=100,
+        description="Links per node of the HNSW index of embeddings (pgvector m). Higher "
+        "raises recall on large or clustered vector sets, at the cost of index size and build "
+        "time. Default: pgvector's, 16. Applies to indexes built from then on (operations: "
+        "rebuilding the embedding index).",
+    )
+    hnsw_ef_construction: int | None = Field(
+        default=None,
+        ge=4,
+        le=1000,
+        description="Candidate list of the HNSW index build (pgvector ef_construction), at "
+        "least twice hnsw_m. Higher raises recall at the cost of build time. Default: "
+        "pgvector's, 64.",
+    )
     compression: Literal["lz4", "pglz"] | None = Field(
         default=None,
         description="TOAST compression of large values (rows above about 2 kB). Default: pglz "
@@ -785,6 +805,17 @@ class StorageSettings(SectionModel):
         description="Wait for a table lock taken by `storage apply` (index drops, trigger "
         "switches) before retrying later; reads queue behind a waiting lock, so keep it short.",
     )
+
+    @model_validator(mode="after")
+    def _hnsw_build(self) -> StorageSettings:
+        m = self.hnsw_m or PGVECTOR_HNSW_DEFAULT_M
+        ef = self.hnsw_ef_construction or PGVECTOR_HNSW_DEFAULT_EF_CONSTRUCTION
+        if ef < 2 * m:
+            raise ValueError(
+                f"hnsw_ef_construction ({ef}) must be at least twice hnsw_m ({m}) "
+                "(the values left null are pgvector's defaults, 16 and 64)"
+            )
+        return self
 
 
 class StoreSettings(SectionModel):

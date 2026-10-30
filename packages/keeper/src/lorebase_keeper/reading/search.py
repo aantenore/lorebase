@@ -24,8 +24,9 @@ before its `LIMIT`. With pgvector 0.8 or later and `search.semantic.iterative_sc
 statement runs under `hnsw.iterative_scan = relaxed_order` (`lorebase_store.embeddings`) in a
 materialized subquery that the outer query orders again by exact distance. Otherwise the
 index subquery returns `search.candidates * search.semantic.overfetch_factor` nearest rows
-(`hnsw.ef_search` is raised to that, up to pgvector's 1000, for the transaction) and the
-outer query filters and trims them. A list shorter than `search.candidates` while
+and the outer query filters and trims them. Either way `hnsw.ef_search` is raised to that
+product (up to pgvector's 1000) for the transaction: the list is approximate (HNSW), and its
+recall follows `ef_search`. A list shorter than `search.candidates` while
 more Records match the filters (the scan bound was reached) is reported as
 `semantic_truncated`.
 
@@ -683,15 +684,18 @@ class SemanticScan:
 
 
 async def _semantic_scan(session: AsyncSession, runtime: ReadRuntime) -> SemanticScan:
-    """The fetch strategy of this transaction. An iterative scan is turned on for it with
-    `SET LOCAL` when `search.semantic.iterative_scan` is `auto` and pgvector is 0.8 or later."""
+    """The fetch strategy of this transaction, set with `SET LOCAL`: `hnsw.ef_search` always,
+    and an iterative scan when `search.semantic.iterative_scan` is `auto` and pgvector is 0.8
+    or later."""
     semantic = runtime.search.semantic
+    # `hnsw.ef_search` bounds the candidate list of the graph search: without iterative scans
+    # the scan ends after that many rows whatever the LIMIT, and with them each pass returns
+    # at most that many, so recall follows it either way. Raise it to what is over-fetched
+    # (pgvector caps it at 1000).
+    await use_ef_search(session, runtime.search.candidates * semantic.overfetch_factor)
     if semantic.iterative_scan == "auto" and await iterative_scans(session):
         await use_iterative_scan(session, semantic.max_scan_tuples)
         return SemanticScan(semantic.overfetch_factor, True)
-    # The index scan ends after `hnsw.ef_search` rows, whatever the LIMIT: raise it to what is
-    # over-fetched (pgvector caps it at 1000).
-    await use_ef_search(session, runtime.search.candidates * semantic.overfetch_factor)
     return SemanticScan(semantic.overfetch_factor, False)
 
 

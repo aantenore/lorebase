@@ -1187,7 +1187,8 @@ about a minute at 100,000 vectors; `LOREBASE_PERF_VECTOR_RECORDS` changes the si
 of six Kinds (Supplier 40%, Part 30%, Plant 15%, PurchaseOrder 10%, Contract 4%, RiskFlag 1%),
 each with a synthetic unit vector of 384 dimensions around one of 400 cluster centres (fixed
 seed; the cluster of a Record is unrelated to its Kind, the hard case for a filter), HNSW index
-built after the load (`vector`, m=16, ef_construction=64, pgvector 0.8.7, Postgres 16 in
+built after the load (`vector`, m=16, ef_construction=64 unless
+`LOREBASE_PERF_HNSW_M` / `LOREBASE_PERF_HNSW_EF_CONSTRUCTION` say otherwise, pgvector 0.8.7, Postgres 16 in
 Docker Desktop). 40 queries from the same distribution go through the Keeper application
 (`POST /search`, `mode: semantic`, limit 20, default `search` settings) as a role subject to
 row-level security. Recall@20 is against the exact cosine top 20 of the filter (sequential scan,
@@ -1202,30 +1203,53 @@ Before revision `0044` (current statement before the change), p50 / p95 in ms, r
 | 1% filter, iterative scan | 13.9 / 16.0, 1.000 | 18.8 / 23.4, 1.000 |
 | 40% filter, over-fetch x4 | 36.7 / 46.2, 0.944 | 63.0 / 73.6, 0.911 |
 
-After (revision `0044` and the statement of design 8.8), 20 of 20 results and no
-`semantic_truncated` in every row:
+After (revision `0044`, the statement of design 8.8, and `hnsw.ef_search` raised to
+`search.candidates * overfetch_factor` = 800 in every case), 20 of 20 results and no
+`semantic_truncated` in every row. Default index (m=16, ef_construction=64):
 
 | search | 100,000 vectors | 300,000 vectors |
 |---|---|---|
-| no filter, iterative scan | 19.5 / 27.8, 0.971 | 25.2 / 34.5, 0.917 |
-| 40% filter, iterative scan | 25.9 / 34.5, 0.989 | 31.4 / 38.4, 0.929 |
-| 1% filter, iterative scan | 20.3 / 35.0, 1.000 | 35.4 / 39.1, 1.000 |
-| 1% filter, over-fetch x4 | 19.2 / 25.2, 1.000 | 36.2 / 42.9, 1.000 |
-| 40% filter, over-fetch x4 | 19.4 / 31.3, 0.978 | 19.8 / 28.6, 0.915 |
+| no filter, iterative scan | 20.0 / 30.6, 0.978 | 29.1 / 49.3, 0.910 |
+| 40% filter, iterative scan | 33.3 / 46.1, 0.981 | 34.6 / 61.1, 0.964 |
+| 1% filter, iterative scan | 18.5 / 22.0, 1.000 | 35.6 / 52.3, 1.000 |
+| 1% filter, over-fetch x4 | 19.5 / 39.5, 1.000 | 35.3 / 39.3, 1.000 |
+| 40% filter, over-fetch x4 | 16.7 / 20.7, 0.968 | 20.4 / 28.6, 0.917 |
 
-(index 195 MB built in 14 s at 100,000 vectors, 586 MB in 50 s at 300,000.)
+(index 195 MB built in 15 s at 100,000 vectors, 586 MB in 50 s at 300,000.)
 
-- **The budget of design 8.7 holds at 300,000 vectors** (200 ms p95; 34.5 to 39.1 ms measured)
-  and the cost no longer grows with the table: unfiltered 25 ms at 300,000 against 20 ms at
-  100,000. `test_iterative_scan_reads_the_hnsw_index` asserts that the plan reads the HNSW
-  index, under the row-level-security role.
-- **Recall is the index's.** The unfiltered and 40% rows are approximate (HNSW, m=16,
-  ef_construction=64): 0.97 to 0.99 at 100,000 vectors, 0.92 to 0.93 at 300,000, below the
-  exact 1.000 of the former plan; the test asserts a mean of at least 0.90. Raising
-  `hnsw.ef_search` to 800 changed nothing at 300,000, so it is the graph's quality
-  (`m`, `ef_construction`), not the scan, that bounds it. A 1% Kind is exact: the search reads
-  the vectors of the Kind's template fingerprint, and for that share of the table the planner
-  reads those rows and sorts them.
+With `store.storage.hnsw_ef_construction: 128` (`LOREBASE_PERF_HNSW_EF_CONSTRUCTION=128`; m=16):
+
+| search | 100,000 vectors | 300,000 vectors |
+|---|---|---|
+| no filter, iterative scan | 20.6 / 33.0, 0.998 | 21.3 / 28.4, 0.988 |
+| 40% filter, iterative scan | 34.3 / 50.0, 0.998 | 38.0 / 46.9, 0.989 |
+| 1% filter, iterative scan | 19.0 / 23.1, 1.000 | 31.8 / 46.1, 1.000 |
+| 1% filter, over-fetch x4 | 18.7 / 23.0, 1.000 | 34.4 / 39.9, 1.000 |
+| 40% filter, over-fetch x4 | 18.6 / 22.3, 0.996 | 22.0 / 34.7, 0.986 |
+
+(index 195 MB built in 20 s at 100,000 vectors, 586 MB in 66 s at 300,000. m=32 with
+ef_construction 128 at 300,000: 0.974 unfiltered, 0.990 with the 40% filter, 0.983 by
+over-fetch, 608 MB in 124 s: no better, twice the build.)
+
+- **The budget of design 8.7 holds at 300,000 vectors** (200 ms p95; 28 to 61 ms measured)
+  and the cost barely grows with the table. `test_iterative_scan_reads_the_hnsw_index` asserts
+  that the plan reads the HNSW index, under the row-level-security role, and
+  `test_ef_search_follows_the_over_fetch_in_keepers_transaction` reads `hnsw.ef_search` inside
+  Keeper's own read transaction (its pool, after its `SET LOCAL`s): 800 with and without
+  iterative scans.
+- **Recall is the index's.** The unfiltered and 40% rows are approximate (HNSW). Before
+  `hnsw.ef_search` was raised under iterative scans (it stayed at 40 there), the default index
+  gave 0.917 unfiltered and 0.929 with the 40% filter at 300,000 vectors; at 800 the 40% filter
+  reaches 0.964, while the unfiltered mean stays at 0.910 because a query lands in a region the graph
+  does not reach (lowest recall 0.00 at 300,000, against 0.80 at 100,000), and the over-fetch
+  row has the same outlier (0.917). That is the graph's build quality: with
+  `hnsw_ef_construction: 128` every row is at least 0.986 at 300,000 (lowest query 0.90) for
+  16 more seconds of build and the same size. The defaults are unchanged (the test asserts a
+  mean of at least 0.90); `store.storage.hnsw_ef_construction` and `hnsw_m` set them for
+  indexes built later, and an existing index is rebuilt as
+  [operations](operations.md#rebuilding-the-embedding-index) says. A 1% Kind is exact: the
+  search reads the vectors of the Kind's template fingerprint, and for that share of the table
+  the planner reads those rows and sorts them.
 - **What changed in the statement.** The nearest vectors are taken from `embeddings` alone
   (a materialized subquery, `ORDER BY distance LIMIT search.candidates * overfetch_factor`,
   restricted to the template fingerprints of the searched Kinds), and the Records are joined to
@@ -1254,7 +1278,8 @@ After (revision `0044` and the statement of design 8.8), 20 of 20 results and no
   200 wanted (7.8 results of 20, recall 0.39, `semantic_truncated` on every query); now the
   fingerprint restricts the vectors before the limit, so a one-Kind filter fills the list, and
   `semantic_truncated` remains for filters the vectors do not carry (`where`, branch
-  membership). `hnsw.ef_search` follows the over-fetch, capped at pgvector's 1000.
+  membership). `hnsw.ef_search` follows the over-fetch, capped at pgvector's 1000, on this path
+  and under iterative scans alike.
 
 ## Storage profiles
 

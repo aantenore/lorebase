@@ -209,14 +209,34 @@ def hnsw_index_name(dims: int, precision: Precision) -> str:
     return f"embeddings_hnsw_{dims}" if precision == "full" else f"embeddings_hnsw_half_{dims}"
 
 
-def hnsw_index_sql(dims: int, precision: Precision, *, concurrently: bool = True) -> str:
-    """The HNSW index of `embeddings` for `dims` (as revision 0001 creates the full one)."""
+def hnsw_options(m: int | None, ef_construction: int | None) -> str:
+    """`WITH (...)` of an HNSW index for the build parameters set (`store.storage.hnsw_m`,
+    `hnsw_ef_construction`); empty when both are left to pgvector's defaults."""
+    options = [
+        f"{name} = {value}"
+        for name, value in (("m", m), ("ef_construction", ef_construction))
+        if value is not None
+    ]
+    return f" WITH ({', '.join(options)})" if options else ""
+
+
+def hnsw_index_sql(
+    dims: int,
+    precision: Precision,
+    *,
+    concurrently: bool = True,
+    m: int | None = None,
+    ef_construction: int | None = None,
+) -> str:
+    """The HNSW index of `embeddings` for `dims` (as revision 0001 creates the full one when
+    `m` and `ef_construction` are left to pgvector's defaults)."""
     kind = "vector" if precision == "full" else "halfvec"
     ops = f"{kind}_cosine_ops"
     how = "CONCURRENTLY " if concurrently else ""
     return (
         f"CREATE INDEX {how}IF NOT EXISTS {hnsw_index_name(dims, precision)} ON embeddings "
-        f"USING hnsw ((embedding::{kind}({dims})) {ops}) WHERE dims = {dims}"
+        f"USING hnsw ((embedding::{kind}({dims})) {ops}){hnsw_options(m, ef_construction)} "
+        f"WHERE dims = {dims}"
     )
 
 
@@ -882,6 +902,7 @@ async def _hnsw(
     dims: int,
     report: ApplyReport,
     *,
+    build: StorageSettings,
     switch_wait_s: float,
 ) -> None:
     if wanted == "half" and (state.pgvector is None or state.pgvector < HALFVEC_MIN_VERSION):
@@ -914,7 +935,9 @@ async def _hnsw(
         )
         if valid is False:
             await ddl.exec_driver_sql(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
-        await ddl.exec_driver_sql(hnsw_index_sql(dims, wanted))
+        await ddl.exec_driver_sql(
+            hnsw_index_sql(dims, wanted, m=build.hnsw_m, ef_construction=build.hnsw_ef_construction)
+        )
     valid = await ddl.scalar(
         text("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(:i)"),
         {"i": hnsw_index_name(dims, wanted)},
@@ -1185,7 +1208,13 @@ async def apply(
         await _lexicon_index(ddl, state, choices.lexicon_index, report)
         await _bm25_index(ddl, state, choices.bm25_index, settings, report)
         await _hnsw(
-            ddl, state, choices.embedding_precision, dims, report, switch_wait_s=switch_wait_s
+            ddl,
+            state,
+            choices.embedding_precision,
+            dims,
+            report,
+            build=settings,
+            switch_wait_s=switch_wait_s,
         )
         await _compression(ddl, state, choices.compression, settings, report)
         await _fillfactor(ddl, state, choices.records_fillfactor, settings, report)

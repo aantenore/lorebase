@@ -31,6 +31,31 @@ leave fewer than `search.candidates` rows, or none. Keeper handles that in one o
 | pgvector 0.8 or later and `search.semantic.iterative_scan: auto` (default) | `SET LOCAL hnsw.iterative_scan = relaxed_order` and `hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction; the index scan goes on until the filters leave enough rows. The nearest vectors of the searched Kinds (`search.candidates * search.semantic.overfetch_factor`) are a materialized subquery over `embeddings` alone, joined to the Records and ordered again by exact distance, so the relaxed order never reaches the response; with a `where` the Records are joined first, so the conditions come before the limit |
 | older pgvector, or `iterative_scan: off` | the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows; the outer query filters and keeps `search.candidates` |
 
+In both cases the read transaction raises `hnsw.ef_search` to `search.candidates *
+search.semantic.overfetch_factor` (800 by default; pgvector caps it at 1000): without iterative
+scans an HNSW scan ends after `ef_search` rows whatever its `LIMIT`, and under them each pass
+returns at most that many candidates, so recall follows it either way.
+
+**The semantic list is approximate.** The HNSW index returns its nearest neighbours, not the
+exact top-k. Measured on 300,000 synthetic clustered vectors (384 dimensions, limit 20, default
+`search` settings; [performance](performance.md#filtered-semantic-search)), mean recall@20
+against the exact neighbours:
+
+| Search | default index (m 16, ef_construction 64) | `store.storage.hnsw_ef_construction: 128` |
+|---|---|---|
+| no filter, iterative scan | 0.910 | 0.988 |
+| 40% filter, iterative scan | 0.964 | 0.989 |
+| 40% filter, over-fetch | 0.917 | 0.986 |
+| one Kind of 1% of the vectors | 1.000 | 1.000 |
+
+At 100,000 vectors the default index gives 0.968 to 0.981. A Kind holding a small share of the
+vectors is exact: the planner reads its vectors and sorts them. A request with `where` under
+iterative scans joins the Records first and the planner normally sorts the matching Records'
+vectors by exact distance (the exact path); it reads the HNSW index there only when it estimates
+that cheaper. Raising the index's build parameters (`store.storage.hnsw_m`,
+`hnsw_ef_construction`) needs a rebuild of the index
+([operations](operations.md#rebuilding-the-embedding-index)).
+
 The pgvector version is read once per process (`pg_extension.extversion`) and `/readyz` reports
 it in the `vector_search` check, with the case in use. When the list is still shorter than
 `search.candidates` because the scan bound was reached while more Records match the filters,
