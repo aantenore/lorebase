@@ -143,7 +143,7 @@ async def test_tools_over_mcp_against_keeper(
     async with client:
         call = client.call_tool
         listed = await client.list_tools()
-        assert len(listed.tools) == 13
+        assert len(listed.tools) == 14
 
         schema = _text(await call("lorebase_schema", {}))
         assert schema.startswith("schema supply@main rev ")
