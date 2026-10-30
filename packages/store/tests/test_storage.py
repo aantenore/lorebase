@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -107,6 +108,24 @@ def test_hnsw_index_sql() -> None:
         "USING hnsw ((embedding::halfvec(384)) halfvec_cosine_ops) WHERE dims = 384"
     )
     assert storage.hnsw_index_name(384, "full") == "embeddings_hnsw_384"
+    assert storage.hnsw_index_sql(384, "full", concurrently=False, m=24, ef_construction=128) == (
+        "CREATE INDEX IF NOT EXISTS embeddings_hnsw_384 ON embeddings "
+        "USING hnsw ((embedding::vector(384)) vector_cosine_ops) "
+        "WITH (m = 24, ef_construction = 128) WHERE dims = 384"
+    )
+    assert "WITH (ef_construction = 128)" in storage.hnsw_index_sql(
+        384, "full", ef_construction=128
+    )
+
+
+def test_hnsw_build_parameters_are_checked() -> None:
+    assert StorageSettings().hnsw_m is None
+    assert StorageSettings(hnsw_m=32).hnsw_ef_construction is None
+    assert StorageSettings(hnsw_m=48, hnsw_ef_construction=128).hnsw_m == 48
+    with pytest.raises(ValidationError, match="at least twice"):
+        StorageSettings(hnsw_m=40)
+    with pytest.raises(ValidationError, match="at least twice"):
+        StorageSettings(hnsw_m=16, hnsw_ef_construction=20)
 
 
 # Integration --------------------------------------------------------------------------------------

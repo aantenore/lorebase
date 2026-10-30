@@ -236,7 +236,8 @@ class SemanticSettings(SectionModel):
         default=4,
         ge=1,
         description="The index returns search.candidates * this many nearest vectors of the "
-        "searched Kinds before the Records' filters apply.",
+        "searched Kinds before the Records' filters apply; hnsw.ef_search is raised to that "
+        "product (pgvector caps it at 1000), with or without iterative scans.",
     )
 
 

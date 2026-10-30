@@ -10,11 +10,14 @@ Keeper application (`POST /search`, `mode: semantic`) as a role subject to row-l
 filtered to the smallest Kind (1% of the rows). Ground truth is the exact cosine top-k over the
 rows of that Kind, by a sequential scan with the index scans off.
 
-Asserted: the plan reads the HNSW index; with iterative scans the list keeps its limit and
-matches the exact neighbours (recall@k) within a latency budget; the over-fetch path
-fills the list for a one-Kind filter, which restricts the vectors before its limit. The
+Asserted: the plan reads the HNSW index; `hnsw.ef_search` in Keeper's own read transaction
+follows the over-fetch, with and without iterative scans; with iterative scans the list keeps
+its limit and matches the exact neighbours (recall@k) within a latency budget; the over-fetch
+path fills the list for a one-Kind filter, which restricts the vectors before its limit. The
 measurements are written to `build/perf/filtered-vectors.md` (override with
-`LOREBASE_PERF_FILTERED_VECTORS_OUT`).
+`LOREBASE_PERF_FILTERED_VECTORS_OUT`). `LOREBASE_PERF_HNSW_M` and
+`LOREBASE_PERF_HNSW_EF_CONSTRUCTION` build the index as `store.storage.hnsw_m` and
+`hnsw_ef_construction` would.
 """
 
 from __future__ import annotations
@@ -45,10 +48,15 @@ from sqlalchemy.sql.elements import ClauseElement
 from lorebase_core.model import Schema
 from lorebase_keeper.app import create_app
 from lorebase_keeper.reading import search as search_module
+from lorebase_keeper.reading.settings import SearchSettings
 from lorebase_platform.settings import Settings
 from lorebase_store import migrations, testing
 from lorebase_store.db import create_engine
-from lorebase_store.embeddings import iterative_scans, template_fingerprints
+from lorebase_store.embeddings import (
+    HNSW_MAX_EF_SEARCH,
+    iterative_scans,
+    template_fingerprints,
+)
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 from lorebase_store.storage import hnsw_index_name, hnsw_index_sql
@@ -59,6 +67,14 @@ pytestmark = pytest.mark.perf
 
 RECORDS = int(os.environ.get("LOREBASE_PERF_VECTOR_RECORDS", "100000"))
 """Records (and vectors) loaded."""
+HNSW_M = int(os.environ["LOREBASE_PERF_HNSW_M"]) if os.environ.get("LOREBASE_PERF_HNSW_M") else None
+"""`store.storage.hnsw_m` of the index built (default: pgvector's, 16)."""
+HNSW_EF_CONSTRUCTION = (
+    int(os.environ["LOREBASE_PERF_HNSW_EF_CONSTRUCTION"])
+    if os.environ.get("LOREBASE_PERF_HNSW_EF_CONSTRUCTION")
+    else None
+)
+"""`store.storage.hnsw_ef_construction` of the index built (default: pgvector's, 64)."""
 CLUSTERS = 400
 """Centres the vectors are drawn around."""
 SPREAD = 0.1
@@ -86,10 +102,9 @@ BASE = f"/api/v1/domains/{harness.DOMAIN}"
 MIN_RECALL = 0.90
 """Mean recall@LIMIT of the iterative scan against the exact neighbours of the filter."""
 BUDGET_P95_MS = 200.0
-"""Filtered semantic search, whole request (planning, scan, final page), p95, at the default
-100,000 vectors; design 8.7 holds it to the same figure. The statement is exact today (see
-`test_iterative_scan_reads_the_hnsw_index`), so the cost grows with the table: 300,000
-vectors miss this budget (docs/performance.md#filtered-semantic-search)."""
+"""Filtered semantic search, whole request (planning, scan, final page), p95; design 8.7 holds
+it to the same figure. The plan reads the HNSW index (`test_iterative_scan_reads_the_hnsw_index`),
+so it holds at 300,000 vectors too (docs/performance.md#filtered-semantic-search)."""
 OUT = Path(os.environ.get("LOREBASE_PERF_FILTERED_VECTORS_OUT", "build/perf/filtered-vectors.md"))
 
 #: Cluster centres (random unit vectors).
@@ -222,7 +237,11 @@ async def load(owner_url: str, schema: Schema) -> list[list[float]]:
             await auto.exec_driver_sql("SET maintenance_work_mem = '1GB'")
             await auto.exec_driver_sql("SET max_parallel_maintenance_workers = 0")
             started = time.perf_counter()
-            await auto.exec_driver_sql(hnsw_index_sql(DIMS, "full", concurrently=False))
+            await auto.exec_driver_sql(
+                hnsw_index_sql(
+                    DIMS, "full", concurrently=False, m=HNSW_M, ef_construction=HNSW_EF_CONSTRUCTION
+                )
+            )
             FACTS["index_build_s"] = time.perf_counter() - started
             await auto.exec_driver_sql("ANALYZE mat_records")
             await auto.exec_driver_sql("ANALYZE embeddings")
@@ -332,17 +351,25 @@ def _compile_explain(element: _ExplainAnalyze, compiler: SQLCompiler, **kw: Any)
     return "EXPLAIN (ANALYZE, FORMAT JSON) " + compiler.process(element.statement, **kw)
 
 
+EF_SEARCH = "hnsw.ef_search"
+"""Key of the captured plan holding `hnsw.ef_search` in the search's transaction."""
+
+
 @contextmanager
 def plans_of_search() -> Iterator[list[dict[str, Any]]]:
     """Plans (`EXPLAIN (ANALYZE, FORMAT JSON)`) of the statements the search compiler passes to
-    `explain`, planned inside the read transaction, after its `SET LOCAL`s."""
+    `explain`, planned inside the read transaction, after its `SET LOCAL`s, each with the
+    `hnsw.ef_search` of that transaction under `EF_SEARCH`."""
     plans: list[dict[str, Any]] = []
 
     async def capture(session: AsyncSession, query: Any, domain_id: str, label: str) -> None:
         result = await session.execute(_ExplainAnalyze(query))
         document = result.scalar_one()
         document = json.loads(document) if isinstance(document, str) else document
-        plans.append(document[0]["Plan"])
+        # What Keeper's own transaction runs under (its pool, after its `SET LOCAL`s): a
+        # setting changed on another connection would not show here.
+        ef_search = (await session.execute(text("SHOW hnsw.ef_search"))).scalar_one()
+        plans.append({**document[0]["Plan"], EF_SEARCH: int(ef_search)})
 
     with mock.patch.object(search_module, "explain", capture):
         yield plans
@@ -487,3 +514,21 @@ async def test_over_fetch_keeps_the_limit_of_a_broad_filter(dataset: Dataset) ->
     assert min(run.items) == LIMIT
     assert statistics.mean(run.recalls) >= MIN_RECALL, run.recalls
     assert run.p95() <= BUDGET_P95_MS, run.latencies_ms
+
+
+@pytest.mark.parametrize(
+    ("label", "kind", "sections"),
+    [
+        ("40% filter, iterative scan", "Supplier", {}),
+        ("40% filter, over-fetch x4", "Supplier", OVER_FETCH),
+    ],
+)
+async def test_ef_search_follows_the_over_fetch_in_keepers_transaction(
+    dataset: Dataset, label: str, kind: str, sections: dict[str, Any]
+) -> None:
+    if not dataset.iterative and not sections:
+        pytest.skip(f"pgvector {dataset.version} has no iterative scans")
+    _, plan = await measured(dataset, label, kind, **sections)
+    defaults = SearchSettings()
+    wanted = defaults.candidates * defaults.semantic.overfetch_factor
+    assert plan[EF_SEARCH] == min(wanted, HNSW_MAX_EF_SEARCH)
