@@ -262,7 +262,7 @@ A typed field of a Kind, or of a Relation as a link Attribute
   without `pii.read`, `confidential.read` or `restricted.read`, in reads and webhooks
   ([design 13.5](design.md#135-personal-data-and-erasure)). A sensitive Attribute is left out of
   full-text search and of the value index. `vault: true` (needs `pii`; not on link, unique,
-  indexed, reference or derived Attributes) stores the value encrypted outside history, so
+  indexed, reference or derived Attributes, nor the title, a primary key or a foreign key) stores the value encrypted outside history, so
   `lorebase admin erase` can remove it.
 - **Derived.** `derivation: NAME` names a Derivation that computes the value
   ([design 5.8](design.md#58-derivation)): `expression` (CEL over the Record's own values),
