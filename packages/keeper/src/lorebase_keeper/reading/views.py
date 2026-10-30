@@ -74,8 +74,75 @@ class AggregateOut(BaseModel):
     truncated: bool = False
 
 
+class AttributeCoverage(BaseModel):
+    """How many Records of a Kind miss an Attribute the request used."""
+
+    kind: str
+    attribute: str
+    missing: float = Field(description="Share of the Kind's Records without a value, 0 to 1.")
+    missing_records: int = Field(description="Records without a value (estimated if sampled).")
+    used_in: list[Literal["where", "select", "order_by", "resolve"]] = Field(
+        description="Where the request used the Attribute (resolve: a candidate named it)."
+    )
+
+
+class SourceFreshness(BaseModel):
+    """When a Source feeding a Kind last synchronized, and what it has not seen lately."""
+
+    kind: str
+    source: str = Field(description="Source api name.")
+    last_synced_at: datetime | None = Field(
+        description="End of its last successful run (dry runs aside); null: never."
+    )
+    stale_after: str | None = Field(default=None, description="The Source's stale_after.")
+    stale: bool = Field(
+        description="Its last successful run is older than stale_after (or it never ran)."
+    )
+    unseen_records: int | None = Field(
+        default=None,
+        description="Records it owns that no run has seen for stale_after (incremental "
+        "Sources with stale_after), as of the statistics.",
+    )
+
+
+class KindCoverage(BaseModel):
+    """The statistics the coverage of a Kind was read from."""
+
+    kind: str
+    records: int | None = Field(description="Live Records of the Kind when counted.")
+    as_of: str | None = Field(description="Revision (hex) the statistics were counted at.")
+    computed_at: datetime | None = None
+    approximate: bool = Field(
+        description="The head moved since, or the Kind was counted over a sample."
+    )
+
+
+class CoverageOut(BaseModel):
+    """How complete an answer can be (design 8.11): an empty result is not missing data. Read
+    from statistics of the default branch head, never from the Records; only Kinds and
+    Attributes the caller may read are described."""
+
+    kinds: list[KindCoverage] = Field(default_factory=list)
+    attributes: list[AttributeCoverage] = Field(default_factory=list)
+    sources: list[SourceFreshness] = Field(default_factory=list)
+    unknown: list[str] = Field(
+        default_factory=list,
+        description="Resolution: phrases that matched nothing in this Domain (no Kind, "
+        "Attribute or indexed value).",
+    )
+    notes: list[str] = Field(
+        default_factory=list, description="One line per signal, for agents and people."
+    )
+    omitted: str | None = Field(
+        default=None, description="Why statistics are left out (e.g. not the default branch)."
+    )
+
+
 class QueryResponse(RecordPage):
     aggregate: AggregateOut | None = None
+    coverage: CoverageOut | None = Field(
+        default=None, description="How complete the answer can be (unless coverage: false)."
+    )
 
 
 class LinkOut(BaseModel):
@@ -234,6 +301,11 @@ class ResolveResponse(Served):
     )
     skipped: list[ResolveSkipped] = Field(
         default_factory=list, description="Levels that did not run, and why."
+    )
+    coverage: CoverageOut | None = Field(
+        default=None,
+        description="Phrases unknown in this Domain and how many Records miss the Attributes "
+        "of the candidates (unless coverage: false).",
     )
 
 

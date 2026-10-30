@@ -114,7 +114,11 @@ async def test_the_scheduler_queues_checkpoints_only_when_enabled(
     engine: AsyncEngine, sessions: async_sessionmaker[AsyncSession], runtime: StoreRuntime
 ) -> None:
     settings = SchedulerSettings(
-        webhook_interval_s=0, embeddings_interval_s=0, value_index_interval_s=0, gc_schedule=None
+        webhook_interval_s=0,
+        embeddings_interval_s=0,
+        value_index_interval_s=0,
+        coverage_interval_s=0,
+        gc_schedule=None,
     )
     queued: list[list[str]] = []
     for interval in (0.0, 3600.0):

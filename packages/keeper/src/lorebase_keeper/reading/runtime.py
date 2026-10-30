@@ -22,6 +22,7 @@ from lorebase_core.model import Schema
 from lorebase_keeper.errors import UNAVAILABLE, ProblemError
 from lorebase_keeper.ratelimit.bucket import InMemoryRateStore
 from lorebase_keeper.reading.caching import ResponseCache, build_cache
+from lorebase_keeper.reading.misses import MissRecorder
 from lorebase_keeper.reading.settings import (
     ReadSettings,
     SearchSettings,
@@ -75,6 +76,8 @@ class ReadRuntime:
     store: StoreRuntime
     cache: ResponseCache | None = None
     sensitivity: SensitivitySettings = field(default_factory=SensitivitySettings)
+    misses: MissRecorder | None = None
+    """Recorder of resolution misses; None unless `store.resolve_misses.enabled`."""
     schemas: SchemaCache = field(init=False)
     snapshot_builds: asyncio.Semaphore = field(init=False)
     """Snapshot builds running in this process (`read.time_travel`)."""
@@ -100,13 +103,19 @@ class ReadRuntime:
     @classmethod
     def build(cls, settings: Settings, sessions: async_sessionmaker[AsyncSession]) -> ReadRuntime:
         reads = keeper_settings(settings).reads
+        store = StoreRuntime.from_loaded(settings)
+        search = search_settings(settings)
+        recording = store.settings.resolve_misses
         return cls(
             sessions=sessions,
             read=read_settings(settings),
-            search=search_settings(settings),
-            store=StoreRuntime.from_loaded(settings),
+            search=search,
+            store=store,
             cache=build_cache(reads.cache),
             sensitivity=reads.sensitivity,
+            misses=MissRecorder(sessions, recording, search.resolve.misses)
+            if recording.enabled
+            else None,
         )
 
 

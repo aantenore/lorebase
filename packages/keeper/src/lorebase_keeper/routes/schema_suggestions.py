@@ -18,6 +18,13 @@ needs `schema.write` on that branch, `branch.create` and `proposal.create`; when
 is invalid the answer is 422 with the issues and nothing is decided. An accepted suggestion
 cannot be decided again. Decisions are audited (`schema.suggestions.decide`).
 
+Vocabulary suggestions (`kind_alias`, `attribute_alias`, `value_alias`,
+`attribute_description`, design 8.10) come from Scribe's consolidation of the phrases
+`lorebase_resolve` matched to nothing: `name` is the alias, `attribute` the Attribute changed,
+`value` the stored value an alias stands for, `description` the proposed description, and the
+examples are the missed phrases with their counts. They are listed and decided like the others;
+one whose Attribute the caller may not read values of is listed `withheld`.
+
 `:merge` folds the pending Attribute suggestions stored before variants were merged on arrival
 into the best supported one of each set (`schema.suggestions.merge_similarity`); it is safe to
 repeat and audited (`schema.suggestions.merge`).
@@ -51,7 +58,15 @@ router = APIRouter(tags=["schema"])
 
 SUGGESTIONS = "/domains/{domain_id}/schema/suggestions"
 StatusName = Literal["pending", "accepted", "rejected"]
-TypeName = Literal["kind", "attribute", "relation"]
+TypeName = Literal[
+    "kind",
+    "attribute",
+    "relation",
+    "kind_alias",
+    "attribute_alias",
+    "value_alias",
+    "attribute_description",
+]
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks the permission."},
@@ -90,9 +105,26 @@ class SuggestionOut(BaseModel):
         "`+Name` for a Kind another suggestion proposes.",
     )
     target: str | None = Field(default=None, description="To Kind of a Relation.")
-    labels: list[str] = Field(description="Labels as the documents wrote them.")
-    support: int = Field(description="Observations, over every document.")
-    documents: int = Field(description="Documents it was observed in.")
+    attribute: str | None = Field(
+        default=None, description="Vocabulary suggestions: the Attribute they change."
+    )
+    value: str | None = Field(
+        default=None, description="Value aliases: the stored value the alias stands for."
+    )
+    description: str | None = Field(
+        default=None, description="Attribute descriptions: the proposed description."
+    )
+    labels: list[str] = Field(
+        description="Labels as the documents wrote them; the missed phrases of a vocabulary "
+        "suggestion."
+    )
+    support: int = Field(
+        description="Observations, over every document; misses for a vocabulary suggestion."
+    )
+    documents: int = Field(
+        description="Documents it was observed in; distinct missed phrases for a vocabulary "
+        "suggestion."
+    )
     confidence: float = Field(description="Mean confidence of the observations.")
     status: StatusName
     type_guess: TypeGuessOut | None = Field(
@@ -100,7 +132,9 @@ class SuggestionOut(BaseModel):
     )
     samples: list[str]
     examples: list[dict[str, Any]] = Field(
-        description="Evidence: document, chunk, offsets into the parsed text, quote."
+        description="Evidence: document, chunk, offsets into the parsed text, quote; for a "
+        "vocabulary suggestion the missed phrase, its misses, distinct callers and the "
+        "similarity that linked it."
     )
     sources: list[str] = Field(description="Techniques that observed it (rules, models).")
     duplicate_of: DuplicateOut | None = Field(
@@ -157,13 +191,18 @@ class DecideSuggestionsOut(BaseModel):
 def _out(view: service.SuggestionView) -> SuggestionOut:
     row = view.row
     guess = view.guess
+    value = row.payload.get("value")
+    description = row.payload.get("description")
     return SuggestionOut(
         id=row.id,
         type=row.suggestion_type,
         name=row.name,
         kind=view.kind,
         target=view.target,
-        labels=list(row.labels),
+        attribute=view.attribute,
+        value=value if isinstance(value, str) and not view.withheld else None,
+        description=description if isinstance(description, str) and not view.withheld else None,
+        labels=[] if view.withheld and view.attribute is not None else list(row.labels),
         support=row.support,
         documents=row.documents,
         confidence=row.confidence,

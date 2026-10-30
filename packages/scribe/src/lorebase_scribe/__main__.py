@@ -10,6 +10,12 @@ lorebase-scribe embeddings DOMAIN [--branch B]... [--reindex] [--prune]
 lorebase-scribe value-index DOMAIN [--rebuild]
                                      bring the value index selection in line with the default
                                      branch now, or recount every value (rebuild)
+lorebase-scribe coverage DOMAIN [--force]
+                                     count Records and missing values per Kind of the default
+                                     branch head now
+lorebase-scribe consolidate DOMAIN   prune expired resolution misses and propose vocabulary
+                                     suggestions from the frequent ones now
+lorebase-scribe misses purge DOMAIN  delete every recorded resolution miss of a Domain
 lorebase-scribe modes clear          forget the structured output modes remembered per chat
                                      endpoint
 """
@@ -28,7 +34,10 @@ from lorebase_platform.settings import ConfigError, Settings, load_settings
 from lorebase_platform.telemetry import setup_telemetry
 from lorebase_scribe.service import open_scribe
 from lorebase_scribe.sources import SourceSync
+from lorebase_store.coverage import run_coverage
 from lorebase_store.endpoint_modes import clear_modes
+from lorebase_store.repositories import scope_to_domain
+from lorebase_store.resolve_misses import purge_misses
 from lorebase_store.values import run_value_index
 
 SERVICE_NAME = "scribe"
@@ -74,6 +83,20 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Recount every value from the Records (repair, or an install upgraded in place).",
     )
+    coverage = commands.add_parser(
+        "coverage", help="Count Records and missing values per Kind of a Domain now."
+    )
+    coverage.add_argument("domain")
+    coverage.add_argument(
+        "--force", action="store_true", help="Recount although the head did not move."
+    )
+    consolidate = commands.add_parser(
+        "consolidate", help="Turn a Domain's frequent resolution misses into suggestions now."
+    )
+    consolidate.add_argument("domain")
+    misses = commands.add_parser("misses", help="Recorded resolution misses.")
+    misses.add_argument("action", choices=["purge"], help="Delete every miss of the Domain.")
+    misses.add_argument("domain")
     modes = commands.add_parser("modes", help="Structured output modes of the chat endpoints.")
     modes.add_argument("action", choices=["clear"], help="Forget every remembered mode.")
     return parser
@@ -144,6 +167,34 @@ async def _value_index(settings: Settings, domain: str, rebuild: bool) -> dict[s
         return report.as_dict()
 
 
+async def _coverage(settings: Settings, domain: str, force: bool) -> dict[str, object]:
+    async with open_scribe(settings) as scribe:
+        context = scribe.context
+        report = await run_coverage(
+            context.sessions,
+            domain,
+            settings=context.runtime.settings.coverage,
+            clock=context.clock,
+            force=force,
+        )
+        return report.as_dict()
+
+
+async def _consolidate(settings: Settings, domain: str) -> dict[str, object]:
+    async with open_scribe(settings) as scribe:
+        return (await scribe.context.consolidation_pass().run(domain)).as_dict()
+
+
+async def _misses_purge(settings: Settings, domain: str) -> dict[str, object]:
+    async with (
+        open_scribe(settings) as scribe,
+        scribe.context.sessions() as session,
+        session.begin(),
+    ):
+        await scope_to_domain(session, domain)
+        return {"domain": domain, "purged": await purge_misses(session, domain)}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Load settings, configure logging and telemetry, then run the command."""
     args = _parser().parse_args(argv)
@@ -165,6 +216,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if result["complete"] else 1
         elif args.command == "modes":
             sys.stdout.write(json.dumps(asyncio.run(_modes_clear(settings))) + "\n")
+        elif args.command == "coverage":
+            report = asyncio.run(_coverage(settings, args.domain, args.force))
+            sys.stdout.write(json.dumps(report, default=str) + "\n")
+        elif args.command == "consolidate":
+            report = asyncio.run(_consolidate(settings, args.domain))
+            sys.stdout.write(json.dumps(report, default=str) + "\n")
+        elif args.command == "misses":
+            report = asyncio.run(_misses_purge(settings, args.domain))
+            sys.stdout.write(json.dumps(report, default=str) + "\n")
         elif args.command == "value-index":
             report = asyncio.run(_value_index(settings, args.domain, args.rebuild))
             sys.stdout.write(json.dumps(report, default=str) + "\n")

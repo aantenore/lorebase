@@ -6,7 +6,7 @@ Attribute `Product.price`. Resolution answers that and nothing more: it never in
 question, never aggregates and calls no model; it returns ranked candidates with the words they
 matched and a ready-to-use predicate, and the agent writes the query.
 
-**Phrases.** The text is normalized like the value index (`lorebase_store.values.normalize`:
+**Phrases.** The text is normalized like the value index (`lorebase_core.infer.phrases.normalize`:
 lower case, accents stripped, blanks collapsed) and split into words at blanks and at
 `search.resolve.separators`, `edges` stripped from each word (`Tokens`); other punctuation and
 combining marks stay in words, so `C++`, `S/M` or Devanagari words match as written. The whole
@@ -40,6 +40,11 @@ tells nothing a `lorebase_query` aggregate would not. On an overlay branch the i
 superset (the base's values too), so the kept candidates are counted again over the resolved
 rows and those no row holds are dropped. At another Revision (`at`) the read uses the Revision's
 snapshot, as search does.
+
+**What it did not find.** The runs of words no candidate covers are the resolution's unknown
+phrases (`coverage.unknown`, design 8.11); with `store.resolve_misses` on, they are handed to
+the miss recorder for vocabulary suggestions (design 8.10, `reading.misses`), unless the
+request opts out.
 """
 
 from __future__ import annotations
@@ -55,8 +60,11 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lorebase_core.infer.phrases import name_words, normalize
 from lorebase_core.model import Attribute, Kind, Schema
 from lorebase_core.types import AttributeType
+from lorebase_keeper.reading import coverage
+from lorebase_keeper.reading.misses import unknown_runs
 from lorebase_keeper.reading.points import ReadPoint
 from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.reading.requests import ResolveRequest, SearchRequest
@@ -76,8 +84,6 @@ from lorebase_store.layout import escape_colons
 Level = Literal["exact", "synonym", "trigram", "embedding"]
 LEVELS: tuple[Level, ...] = ("exact", "synonym", "trigram", "embedding")
 
-_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-
 
 @dataclass(frozen=True, slots=True)
 class Tokens:
@@ -89,7 +95,7 @@ class Tokens:
     edges: str = DEFAULT_EDGES
 
     def words(self, text_: str) -> list[str]:
-        normalized = value_index.normalize(text_)
+        normalized = normalize(text_)
         if self.separators:
             normalized = normalized.translate({ord(c): " " for c in self.separators})
         stripped = (w.strip(self.edges) for w in normalized.split(" "))
@@ -102,11 +108,6 @@ class Tokens:
 def words_of(text_: str, tokens: Tokens | None = None) -> list[str]:
     """The normalized words of a text."""
     return (tokens or Tokens()).words(text_)
-
-
-def name_words(api_name: str) -> str:
-    """An api name as words: `unit_price` and `UnitPrice` give `unit price`."""
-    return value_index.normalize(_CAMEL.sub(" ", api_name).replace("_", " ").replace(".", " "))
 
 
 def folded(word: str, rules: Sequence[tuple[str, str]]) -> list[str]:
@@ -383,9 +384,30 @@ def _levels(request: ResolveRequest, settings: ResolveSettings) -> frozenset[Lev
     return frozenset(enabled)
 
 
+@dataclass(frozen=True, slots=True)
+class Resolution:
+    """A resolution's response, and what it did not find: the `unknown` runs of words no
+    candidate covers and the `weak` phrases whose best candidate scores below
+    `search.resolve.misses.record_below_score`."""
+
+    response: ResolveResponse
+    unknown: list[str]
+    weak: list[str]
+
+
+def weak_phrases(candidates: Sequence[ResolveCandidate], below: float | None) -> list[str]:
+    """Phrases whose best candidate scores below `below` (none when it is None)."""
+    if below is None:
+        return []
+    best: dict[str, float] = {}
+    for candidate in candidates:
+        best[candidate.matched] = max(best.get(candidate.matched, 0.0), candidate.score)
+    return [phrase for phrase, score in best.items() if score < below]
+
+
 async def resolve(
     session: AsyncSession, runtime: ReadRuntime, point: ReadPoint, request: ResolveRequest
-) -> ResolveResponse:
+) -> Resolution:
     settings = runtime.search.resolve
     if len(request.text) > settings.max_text_chars:
         raise invalid(
@@ -407,10 +429,15 @@ async def resolve(
     words = tokens.words(request.text)[: settings.max_words]
     skipped: list[ResolveSkipped] = []
     if not words or not context.kinds:
-        return ResolveResponse(**served(point), candidates=[], unmatched=words)
+        unknown = unknown_runs(words, (), settings.max_phrase_words)
+        block = None
+        if coverage.wanted(request.coverage, runtime):
+            block = await coverage.for_resolution(session, runtime, point, [], [], unknown)
+        response = ResolveResponse(**served(point), candidates=[], unmatched=words, coverage=block)
+        return Resolution(response, unknown, [])
     point = await with_rows(session, runtime, point, "Resolution")
     context.point = point
-    phrases = phrases_of(words, settings, value_index.normalize(request.text))
+    phrases = phrases_of(words, settings, normalize(request.text))
     covered: set[int] = set()
     matches: list[Match] = []
     if context.levels & {"exact", "synonym"}:
@@ -430,8 +457,29 @@ async def resolve(
         matches += await _embedded(session, runtime, context, request, words, covered)
     candidates = await _candidates(session, context, matches, limit)
     unmatched = [w for i, w in enumerate(words) if i not in covered]
-    return ResolveResponse(
-        **served(point), candidates=candidates, unmatched=unmatched, skipped=skipped
+    unknown = unknown_runs(words, covered, settings.max_phrase_words)
+    block = None
+    if coverage.wanted(request.coverage, runtime):
+        by_name = {k.api_name: k for k in context.kinds.values()}
+        kinds = {c.kind: by_name[c.kind] for c in candidates}
+        attributes = [
+            (kinds[c.kind].id, a.id)
+            for c in candidates
+            for a in kinds[c.kind].attributes.values()
+            if a.api_name == c.attribute
+        ]
+        block = await coverage.for_resolution(
+            session, runtime, point, [kinds[n] for n in sorted(kinds)], attributes, unknown
+        )
+    response = ResolveResponse(
+        **served(point),
+        candidates=candidates,
+        unmatched=unmatched,
+        skipped=skipped,
+        coverage=block,
+    )
+    return Resolution(
+        response, unknown, weak_phrases(candidates, settings.misses.record_below_score)
     )
 
 

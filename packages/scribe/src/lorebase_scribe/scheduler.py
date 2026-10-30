@@ -20,6 +20,9 @@ Each tick of the leader:
   pass is reused);
 - queues a `value_index` pass per Domain every `value_index_interval_s` (reused like the
   embedding pass; a Domain whose default branch did not move costs one read);
+- queues a `coverage` pass per Domain every `coverage_interval_s` and a
+  `vocabulary_consolidation` pass per Domain every `consolidation_interval_s` while resolution
+  misses are recorded (reused like the embedding pass);
 - queues a `reconcile_sweep` of each Domain's default branch every
   `scribe.reconciliation.sweep_interval_s` when it is above 0 (reused like the embedding pass);
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
@@ -53,11 +56,14 @@ from lorebase_scribe.telemetry import GC_SCHEDULED, QUEUE_DEPTH, SCHEDULED, trac
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.jobs import (
+    CONSOLIDATION_JOB,
+    COVERAGE_JOB,
     EMBEDDINGS_JOB,
     GC_JOB,
     RECONCILE_SWEEP_JOB,
     SOURCE_SYNC_JOB,
     VALUE_INDEX_JOB,
+    coverage_payload,
     embeddings_payload,
     enqueue_job,
     queue_depth,
@@ -104,8 +110,10 @@ class Scheduler:
         clock: Callable[[], datetime] = utc_now,
         checkpoint_interval_s: float = 0.0,
         reconcile_interval_s: float = 0.0,
+        consolidation_interval_s: float = 0.0,
     ) -> None:
         self._engine = engine
+        self._consolidation_interval_s = consolidation_interval_s
         self._reconcile_interval_s = reconcile_interval_s
         self._checkpoint_interval_s = checkpoint_interval_s
         self._sessions = sessions
@@ -240,6 +248,8 @@ class Scheduler:
         embed = self._interval_due(EMBEDDINGS_JOB, self._settings.embeddings_interval_s, now)
         sweep = self._interval_due(RECONCILE_SWEEP_JOB, self._reconcile_interval_s, now)
         values = self._interval_due(VALUE_INDEX_JOB, self._settings.value_index_interval_s, now)
+        counts = self._interval_due(COVERAGE_JOB, self._settings.coverage_interval_s, now)
+        consolidate = self._interval_due(CONSOLIDATION_JOB, self._consolidation_interval_s, now)
         self._gc_queued = 0
         queued: list[int] = []
         after: str | None = None
@@ -283,6 +293,22 @@ class Scheduler:
                             domain_id=domain.id,
                             payload=value_index_payload(),
                             unique=True,
+                        )
+                    )
+                if counts:
+                    queued.append(
+                        await enqueue_job(
+                            session,
+                            COVERAGE_JOB,
+                            domain_id=domain.id,
+                            payload=coverage_payload(),
+                            unique=True,
+                        )
+                    )
+                if consolidate:
+                    queued.append(
+                        await enqueue_job(
+                            session, CONSOLIDATION_JOB, domain_id=domain.id, unique=True
                         )
                     )
                 if sweep:

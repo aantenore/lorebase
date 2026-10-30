@@ -18,11 +18,18 @@ class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+COVERAGE = (
+    "Add the coverage block (design 8.11): missing values of the Attributes used, Source "
+    "freshness. Default: read.coverage.enabled."
+)
+
+
 class QueryRequest(Query):
     """A DSL query (design 8.2) and where to read it."""
 
     branch: str | None = Field(default=None, description="Default: the Domain's default branch.")
     at: str | None = Field(default=None, description=AT)
+    coverage: bool | None = Field(default=None, description=COVERAGE)
 
 
 class RecordAddress(_Body):
@@ -144,3 +151,9 @@ class ResolveRequest(_Body):
         "embedding level when nothing else matched.",
     )
     limit: int | None = Field(default=None, ge=1, description="Candidates returned.")
+    coverage: bool | None = Field(default=None, description=COVERAGE)
+    record_misses: bool = Field(
+        default=True,
+        description="false: never keep the phrases that matched nothing for vocabulary "
+        "suggestions (they are kept only where the operator turned it on).",
+    )

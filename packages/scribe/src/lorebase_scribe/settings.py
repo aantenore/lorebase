@@ -106,6 +106,20 @@ class SchedulerSettings(SectionModel):
         "Attributes it holds follow the default branch's schema and distinct values; a Domain "
         "whose default branch did not move costs one read. 0 disables it.",
     )
+    coverage_interval_s: float = Field(
+        default=300.0,
+        ge=0,
+        description="Queue a coverage statistics pass of every Domain this often "
+        "(store.coverage): Records and missing values per Kind of the default branch head; a "
+        "Domain whose head did not move costs one read. 0 disables it.",
+    )
+    consolidation_interval_s: float = Field(
+        default=3600.0,
+        ge=0,
+        description="Queue a consolidation pass of every Domain this often while "
+        "store.resolve_misses.enabled (scribe.consolidation): expired resolution misses are "
+        "pruned, frequent ones proposed as vocabulary suggestions. 0 disables it.",
+    )
     audit_verify_interval_s: float = Field(
         default=86400.0,
         ge=0,
@@ -506,6 +520,75 @@ class AuditCheckpointSettings(SectionModel):
         return self
 
 
+class ConsolidationLlmSettings(SectionModel):
+    """Optional model step of the consolidation pass: a description proposed for Attributes
+    that agents often missed, routed through `inference.llm.tasks.schema_consolidation`. The
+    model sees schema names, types, descriptions and the missed phrases only, never values;
+    every proposal must quote missed phrases as its evidence."""
+
+    enabled: bool = Field(default=False, description="Run the model step.")
+    min_misses: int = Field(
+        default=10,
+        ge=1,
+        description="Misses linked to an Attribute (summed over its alias suggestions) before "
+        "a description is proposed for it.",
+    )
+    max_attributes: int = Field(
+        default=5, ge=1, description="Attributes described per pass, the most missed first."
+    )
+    max_phrases: int = Field(
+        default=20, ge=1, description="Missed phrases shown to the model per Attribute."
+    )
+    max_description_chars: int = Field(
+        default=500, ge=20, description="Longer proposed descriptions are discarded."
+    )
+    max_tokens_per_pass: int = Field(
+        default=20_000,
+        ge=1,
+        description="Tokens one pass may spend; calls that do not fit are skipped.",
+    )
+
+
+class ConsolidationSettings(SectionModel):
+    """Consolidation of resolution misses into vocabulary suggestions (design 8.10): the
+    phrases agents asked `lorebase_resolve` for that matched nothing become proposed aliases
+    of the values, Attributes and Kinds they nearly matched, reviewed like any schema
+    suggestion. Recording, retention and bounds are `store.resolve_misses`; support is
+    counted per phrase and suggestions also need `schema.suggestions.min_support` to list."""
+
+    min_misses: int = Field(
+        default=3, ge=1, description="Misses a phrase needs before it is considered."
+    )
+    min_callers: int = Field(
+        default=1,
+        ge=1,
+        description="Distinct callers a phrase needs before it is considered (raise it so "
+        "that one agent's habit is not proposed).",
+    )
+    max_phrases: int = Field(
+        default=200, ge=1, description="Phrases considered per pass, the most missed first."
+    )
+    value_similarity: float = Field(
+        default=0.3,
+        gt=0,
+        le=1,
+        description="Least trigram similarity between a phrase and an indexed value for the "
+        "phrase to be proposed as the value's alias (below search.resolve.trigram_threshold: "
+        "the near misses resolution did not return).",
+    )
+    name_similarity: float = Field(
+        default=0.75,
+        gt=0,
+        le=1,
+        description="Least similarity (schema.suggestions name comparison) between a phrase "
+        "and a Kind or Attribute name for the phrase to be proposed as its alias.",
+    )
+    values_per_phrase: int = Field(
+        default=3, ge=1, le=50, description="Similar values compared per phrase."
+    )
+    llm: ConsolidationLlmSettings = Field(default_factory=ConsolidationLlmSettings)
+
+
 class ScribeSettings(SectionModel):
     """Scribe, the ingestion and maintenance worker."""
 
@@ -515,6 +598,7 @@ class ScribeSettings(SectionModel):
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     embeddings: EmbeddingJobSettings = Field(default_factory=EmbeddingJobSettings)
     audit_checkpoints: AuditCheckpointSettings = Field(default_factory=AuditCheckpointSettings)
+    consolidation: ConsolidationSettings = Field(default_factory=ConsolidationSettings)
     reconciliation: ReconcileOptions = Field(
         default_factory=ReconcileOptions,
         description="Detection of contradictions between Sources (design 10.6); a Domain "

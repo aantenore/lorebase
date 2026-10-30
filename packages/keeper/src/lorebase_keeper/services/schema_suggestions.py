@@ -11,6 +11,13 @@ Listings compare each suggestion with the default branch's schema of now: one th
 an element meanwhile is flagged (`duplicate_of`) and cannot be accepted, and one that
 duplicates a sensitive Attribute the caller may not read is listed without examples and
 samples.
+
+Vocabulary suggestions (design 8.10: aliases of Kinds, Attributes and values, Attribute
+descriptions) come from Scribe's consolidation of resolution misses and are reviewed the same
+way: accepting one changes the existing element in the change set. One whose Attribute the
+caller may not read values of is listed without its phrases, samples and payload (a value
+alias names a stored value); accepting one for an Attribute that became sensitive, vault or
+not resolvable meanwhile is refused (`vocabulary_open`).
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from typing import Any
 
 from lorebase_core.infer.suggestions import (
     PROPOSED,
+    VOCABULARY,
     AttributeGuess,
     ExistingMatch,
     Suggestion,
@@ -69,6 +77,8 @@ class SuggestionView:
     guess: AttributeGuess | None
     duplicate: ExistingMatch | None
     withheld: bool
+    attribute: str | None = None
+    """Api name of the Attribute a vocabulary suggestion changes."""
 
 
 @dataclass(frozen=True)
@@ -130,15 +140,19 @@ def view_of(
 ) -> SuggestionView:
     """What a listing shows of `row` against `schema` for a caller with `masking`."""
     type_ = SuggestionType(row.suggestion_type)
+    value = row.payload.get("value")
     duplicate = existing_match(
         schema,
         type_,
         row.name,
         kind=row.kind_ref,
         target=row.target_ref,
+        value=value if isinstance(value, str) else None,
         options=options,
         tags=sensitive_attributes(schema),
     )
+    if type_ in VOCABULARY:
+        return _vocabulary_view(row, schema, duplicate, masking)
     withheld = False
     if duplicate is not None and duplicate.sensitive:
         owner = schema.attribute_owner(duplicate.id)
@@ -155,6 +169,30 @@ def view_of(
         guess=guess,
         duplicate=duplicate,
         withheld=withheld,
+    )
+
+
+def _vocabulary_view(
+    row: SuggestionRow,
+    schema: Schema,
+    duplicate: ExistingMatch | None,
+    masking: Masking | None,
+) -> SuggestionView:
+    """A vocabulary suggestion: withheld when its Attribute's values are masked for the
+    caller (or the Attribute is gone, or no masking is known)."""
+    kind = schema.kinds.get(row.kind_ref or "")
+    attribute = None if kind is None else kind.attributes.get(row.target_ref or "")
+    withheld = attribute is not None and (
+        masking is None or masking.hidden(attribute, (kind.id,) if kind else ())
+    )
+    return SuggestionView(
+        row=row,
+        kind=_kind_label(schema, row.kind_ref),
+        target=None,
+        guess=None,
+        duplicate=duplicate,
+        withheld=withheld,
+        attribute=None if attribute is None else attribute.api_name,
     )
 
 
@@ -303,8 +341,15 @@ def _patch(
     suggestions: list[Suggestion] = []
     for index, (decision, row) in enumerate(rows):
         type_ = SuggestionType(row.suggestion_type)
+        value = row.payload.get("value")
         duplicate = existing_match(
-            schema, type_, row.name, kind=row.kind_ref, target=row.target_ref, options=options
+            schema,
+            type_,
+            row.name,
+            kind=row.kind_ref,
+            target=row.target_ref,
+            value=value if isinstance(value, str) else None,
+            options=options,
         )
         if duplicate is not None:
             raise invalid(
@@ -321,6 +366,7 @@ def _patch(
                 target=row.target_ref,
                 samples=tuple(row.samples),
                 labels=tuple(row.labels),
+                payload=dict(row.payload),
             )
         )
     try:
@@ -391,7 +437,7 @@ async def _accept(
                 source_ref=branch,
                 target_ref=default_branch,
                 title=f"Schema suggestions: {names}"[:200],
-                description="Suggested by document extraction: "
+                description=_origin(rows)
                 + ", ".join(f"{row.suggestion_type} {row.name} ({row.id})" for _, row in rows),
             ),
             principal,
@@ -408,6 +454,15 @@ async def _accept(
     outcome.changes = applied.changes
     outcome.proposal_id = created.view.proposal.id
     outcome.proposal_title = created.view.proposal.title
+
+
+def _origin(rows: Sequence[tuple[DecisionInput, SuggestionRow]]) -> str:
+    vocabulary = {SuggestionType(row.suggestion_type) in VOCABULARY for _, row in rows}
+    if vocabulary == {True}:
+        return "Suggested by the consolidation of resolution misses: "
+    if vocabulary == {False}:
+        return "Suggested by document extraction: "
+    return "Suggested by document extraction and resolution misses: "
 
 
 async def _drop(store: StoreAccess, domain_id: str, branch: str, settings: BranchSettings) -> None:

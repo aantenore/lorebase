@@ -222,7 +222,7 @@ def create_app(
     traces = _trace_recorder(keeper.trace, database, trace_sink, telemetry)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         if search_check is not None:
             found = (await run_checks([search_check], keeper.readiness.timeout_s))[
                 search_check.name
@@ -232,6 +232,9 @@ def create_app(
         try:
             yield
         finally:
+            read_runtime = getattr(application.state, "read_runtime", None)
+            if read_runtime is not None and read_runtime.misses is not None:
+                await read_runtime.misses.aclose()
             if reads is not None:
                 await reads.aclose()
             if traces is not None:
