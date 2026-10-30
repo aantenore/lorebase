@@ -1,5 +1,5 @@
 import type { ContextPack, SearchResult } from '@/api/types';
-import { readEmbedAnswer, parseVector } from './guide-client';
+import { readEmbedAnswer, parseVector } from '@/api/guide-client';
 import { involvedRefs, labHighlight } from './lab-graph';
 import { budgetReport, explainPack } from './pack-explain';
 import { defaultParams, toRequest } from './params';
