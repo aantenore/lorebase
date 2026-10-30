@@ -24,7 +24,9 @@ Three properties hold on every read an agent makes:
    holds the Records, their neighborhood, the schema of what is in it, recent changes and
    lineage, within a token budget you choose.
 2. **Then targeted reads** when the pack is not enough: one Record, one Relation, a DSL query,
-   a traversal, a search (design 8 and 11.1).
+   a traversal, a search (design 8 and 11.1). When the task is phrased in someone's words,
+   resolve them first (`POST /resolve`, below) to learn which Kinds, Attributes and values
+   they mean.
 3. **Ask why** with `GET .../explain` before acting on a surprising value.
 4. **Write through Operations** (`POST /operations/{op}/execute`), with `dry_run` first and an
    `idempotency_key`; pass `expected_head` (the `revision` of your pack) to fail instead of
@@ -230,12 +232,43 @@ POST /api/v1/domains/supply/context
 | the Links of a Record along a Relation | `GET /kinds/{kind}/records/{key}/links/{relation}` |
 | every change of one Record on a branch | `GET /kinds/{kind}/records/{key}/history` (section 3) |
 | where each current value of a Record came from | `GET /kinds/{kind}/records/{key}/lineage` (section 3) |
+| which Kinds, Attributes and stored values the words of a question mean | `POST /resolve` (below, design 8.9) |
 | Records matching a filter | `POST /query` (design 8.2) |
+| how many Records per value of an Attribute | `POST /query` with `"aggregate": {"group_by": "attr"}` |
 | a path of Relations | `POST /traverse` |
 | the graph around some Records | `POST /neighborhood` (`values: false` for headers and Link endpoints only) |
 | Records by text or vector, by Kind, Trait or lens | `POST /search` |
 | what changed between two Revisions | `GET /diff?from=&to=` |
 | whether the data is sound | `GET /health`, `GET /kinds/{kind}/health` (section 6) |
+
+### Resolve words before querying
+
+`POST /resolve` grounds the words of a question in the schema and the stored values; it does
+not interpret the question, run a query or call a model. For "average price of red shoes" on a
+retail Domain:
+
+```json
+{"candidates": [
+  {"target": "attribute", "kind": "Product", "attribute": "price", "type": "decimal(10,2)",
+   "score": 1.0, "level": "exact", "matched": "price"},
+  {"target": "value", "kind": "Product", "attribute": "color", "type": "string",
+   "values": ["Rosso", "red"], "predicate": {"attr": "color", "op": "in", "value": ["Rosso", "red"]},
+   "score": 1.0, "level": "exact", "matched": "red", "records": 120},
+  {"target": "value", "kind": "Product", "attribute": "category", "type": "string",
+   "values": ["Calzature"], "predicate": {"attr": "category", "op": "eq", "value": "Calzature"},
+   "score": 0.95, "level": "synonym", "matched": "shoes", "records": 100}],
+ "unmatched": ["average", "of"], "skipped": [{"level": "embedding", "reason": "other levels matched"}]}
+```
+
+The agent then writes the query itself, for example a `POST /query` on `Product` with
+`{"and": [<color predicate>, <category predicate>]}`, selecting `price`. Levels, tried per
+phrase of one to three words: exact names and indexed values, schema aliases (`aliases` on Kinds
+and Attributes, `value_aliases` on Attributes: `Rosso: [red]`), similar spelling (trigrams), and,
+only when nothing else matched and the request carries a `query_vector`, the values of the
+nearest Records. Candidates never name a Kind or Attribute the caller may not read; values of
+sensitive Attributes are never indexed. Which Attributes have their values indexed is decided
+per Domain (enums always, short strings with few distinct values, `resolvable: true|false` in
+the schema to force it; [operations](operations.md#value-index)).
 
 ## 3. Explain a Record
 

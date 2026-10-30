@@ -59,6 +59,25 @@ An instance of a Relation between two Records, with optional link Attribute valu
 
 Example: `Part/P-77812 supplied_by Supplier/S-1001` with `is_primary = true`.
 
+### Alias
+
+Another word for a Kind, an Attribute (`aliases`) or a stored value (`value_aliases`, keyed by
+the value), written in the schema and versioned with it. Resolution matches them at its
+`synonym` level.
+
+### Resolution
+
+Matching the words of a text against the schema and the value index: ranked candidate Kinds,
+Attributes and values, each with the words matched, a level and, for values, a ready-to-use
+predicate (`POST /resolve`, `lorebase_resolve`). It never interprets the question or runs a
+query.
+
+### Value index
+
+Per branch, the distinct short values of selected Attributes and how many Records hold each
+(`mat_values`), kept by triggers on every write. Enums are always selected, plain strings while
+their distinct values stay few; `resolvable` in the schema forces an Attribute in or out.
+
 ## Versioning
 
 ### Branch

@@ -1403,6 +1403,47 @@ Recommended Postgres settings (compose `.env.example`, Helm `ci/storage-<profile
 | `huge_pages` | off | try | on |
 | `shared_preload_libraries` | | | `pg_prewarm` (autoprewarm) |
 
+## Resolution
+
+`POST /resolve` ([design 8.9](design.md#89-resolution-words-to-schema-and-values)) and the
+upkeep of its value index, measured by `tests/perf/resolve_bench.py` on 2026-10-30.
+
+- 100,000 Products of a retail-like Domain (category 20 values, color 12, brand 200, a size
+  enum, a two-element tags array, unique names, prices), loaded through the commit pipeline in
+  20 commits (33 s). The selection pass held 5 Attributes (category, color, brand, size, tags;
+  names and SKUs fall out by `store.values.max_distinct_ratio`), 243 value rows; its backfill of
+  every Record took 2.47 s under the `SHARE` lock on `mat_records`.
+- Resolution: the Keeper application in process (ASGI, no socket), a role subject to row-level
+  security, definer functions on, response cache and rate limits off; 500 timed calls per set
+  after 50 warm-up calls, random texts of 3 to 5 words. `levels 1-2`: texts whose words are
+  names, values and aliases, with only the exact and synonym levels; `level 3`: misspelled
+  texts with only the trigram level; `all levels`: both sets, every level.
+- Upkeep: commits updating the color of 500 Products, 10 with color held in the index and 10
+  with the index switched off (`store.values.enabled: false`: the triggers probe an empty
+  selection), in two alternating rounds.
+- Apple M5 Pro, Darwin 25.6.0 arm64, Python 3.12.13, Postgres 16.15 in Docker (testcontainers
+  defaults).
+
+| Resolution | Target p95 | p50 ms | p95 ms | p99 ms |
+|------------|-----------:|-------:|-------:|-------:|
+| levels 1-2 (exact, synonym) | 20.00 | 7.13 | 11.48 | 15.56 |
+| level 3 (trigram) | | 7.87 | 13.65 | 24.73 |
+| all levels, mixed text | | 9.22 | 14.17 | 22.47 |
+
+| Commit of 500 color updates | p50 ms | p95 ms |
+|-----------------------------|-------:|-------:|
+| value index on | 683.8 | 1052.0 |
+| value index off | 638.6 | 685.8 |
+
+The times are end to end through FastAPI and include the read transaction, the scope round
+trip and the response; the lookups themselves are a btree probe per phrase form (levels 1-2)
+and one call of `lb_values_similar` (level 3) on a table of a few hundred rows, so they do not
+grow with the Records of the Domain, only with its distinct values. The triggers add about
+45 ms to a commit of 500 updated Records (about 90 µs per Record, 7%); commits that change no
+held Attribute skip the rows (`values` unchanged). The p95 of the "on" commits includes the
+first commits after each switch, which also pay for planning. Run it with
+`uv run python tests/perf/resolve_bench.py [--records N] [--out FILE]`.
+
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
 Measured by `pnpm perf:canvas` in `apps/web` on the generated graph of the mock API (`VITE_MOCK_PERF_NODES=5000`, `VITE_MOCK_PERF_EDGES=10000`, `VITE_CANVAS_MAX_NODES=5000`): a production build served by `vite preview`, opened in headless Chromium with a software WebGL (SwiftShader), 1440x900, median of 3 runs, 2026-10-22, same machine as above. Time to first render is navigation start to the second animation frame after the canvas exists. The pan is 80 mouse moves with the button down; frame time is the gap between animation frames while it runs. Software WebGL makes every frame slower than on a GPU, so read the numbers as a comparison between the two rows, not as what a laptop shows.

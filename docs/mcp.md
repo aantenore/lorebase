@@ -186,7 +186,8 @@ example `Supplier/S-1001`.
 | `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `traits?`, `lens?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
 | `lorebase_schema` | `kinds?`, `detail?: summary or full` | Kinds with attribute types (`!` = required), key, title, built-in Operations; Relations; custom Operations with parameters and review policy | `GET .../schema` |
 | `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation | `GET .../kinds/{kind}/records/{key}` |
-| `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate, `next_cursor` | `POST .../query` |
+| `lorebase_resolve` | `text`, `kinds?`, `levels?`, `query_vector?`, `limit?`, `at?` | ranked candidates the words may stand for: Kinds, Attributes (with type) and stored values with a ready-to-use `where` predicate and Record count, each with its level (`exact`, `synonym`, `trigram`, `embedding`) and the words matched; `unmatched` words; skipped levels | `POST .../resolve` |
+| `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate (`"aggregate": {"group_by": attr}` counts Records per value), `next_cursor` | `POST .../query` |
 | `lorebase_search` | `query?`, `kinds?`, `traits?`, `lens?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated_candidates` when every term was so common that only a sample of the matches was ranked, `truncated` when the vector list stopped short of its size while more Records match the filters | `POST .../search` |
 | `lorebase_neighborhood` | `seeds: [ref]`, `depth`, `relations?`, `max_nodes?`, `max_edges?`, `values?` | nodes and edges, `truncated` when Keeper caps were reached; without `values` (the default) Keeper returns Record headers and Link endpoints only | `POST .../neighborhood` (`values: false` unless `values`) |
 | `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
@@ -248,7 +249,11 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
 1. **Context first.** Call `lorebase_context` with the Records the task is about, or with a
    short `question`. One call returns the seeds, their links, nearby Records and the schema of
    the Kinds involved, within a budget.
-2. **Then targeted reads.** `lorebase_get` for one Record, `lorebase_query` for filtered lists,
+2. **Ground the words, then read.** When a question names things in its own words ("red
+   shoes", "stores in Milan"), `lorebase_resolve` says which Kinds, Attributes and stored
+   values they stand for and gives the `where` fragments; it never runs the query. Then
+   `lorebase_get` for one Record, `lorebase_query` for filtered lists and counts
+   (`"aggregate": {"group_by": attr}`),
    `lorebase_search` to find Records by words, `lorebase_neighborhood` for more links,
    `lorebase_explain` before trusting a value, `lorebase_changes` and `lorebase_diff` to catch
    up with what changed since a Revision seen earlier.

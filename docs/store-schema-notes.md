@@ -202,6 +202,22 @@ as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
 `ix_mat_records_branch_title` and moves trigram matching to the distinct words of a branch
 (the pg_trgm documentation's approach for unique words):
 
+- (Revision `0045`, design 8.9.) `mat_values(domain_id, branch, kind_id, attribute_id, value,
+  norm, records)` applies the same scheme to the values of the Attributes listed in
+  `mat_value_attributes(domain_id, kind_id, attribute_id, max_chars)`: statement triggers
+  `lb_values_maintain` on `mat_records` (insert, update, delete, transition tables, the same
+  plan choice) count per branch the string values and string array elements of those
+  Attributes, at most `max_chars` long, skipping rows whose `values` did not change and rows of
+  a ref that is gone; spent values go through `ix_mat_values_spent`. `norm` is
+  `lb_value_norm(value)` (lower case, NFD with combining marks removed, blanks collapsed), served
+  by a btree and a trigram GIN index on `(domain_id, branch, norm)`. The selection is
+  Domain-wide and decided by `lorebase_store.values.sync_selection` (Scribe `value_index`),
+  which backfills a new Attribute under `LOCK TABLE mat_records IN SHARE MODE` so that no write
+  falls between the backfill and the triggers seeing it; `mat_value_cursors` remembers the
+  default branch head and fingerprint of the last pass. `lb_values_similar` is a security
+  definer read function with the checks and grants of revision 0008 (bounded `p_limit`, at
+  most 64 terms, Domain in scope, fixed `search_path`). Row-level security as for the other
+  Domain tables; `mat_values` rows go with their ref.
 - `mat_lexicon(domain_id, branch, kind_id, word, records)`: per Kind, the lexemes of the
   branch's own search vectors and the number of its rows that hold each, without lexemes that
   have a digit or more than 64 characters (`lb_lexicon_word`; codes and keys are not

@@ -250,6 +250,44 @@ run leaves an invalid `..._ccnew` index: drop it and run again. Search keeps ans
 old index until the new one replaces it. Keep `store.storage` in line, so that an index built
 later matches.
 
+## Value index
+
+Resolution (`POST /resolve`, [design 8.9](design.md#89-resolution-words-to-schema-and-values))
+matches words against `mat_values`, the distinct short values of selected Attributes per
+branch. Triggers on `mat_records` keep it current on every write; which Attributes it holds is
+decided per Domain by a Scribe `value_index` pass, queued every
+`scribe.scheduler.value_index_interval_s` (300 s; 0 turns the schedule off). A pass reads the
+default branch: enums and Attributes marked `resolvable: true` are held; sensitive, vault,
+derived, `resolvable: false` and non-string Attributes never are; a plain string Attribute while
+its distinct values stay within `store.values.max_distinct` (1000) and, once its Kind holds
+`ratio_min_records` (50) Records, within `max_distinct_ratio` (0.2) of them. Values longer than
+`max_value_chars` (64) are left out. A pass on an unchanged default branch with unchanged
+settings costs one read.
+
+**After the upgrade.** Migration `0045` creates the tables, the triggers and the definer
+function `lb_values_similar` (granted to `database.application_role`; for a role created later,
+`grant_read_functions` as for the other read functions). It selects nothing, so the index starts
+empty: names and aliases resolve at once, values after the first pass (at most one interval
+after Scribe starts), or right away with:
+
+```bash
+lorebase-scribe value-index DOMAIN            # decide the selection and backfill it
+lorebase-scribe value-index DOMAIN --rebuild  # recount every value from the Records
+```
+
+Adding an Attribute to the selection backfills it on every branch of the Domain under a
+`SHARE` lock on `mat_records`: writes of every Domain wait for it (reads do not), about 2.5 s
+for five Attributes over 100,000 Records ([performance](performance.md#resolution)); the lock
+wait is bounded by `store.commit.lock_timeout_ms`, and a pass that cannot get it fails and is
+retried like any job. Run the first pass of a large install in a quiet period. `--rebuild` is
+the repair path: it recounts the Domain from its Records and should leave the table unchanged
+(the tests check that triggers and recount agree). `store.values.enabled: false` drops every
+selection on the next pass; resolution then matches schema names and aliases only.
+
+Watch `mat_values` with the other materialized tables: it holds one row per branch and distinct
+value, so it stays small unless thresholds are raised. Settings: `store.values` (selection) and
+`search.resolve` (matching levels, thresholds, plural rules, scores, limits).
+
 ## Approval rules and automatic merges
 
 `scribe.sources.auto_merge_protected` and `scribe.extraction.direct_merge_protected` (both on by
