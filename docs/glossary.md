@@ -61,9 +61,13 @@ Example: `Part/P-77812 supplied_by Supplier/S-1001` with `is_primary = true`.
 
 ### Alias
 
-Another word for a Kind, an Attribute (`aliases`) or a stored value (`value_aliases`, keyed by
-the value), written in the schema and versioned with it. Resolution matches them at its
-`synonym` level.
+Another word for a Kind or an Attribute (`aliases`), written in the schema and versioned with
+it. Resolution matches them at its `synonym` level. For a stored value, see Value alias.
+
+### Value alias
+Another word for one stored value of an Attribute, written in the schema as `value_aliases`, keyed by the value. On an enum the keys must be values of the enum. Resolution turns the word into a predicate on the stored value ([modeling](modeling.md#words-for-resolution)).
+
+Example: `country: {value_aliases: {IT: [Italy, Italia]}}` makes "suppliers in Italy" resolve to a predicate on `country` with the stored value `IT`.
 
 ### Resolution
 
@@ -78,12 +82,27 @@ Per branch, the distinct short values of selected Attributes and how many Record
 (`mat_values`), kept by triggers on every write. Enums are always selected, plain strings while
 their distinct values stay few; `resolvable` in the schema forces an Attribute in or out.
 
+### Resolvable
+The schema flag that forces an Attribute into the Value index (`resolvable: true`) or keeps it out (`false`). Unset, enums are held and plain strings while their distinct values stay few; sensitive, vault, derived and link Attributes never are ([operations](operations.md#value-index)).
+
+Example: `Supplier.city` has too many distinct values for the automatic selection; `resolvable: true` makes "suppliers in Turin" resolve anyway.
+
+### Vault
+Encrypted storage, outside history, for the values of `pii` Attributes declared `vault: true`. Record objects hold a token instead of the value, so `lorebase admin erase` removes a person's data while every Revision keeps its hash; erased values read as `[erased]` for cleared callers ([design 13.5](design.md#135-personal-data-and-erasure)).
+
+Example: `Supplier.contact_email` is a vault Attribute; after an erasure request the old Revisions still verify, and the address is gone from all of them.
+
 ## Versioning
 
 ### Branch
 A named, movable pointer to a Revision. Branches isolate work in progress; protected Branches change only through Proposals and permitted Operations.
 
 Example: `model/risk` holds Marco's schema changes to the risk model while `main` keeps serving agents.
+
+### Overlay
+A Branch that stores only the rows it changed and reads everything else from its base Branch as of its fork point, instead of a full copy of the rows. Agent task Branches and Source and extraction Branches are overlays by default; an overlay that grows past its limits becomes a full copy ([store schema notes](store-schema-notes.md#overlay-branches)).
+
+Example: `agent/svc_risk/q4-audit` holds the two rows its risk flag wrote, and reads the other 1M Records from `main`.
 
 ### Revision
 An immutable snapshot of schema and data together, identified by the hash of its content, with parent Revisions, author, message and origin.
@@ -100,10 +119,31 @@ A value someone other than a Source (a person through an Operation, a Conflict r
 
 Example: Sofia corrects `Supplier/S-1003.risk_score` to `10`; the nightly sync keeps it while the CSV still says `32`, and opens a `DV1` (base `32`, ours `10`, theirs `71`) the night the CSV says `71`.
 
+### Last-written state
+Per Source and target Branch, the hash of each value the Source last wrote (`source_written`), never the value. A run compares the fresh upstream value with it, not with the current value, which is how a Local edit is told from an upstream change. It advances only when the Source's Proposal merges ([Scribe](scribe.md#corrections-that-stick)).
+
+### Stale after
+A Source setting (`stale_after`, an ISO 8601 duration; incremental Sources only) after which a Record the Source wrote but no run has read again is raised as a `stale` Reconciliation candidate with signal `source_unseen`. Nothing is deleted on that signal ([Scribe](scribe.md#incremental-sources-and-upstream-deletions)).
+
+Example: `erp.purchase_orders` sets `stale_after: P30D`; an order the ERP query stopped returning in March is raised for review in April.
+
 ### Conflict
 A disagreement found while merging. Attribute-level Conflicts arise when both sides changed the same value differently; structural Conflicts arise when the merged schema and data would break a rule (removed Kind with new Records, failed type cast, cardinality violation, and others). A long text edited in different sentences on each side is merged, not a Conflict; when the same sentence changed on both sides, the resolver shows the text passage by passage.
 
 Example: on `cleanup/tiers` Sofia set `Supplier/S-1001.tier` to `"1"` while the nightly sync set it to `"3"` on `main`: Conflict `DV1`, resolved by taking the ERP value under the authority policy.
+
+### Text merge
+The merge of two different values of a `text` Attribute by sentence (or paragraph): edits to different sentences are all kept, recorded as resolver `policy:text_merge`; only the passages both sides changed conflict. On by default, settable per Domain, Kind, Relation or Attribute in the Domain's `merge_policy` ([governance](governance.md#text-merge)).
+
+Example: Sofia shortens the first sentence of a Contract's notes while Luca adds a sentence at the end; the merged notes hold both edits.
+
+### Hunk
+One region of a text Conflict, in order: `clean` (merged text included) or `conflict` (base, ours and theirs). A text Conflict carries the whole text as hunks in `details.text_hunks`, and a conflicting hunk is narrowed to the words that differ.
+
+Example: in "Payment within 60 days", one side wrote 45 and the other 30: the conflicting hunk is `60` / `45` / `30`, the rest of the sentence is clean.
+
+### Passage
+A conflicting hunk as the Conflict resolver shows it: base, ours and theirs with the changed words marked, and a choice (ours, theirs, both in either order, base, or an edit). Once every passage has a choice, the merged text is the resolution ([tour](tour.md#merge-attempt-and-conflict-resolver)).
 
 ### Claim
 One value for one Attribute of one Record together with where it comes from: the provenance of a value that is or was on a Branch, or a Proposal item with its evidence when it is only proposed. Its source identity (`source:{id}`, `document:{id}`, `principal:{id}`, `import:{batch}`) says who claims it.
@@ -134,6 +174,11 @@ Example: the Domain `supply` sets `direct` for documents keyed `feeds/erp/` and 
 A role that looks after part of a Domain: the schema names steward roles on the Domain and per Kind, and the Proposals and reconciliation candidates touching those Kinds are routed to the principals holding them (the assignees), who must also be able to read and act on the work. A steward role grants nothing by itself.
 
 Example: `Supplier` declares `stewards: [risk-analyst]`; a Proposal changing suppliers lists the risk analysts as assignees, `GET .../proposals?assigned=me` shows it to them, and a protected branch may require one of their approvals (`required_approvals_from_stewards`).
+
+### Required roles
+A protection rule of protected Branches (`required_roles`, in `keeper.proposals` or a Domain setting): each listed role needs one approval from a principal holding it before a Proposal merges. Automatic merges stop while it applies ([governance](governance.md#approvals)).
+
+Example: `required_roles: [legal]` holds every Proposal into `main` until someone with the `legal` role approves it.
 
 ### Lineage
 Where a Record and each of its values came from: Source row, document span, Operation invocation, merge resolution or schema migration, with the Revision that introduced it.

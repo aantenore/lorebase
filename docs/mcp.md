@@ -191,7 +191,7 @@ example `Supplier/S-1001`.
 | `lorebase_search` | `query?`, `kinds?`, `traits?`, `lens?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated_candidates` when every term was so common that only a sample of the matches was ranked, `truncated` when the vector list stopped short of its size while more Records match the filters | `POST .../search` |
 | `lorebase_neighborhood` | `seeds: [ref]`, `depth`, `relations?`, `max_nodes?`, `max_edges?`, `values?` | nodes and edges, `truncated` when Keeper caps were reached; without `values` (the default) Keeper returns Record headers and Link endpoints only | `POST .../neighborhood` (`values: false` unless `values`) |
 | `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
-| `lorebase_history` | `ref`, `values?`, `limit?`, `cursor?` | changes of the Record newest first: Revision, time, author, created/updated/deleted, changed attributes (with before -> after when `values`), `next_cursor` | `GET .../records/{key}/history` |
+| `lorebase_history` | `ref`, `values?`, `limit?`, `cursor?`, `at?` | changes of the Record newest first: Revision, time, author, created/updated/deleted, changed attributes (with before -> after when `values`), `next_cursor` | `GET .../records/{key}/history` |
 | `lorebase_lineage` | `ref`, `at?` | per attribute: value, origin type, actor, Revision, and the Source, Operation, extraction evidence or Proposal behind it | `GET .../records/{key}/lineage` |
 | `lorebase_changes` | `since?`, `limit?`, `author?`, `origin_type?`, `cursor?` | Revisions newest first back to `since` (id or 8+ char prefix) | `GET .../branches/{b}/log` |
 | `lorebase_diff` | `from_revision`, `to_revision`, `kinds?`, `relations?`, `limit?`, `cursor?` | counts per Kind and Relation, then `+`/`~`/`-` elements with old -> new values | `GET .../diff` |
@@ -221,6 +221,46 @@ budget unless the call passes them, and limits neighbors and searched Kinds
 
 **Prompt.** `lorebase_guide(domain?, task?)`: the workflow below as a template; it contains no
 model calls.
+
+### History and lineage
+
+`lorebase_history` lists the changes of one Record, newest first; `values: true` adds each
+changed value before and after. `lorebase_lineage` says, per current value, which Revision,
+actor and origin set it, with the Source, Operation, document span or Proposal behind it. Both
+take `at` to answer as of an earlier Revision. Revision ids are 64 hex digits; they are cut
+short here:
+
+```json
+{"ref": "Supplier/S-1001", "values": true, "limit": 2}
+```
+
+```text
+Supplier/S-1001 rev f4d229169a37... on main: 2 changes
+f4d229169a37... 2026-10-01T08:00:04Z usr_editor [operation] updated: Raise the risk of S-1001
+  risk_score: 32 -> 90
+97ce9a2ce272... 2026-10-01T08:00:03Z usr_loader [import] created: Import the supply example data
+  supplier_code: null -> S-1001
+  legal_name: null -> Kavsen Alloys Sp. z o.o.
+  risk_score: null -> 32
+```
+
+```json
+{"ref": "Supplier/S-1001"}
+```
+
+```text
+Supplier/S-1001 rev f4d229169a37... on main (2 changes)
+created <- usr_loader at 2026-10-01T08:00:03Z in 97ce9a2ce272...
+supplier_code = S-1001 <- import by usr_loader at 2026-10-01T08:00:03Z in 97ce9a2ce272...
+legal_name = Kavsen Alloys Sp. z o.o. <- import by usr_loader at 2026-10-01T08:00:03Z in 97ce9a2ce272...
+risk_score = 90 <- operation by usr_editor at 2026-10-01T08:00:04Z in f4d229169a37... operation update_supplier
+```
+
+A value that came from a document adds a line `extracted from document <id> [start:end] by
+<model>`; the answer ends with `SOURCES:` (the Sources behind the values) and one `PROPOSAL`
+line per Proposal that brought a value to the branch. `lorebase_explain` gives the same per
+value in one call, plus the Links; use history for the sequence of changes and lineage for the
+evidence of one value.
 
 ### Output size
 
@@ -252,11 +292,12 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
 2. **Ground the words, then read.** When a question names things in its own words ("red
    shoes", "stores in Milan"), `lorebase_resolve` says which Kinds, Attributes and stored
    values they stand for and gives the `where` fragments; it never runs the query. Then
-   `lorebase_get` for one Record, `lorebase_query` for filtered lists and counts
-   (`"aggregate": {"group_by": attr}`),
+   `lorebase_query` with those fragments for filtered lists and counts
+   (`"aggregate": {"group_by": attr}`), `lorebase_get` for one Record,
    `lorebase_search` to find Records by words, `lorebase_neighborhood` for more links,
-   `lorebase_explain` before trusting a value, `lorebase_changes` and `lorebase_diff` to catch
-   up with what changed since a Revision seen earlier.
+   `lorebase_explain` (or `lorebase_history` and `lorebase_lineage`) before trusting a value,
+   `lorebase_changes` and `lorebase_diff` to catch up with what changed since a Revision seen
+   earlier.
 3. **Writes through Operations.** Call `lorebase_execute` with `dry_run` (the default), check
    edits and violations, then commit with `dry_run: false` and `expected_head` set to the head
    the dry run reported. Operations with a review policy, and protected branches, need a
@@ -269,6 +310,45 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
    `validation-failed`; `intent`, `auto_propose` and `auto_merge` are always passed on and
    Keeper's problem text is returned unchanged. Keep an `idempotency_key` per intended change
    so retries commit once (and find the same Proposal). Details in [agents](agents.md).
+
+Parameters that shape every read: `lens` (a read preset of the schema, on `lorebase_context`
+and `lorebase_search`) and `traits` (Kinds by the Trait they implement) narrow what is read;
+`at` reads a past Revision or tag; `domain` and `branch` default to `LOREBASE_DOMAIN` and
+`LOREBASE_BRANCH`, else the Domain's default branch. Herald has no Proposal tools: an agent that reviews as a steward lists
+its work over REST with `assigned=me` ([agents](agents.md#the-loop)).
+
+### From words to counts
+
+"How many red shoes per brand?" on a retail Domain. Resolve the words first:
+
+```json
+{"text": "red shoes per brand", "kinds": ["Product"]}
+```
+
+```text
+rev 5b0c41e2...: 3 candidates
+1. value Product.color (string) = Rosso, red | exact 1.0 for 'red', 120 records
+   where: {"attr":"color","op":"in","value":["Rosso","red"]}
+2. value Product.category (string) = Calzature | synonym 0.95 for 'shoes', 100 records
+   where: {"attr":"category","op":"eq","value":"Calzature"}
+3. attribute Product.brand (string) | exact 1.0 for 'brand'
+unmatched: how, many, per
+```
+
+Then write the query from the `where` fragments, grouped by the Attribute the third candidate
+named, with `lorebase_query`:
+
+```json
+{"query": {"kind": "Product",
+           "where": {"and": [{"attr": "color", "op": "in", "value": ["Rosso", "red"]},
+                             {"attr": "category", "op": "eq", "value": "Calzature"}]},
+           "aggregate": {"group_by": "brand"}}}
+```
+
+The answer starts with one `count Product <brand>: <n>` line per value, then the rows. Before
+quoting a surprising Record, `lorebase_explain` (or `lorebase_lineage`) says where its values
+came from. Resolution only suggests: when no candidate fits, the agent falls back to
+`lorebase_schema` and `lorebase_search`.
 
 ## Implementation notes
 

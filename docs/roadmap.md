@@ -8,9 +8,8 @@ Lorebase is pre-alpha. [v0.2.3](https://github.com/aantenore/lorebase/releases/t
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a shared laptop (M5).
 2. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
-3. Knowledge that stays correct: corrections that stick (done), document versions (done), ingestion modes (done), stewards (done), read presets (done) and resolution of words to schema and values (done) ([below](#next-knowledge-that-stays-correct)).
 
-Everything else on this page is merged and covered by tests. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
+Everything else on this page is merged and covered by tests, except allowed merge origins per protected branch (noted under M3). The last designed block, [knowledge that stays correct](#next-knowledge-that-stays-correct), is done. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
 ## M1: Engine and API
 
@@ -23,7 +22,7 @@ Engine and storage
 - [x] Canonical HAMT trees, tree diff, immutable Revisions, ancestry and merge base
 - [x] Data validation against the schema
 - [x] Three-way merge of schema and data, full Conflict taxonomy, resolutions, merge policies `prefer`, cascade and defaults
-- [x] Three-way merge of long `text` values by sentence or paragraph inside the data merge (design 6.8 step 3); the Conflict resolver showing the hunks is next
+- [x] Three-way merge of long `text` values by sentence or paragraph inside the data merge (design 6.8 step 3), and the Conflict resolver showing a text Conflict passage by passage ([tour](tour.md#merge-attempt-and-conflict-resolver), [governance](governance.md#text-merge))
 - [x] Merge policies `authority` and `newest_wins`
 - [x] Postgres schema and Alembic migrations, row-level security, store repositories
 - [x] Commit pipeline, materializer and verification
@@ -116,7 +115,7 @@ Goal: day 3 of the proof scenario, on the sample contracts.
 
 ## Next: knowledge that stays correct
 
-Designed in [section 18 of the design](design.md#next-knowledge-that-stays-correct); the items not ticked are not implemented yet.
+Designed in [section 18 of the design](design.md#next-knowledge-that-stays-correct); every item is implemented.
 
 - [x] Corrections that stick ([design 9.1](design.md#91-structured-sources), AC-34): per-Source last-written state (`source_written`); a run writes only Attributes that changed upstream; an upstream change over someone else's value is a `DV1` with a preserved base, a snapshot deletion of a Record with others' values a `DV2`; Source setting `local_edits: review | keep | source_wins` (default `review`); seeding on first sight for existing Sources; audit `source.local_edit_conflict` (migration `0040`, [Scribe](scribe.md#corrections-that-stick))
 - [x] Extraction hold `local_edit`: value items over a value a person set are never accepted at once ([design 9.1](design.md#91-structured-sources))
