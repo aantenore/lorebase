@@ -11,9 +11,13 @@ backfills the value index; its time is the cost of a full rebuild.
   set and is timed client side: `exact` texts reach values and names through levels 1-2
   (exact names, values and aliases); `trigram` texts are misspelled, so they reach level 3.
   Each set is measured with only its levels enabled (`levels` in the request).
-- Upkeep: commits that update `--update-rows` Products' colors, timed with the color Attribute
-  in the index and again with the index switched off (`store.values.enabled: false`, so the
-  triggers only probe an empty selection); the difference is what the triggers add.
+- Upkeep: commits as the role under row-level security, timed with the Domain's Attributes
+  held, with none held (`store.values.enabled: false`: the triggers take the fence and probe
+  the selection, while another Domain holds `--noise-selection` selection rows), and with the
+  triggers disabled: commits updating `--update-rows` Products' colors, and one-Record commits
+  (the per-statement cost).
+- Fence: a commit to another Domain timed alone and while a rebuild of this Domain holds the
+  Domain's value lock; and the time a commit to this Domain waits for that rebuild.
 
 Usage (Docker for a Postgres 16 container, or LOREBASE_TEST_DATABASE_URL for a server):
     uv run python tests/perf/resolve_bench.py [--records 100000] [--iterations 500] \
@@ -55,6 +59,8 @@ from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 DOMAIN = "retail"
+NOISE = "noise"
+OTHER = "other"
 AUTHOR = Author(principal="usr_perf")
 ROLE_PASSWORD = "resolve-bench-role"
 BATCH = 5000
@@ -166,13 +172,14 @@ async def _commit(
     runtime: StoreRuntime,
     clock: Clock,
     changes: list[Any],
+    domain: str = DOMAIN,
     **options: Any,
 ) -> float:
     started = time.perf_counter()
     async with sessions() as session:
         await commit(
             session,
-            DOMAIN,
+            domain,
             "main",
             changes,
             author=AUTHOR,
@@ -199,6 +206,8 @@ async def run(args: argparse.Namespace, owner_url: str, app_url: str) -> dict[st
     runtime = StoreRuntime.from_settings(StoreSettings())
     engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
+    app_engine = create_engine(DatabaseSettings(), url=app_url, pooled=False)
+    app_sessions = async_sessionmaker(app_engine, expire_on_commit=False)
     clock = Clock()
     schema = load_schema(SCHEMA)
     result: dict[str, Any] = {}
@@ -217,11 +226,54 @@ async def run(args: argparse.Namespace, owner_url: str, app_url: str) -> dict[st
         result["selected"] = len(report.selected)
         result["value_rows"] = report.backfilled
         await _execute(owner_url, "ANALYZE mat_values")
+        result["rebuild_ms"] = await _rebuild(sessions, runtime)
         result["resolve"] = await _resolve(args, app_url)
-        result["upkeep"] = await _upkeep(args, sessions, runtime, clock, schema)
+        await _noise(args, sessions, runtime, clock, schema, owner_url)
+        result["upkeep"] = await _upkeep(
+            args, sessions, app_sessions, runtime, clock, schema, owner_url
+        )
+        result["fence"] = await _fence(sessions, app_sessions, runtime, clock, schema)
     finally:
         await engine.dispose()
+        await app_engine.dispose()
     return result
+
+
+async def _rebuild(sessions: async_sessionmaker[AsyncSession], runtime: StoreRuntime) -> float:
+    started = time.perf_counter()
+    await values.run_value_index(sessions, DOMAIN, settings=runtime.settings, rebuild_all=True)
+    return (time.perf_counter() - started) * 1000
+
+
+async def _noise(
+    args: argparse.Namespace,
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+    owner_url: str,
+) -> None:
+    """Two more Domains: `other`, with the schema and a few Records, written while this one
+    is fenced; `noise`, holding a large selection and never written."""
+    for domain in (NOISE, OTHER):
+        async with sessions() as session:
+            await create_domain(
+                session,
+                schema.domain.model_copy(update={"id": domain}),
+                author=AUTHOR,
+                runtime=runtime,
+                clock=clock,
+            )
+    schema_changes = [SchemaUpsert(e) for e in schema.elements() if e.id != schema.domain.id]
+    await _commit(sessions, runtime, clock, [], OTHER, schema_changes=schema_changes)
+    await _commit(sessions, runtime, clock, products(schema, 0, 100), OTHER)
+    await _execute(
+        owner_url,
+        "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
+        f"SELECT '{NOISE}', 'knd_noise', 'att_' || g, 64 "
+        f"FROM generate_series(1, {args.noise_selection}) AS g",
+        "ANALYZE mat_value_attributes",
+    )
 
 
 async def _resolve(args: argparse.Namespace, app_url: str) -> dict[str, Measurement]:
@@ -263,28 +315,63 @@ async def _resolve(args: argparse.Namespace, app_url: str) -> dict[str, Measurem
     return found
 
 
+TRIGGERS = ("lb_values_insert", "lb_values_update", "lb_values_delete")
+STATES = ("held", "none held", "triggers off")
+
+
 async def _upkeep(
     args: argparse.Namespace,
     sessions: async_sessionmaker[AsyncSession],
+    app_sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
     schema: Schema,
-) -> dict[str, Measurement]:
+    owner_url: str,
+) -> dict[str, tuple[Measurement, Measurement]]:
+    """Per state: (commits of `update_rows` updates, one-Record commits), as the RLS role."""
     rng = random.Random(SEED)
 
-    def repaint() -> list[RecordUpsert]:
-        start = rng.randrange(0, args.records - args.update_rows)
-        return products(schema, start, args.update_rows, color=rng.choice(COLORS))
+    def repaint(rows: int) -> list[RecordUpsert]:
+        start = rng.randrange(0, args.records - rows)
+        return products(schema, start, rows, color=rng.choice(COLORS))
 
-    found = {"index on": Measurement("index on"), "index off": Measurement("index off")}
+    found = {state: (Measurement(state), Measurement(state)) for state in STATES}
     off = runtime.settings.model_copy(
         update={"values": runtime.settings.values.model_copy(update={"enabled": False})}
     )
-    for state in ("index on", "index off", "index on", "index off"):
-        await _sync(sessions, off if state == "index off" else runtime.settings)
+    for state in (*STATES, *STATES):
+        await _sync(sessions, runtime.settings if state == "held" else off)
+        switch = "DISABLE" if state == "triggers off" else "ENABLE"
+        await _execute(
+            owner_url, *(f"ALTER TABLE mat_records {switch} TRIGGER {t}" for t in TRIGGERS)
+        )
+        bulk, single = found[state]
         for _ in range(args.commits // 2):
-            found[state].samples_ms.append(await _commit(sessions, runtime, clock, repaint()))
+            bulk.samples_ms.append(
+                await _commit(app_sessions, runtime, clock, repaint(args.update_rows))
+            )
+            single.samples_ms.append(await _commit(app_sessions, runtime, clock, repaint(1)))
+    await _execute(owner_url, *(f"ALTER TABLE mat_records ENABLE TRIGGER {t}" for t in TRIGGERS))
+    await _sync(sessions, runtime.settings)
     return found
+
+
+async def _fence(
+    sessions: async_sessionmaker[AsyncSession],
+    app_sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> dict[str, float]:
+    """A commit to another Domain alone and during a rebuild of this one (which holds this
+    Domain's value lock), and how long a commit to this Domain waits for that rebuild."""
+    alone = await _commit(app_sessions, runtime, clock, products(schema, 0, 50, "Nero"), OTHER)
+    rebuild = asyncio.create_task(_rebuild(sessions, runtime))
+    await asyncio.sleep(0.2)
+    other = await _commit(app_sessions, runtime, clock, products(schema, 0, 50, "Blu"), OTHER)
+    same = await _commit(app_sessions, runtime, clock, products(schema, 0, 50, "Blu"))
+    took = await rebuild
+    return {"alone": alone, "during": other, "same_domain": same, "rebuild": took}
 
 
 def render(args: argparse.Namespace, result: dict[str, Any], server: str) -> str:
@@ -294,7 +381,7 @@ def render(args: argparse.Namespace, result: dict[str, Any], server: str) -> str
         f"- {args.records} Products, loaded in {result['load_s']:.0f} s; "
         f"{result['selected']} Attributes indexed, {result['value_rows']} value rows.",
         f"- Backfill of the value index (selection pass over every Record): "
-        f"{result['backfill_ms']:.0f} ms.",
+        f"{result['backfill_ms']:.0f} ms; rebuild (recount): {result['rebuild_ms']:.0f} ms.",
         f"- {args.iterations} timed calls per set after {args.warmup} warm-up calls; Keeper in "
         "process, role subject to row-level security, definer functions on.",
         f"- {platform.platform()}, Python {platform.python_version()}, Postgres: {server}.",
@@ -307,17 +394,21 @@ def render(args: argparse.Namespace, result: dict[str, Any], server: str) -> str
             f"| {measurement.name} | {measurement.p50:.2f} | {measurement.p95:.2f} | "
             f"{measurement.p99:.2f} |"
         )
-    on, off = result["upkeep"]["index on"], result["upkeep"]["index off"]
-    extra = on.p50 - off.p50
     lines += [
         "",
-        f"| Commit of {args.update_rows} color updates | p50 ms | p95 ms |",
-        "|---|---:|---:|",
-        f"| value index on | {on.p50:.1f} | {on.p95:.1f} |",
-        f"| value index off | {off.p50:.1f} | {off.p95:.1f} |",
+        f"| Commit (RLS role) | {args.update_rows} updates p50 | p95 | 1 Record p50 | p95 |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for state, (bulk, single) in result["upkeep"].items():
+        lines.append(
+            f"| {state} | {bulk.p50:.1f} | {bulk.p95:.1f} | {single.p50:.2f} | {single.p95:.2f} |"
+        )
+    fence = result["fence"]
+    lines += [
         "",
-        f"Upkeep: {extra:.1f} ms per commit at p50 "
-        f"({extra / args.update_rows * 1000:.0f} µs per updated Record).",
+        f"Fence: a 50-Record commit to another Domain took {fence['alone']:.0f} ms alone and "
+        f"{fence['during']:.0f} ms during a rebuild of this Domain ({fence['rebuild']:.0f} ms); "
+        f"a commit to this Domain started then took {fence['same_domain']:.0f} ms.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -338,6 +429,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--update-rows", type=int, default=500)
     parser.add_argument("--commits", type=int, default=20)
+    parser.add_argument("--noise-selection", type=int, default=100_000)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
     with testing.postgres_server() as server, testing.scratch_database(server) as url:
