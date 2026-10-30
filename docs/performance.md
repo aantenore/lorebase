@@ -1187,7 +1187,7 @@ about a minute at 100,000 vectors; `LOREBASE_PERF_VECTOR_RECORDS` changes the si
 of six Kinds (Supplier 40%, Part 30%, Plant 15%, PurchaseOrder 10%, Contract 4%, RiskFlag 1%),
 each with a synthetic unit vector of 384 dimensions around one of 400 cluster centres (fixed
 seed; the cluster of a Record is unrelated to its Kind, the hard case for a filter), HNSW index
-built after the load (`vector`, m=16, ef_construction=64 unless
+built after the load (`vector`, m=16, ef_construction from `store.storage` (128 by default) unless
 `LOREBASE_PERF_HNSW_M` / `LOREBASE_PERF_HNSW_EF_CONSTRUCTION` say otherwise, pgvector 0.8.7, Postgres 16 in
 Docker Desktop). 40 queries from the same distribution go through the Keeper application
 (`POST /search`, `mode: semantic`, limit 20, default `search` settings) as a role subject to
@@ -1205,7 +1205,8 @@ Before revision `0044` (current statement before the change), p50 / p95 in ms, r
 
 After (revision `0044`, the statement of design 8.8, and `hnsw.ef_search` raised to
 `search.candidates * overfetch_factor` = 800 in every case), 20 of 20 results and no
-`semantic_truncated` in every row. Default index (m=16, ef_construction=64):
+`semantic_truncated` in every row. Index built with pgvector's ef_construction=64 (m=16), as
+indexes from before `store.storage.hnsw_ef_construction` are:
 
 | search | 100,000 vectors | 300,000 vectors |
 |---|---|---|
@@ -1217,7 +1218,7 @@ After (revision `0044`, the statement of design 8.8, and `hnsw.ef_search` raised
 
 (index 195 MB built in 15 s at 100,000 vectors, 586 MB in 50 s at 300,000.)
 
-With `store.storage.hnsw_ef_construction: 128` (`LOREBASE_PERF_HNSW_EF_CONSTRUCTION=128`; m=16):
+With `store.storage.hnsw_ef_construction: 128`, the default for new builds (m=16):
 
 | search | 100,000 vectors | 300,000 vectors |
 |---|---|---|
@@ -1244,9 +1245,10 @@ over-fetch, 608 MB in 124 s: no better, twice the build.)
   does not reach (lowest recall 0.00 at 300,000, against 0.80 at 100,000), and the over-fetch
   row has the same outlier (0.917). That is the graph's build quality: with
   `hnsw_ef_construction: 128` every row is at least 0.986 at 300,000 (lowest query 0.90) for
-  16 more seconds of build and the same size. The defaults are unchanged (the test asserts a
-  mean of at least 0.90); `store.storage.hnsw_ef_construction` and `hnsw_m` set them for
-  indexes built later, and an existing index is rebuilt as
+  16 more seconds of build and the same size, so 128 is the default of
+  `store.storage.hnsw_ef_construction` for indexes built from now on (the test asserts a mean of
+  at least 0.90, which the older build also meets). `storage apply` does not rebuild an existing
+  index: one built with 64 is rebuilt as
   [operations](operations.md#rebuilding-the-embedding-index) says. A 1% Kind is exact: the
   search reads the vectors of the Kind's template fingerprint, and for that share of the table
   the planner reads those rows and sorts them.

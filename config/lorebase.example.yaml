@@ -647,8 +647,9 @@ store:
     lexicon_index: null          # trigram index of the typo lexicon (null: off with compact)
     embedding_precision: null    # half | full HNSW index (null: half with compact)
     hnsw_m: null                 # HNSW links per node, 2-100 (null: pgvector's 16)
-    hnsw_ef_construction: null   # HNSW build candidate list, >= 2 * hnsw_m (null: pgvector's 64);
-                                 #   both apply to indexes built from then on (docs/operations.md)
+    hnsw_ef_construction: 128    # HNSW build candidate list, >= 2 * hnsw_m (null: pgvector's 64);
+                                 #   both apply to indexes built from then on; an existing index
+                                 #   keeps its own until rebuilt (docs/operations.md)
     compression: null            # lz4 | pglz for values above ~2 kB (null: pglz with compact)
     records_fillfactor: null     # 50-100 (null: 90 with fast, 100 otherwise)
     prewarm: null                # apply ends with `storage prewarm` (null: on with fast)
@@ -1169,7 +1170,7 @@ scribe:
     max_row_errors: 100          # skipped rows tolerated; more fail the run without committing
     error_samples: 20            # row errors kept in the run record
     auto_merge_protected: true   # automatic merge policies also merge into protected branches
-                                 #   whose approval rules (keeper.proposals) require no approval
+                                 #   (waives required_approvals, not steward or role rules)
     # What an upstream change does to a value someone else set since the last sync is set per
     # Source in the schema: `local_edits: review` (default: a Conflict), `keep` or `source_wins`.
     csv:
@@ -1223,8 +1224,8 @@ scribe:
                                  # here, a Domain's settings.extraction may choose it
     domain_may_loosen: [mode]    # members a Domain may set looser than these (mode,
                                  # auto_accept_threshold, min_confidence); []: none
-    direct_merge_protected: true # direct-mode jobs may merge into a protected branch whose
-                                 # approval rules (keeper.proposals) require no approval; false:
+    direct_merge_protected: true # direct-mode jobs may merge into a protected branch (waives
+                                 # required_approvals, not steward or role rules); false:
                                  # their Proposals wait for approvals
     new_record_kinds: null       # Kinds that may get new Records; null: every natural-key Kind
     value_cue_words: 8           # a rule-found value needs a cue word this close before it
