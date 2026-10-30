@@ -83,7 +83,17 @@ kinds:
 CATEGORIES = ("Calzature", "Borse", "Abbigliamento")
 COLORS = ("Rosso", "red", "Nero", "Blu", "Verde")
 SIZES = ("S", "M", "L", "XL")
-CITIES = (("Milano", "North"), ("Roma", "Center"), ("Napoli", "South"), ("Torino", "North"))
+CITIES = (
+    ("Milano", "North"),
+    ("Roma", "Center"),
+    ("Napoli", "South"),
+    ("Torino", "North"),
+    # Non-Latin scripts and punctuation inside values.
+    ("".join(chr(c) for c in (0x92E, 0x941, 0x902, 0x92C, 0x908)), "South"),
+    ("Rock & Roll", "Center"),
+    ("S/M", "North"),
+    ("50%", "South"),
+)
 NOUNS = ("Runner", "Tote", "Jacket", "Loafer", "Clutch", "Shirt", "Boot", "Satchel", "Coat")
 
 

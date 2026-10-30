@@ -59,7 +59,7 @@ from lorebase_keeper.reading.problems import invalid
 from lorebase_keeper.reading.requests import ResolveRequest, SearchRequest
 from lorebase_keeper.reading.runtime import ReadRuntime
 from lorebase_keeper.reading.search import search
-from lorebase_keeper.reading.settings import ResolveSettings
+from lorebase_keeper.reading.settings import DEFAULT_EDGES, DEFAULT_SEPARATORS, ResolveSettings
 from lorebase_keeper.reading.snapshots import with_rows
 from lorebase_keeper.reading.views import (
     ResolveCandidate,
@@ -73,13 +73,32 @@ from lorebase_store.layout import escape_colons
 Level = Literal["exact", "synonym", "trigram", "embedding"]
 LEVELS: tuple[Level, ...] = ("exact", "synonym", "trigram", "embedding")
 
-_WORD = re.compile(r"[^\W_]+(?:['\-.][^\W_]+)*")
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
-def words_of(text_: str) -> list[str]:
+@dataclass(frozen=True, slots=True)
+class Tokens:
+    """How a text splits into words: at blanks and at `separators`, then `edges` stripped from
+    each word's ends. Everything else stays in the word, so values such as `C++`, `S/M`, `50%`
+    or words of scripts with combining marks match as written."""
+
+    separators: str = DEFAULT_SEPARATORS
+    edges: str = DEFAULT_EDGES
+
+    def words(self, text_: str) -> list[str]:
+        normalized = value_index.normalize(text_)
+        if self.separators:
+            normalized = normalized.translate({ord(c): " " for c in self.separators})
+        stripped = (w.strip(self.edges) for w in normalized.split(" "))
+        return [w for w in stripped if w]
+
+    def phrase(self, text_: str) -> str:
+        return " ".join(self.words(text_))
+
+
+def words_of(text_: str, tokens: Tokens | None = None) -> list[str]:
     """The normalized words of a text."""
-    return _WORD.findall(value_index.normalize(text_))
+    return (tokens or Tokens()).words(text_)
 
 
 def name_words(api_name: str) -> str:
@@ -159,14 +178,16 @@ class SchemaIndex:
             self.grams[phrase] = trigrams(phrase)
 
 
-def build_index(schema: Schema) -> SchemaIndex:
+def build_index(schema: Schema, tokens: Tokens | None = None) -> SchemaIndex:
+    tokens = tokens or Tokens()
     index = SchemaIndex()
     for kind in schema.kinds.values():
-        _index_element(index, kind.id, None, kind.api_name, kind.display_name, kind.aliases)
-        _index_description(index, Entry(kind.id, None, None, False, True), kind.description)
+        _index_element(index, tokens, kind.id, None, kind.api_name, kind.display_name, kind.aliases)
+        _index_description(index, tokens, Entry(kind.id, None, None, False, True), kind.description)
         for attribute in kind.attributes.values():
             _index_element(
                 index,
+                tokens,
                 kind.id,
                 attribute.id,
                 attribute.api_name,
@@ -174,16 +195,20 @@ def build_index(schema: Schema) -> SchemaIndex:
                 attribute.aliases,
             )
             _index_description(
-                index, Entry(kind.id, attribute.id, None, False, True), attribute.description
+                index,
+                tokens,
+                Entry(kind.id, attribute.id, None, False, True),
+                attribute.description,
             )
             for value, aliases in (attribute.value_aliases or {}).items():
                 for alias in aliases:
-                    index.add(" ".join(words_of(alias)), Entry(kind.id, attribute.id, value, True))
+                    index.add(tokens.phrase(alias), Entry(kind.id, attribute.id, value, True))
     return index
 
 
 def _index_element(
     index: SchemaIndex,
+    tokens: Tokens,
     kind_id: str,
     attribute_id: str | None,
     api_name: str,
@@ -192,36 +217,37 @@ def _index_element(
 ) -> None:
     exact = Entry(kind_id, attribute_id, None, False)
     index.add(name_words(api_name), exact)
-    index.add(" ".join(words_of(display_name)), exact)
+    index.add(tokens.phrase(display_name), exact)
     for alias in aliases or ():
-        index.add(" ".join(words_of(alias)), Entry(kind_id, attribute_id, None, True))
+        index.add(tokens.phrase(alias), Entry(kind_id, attribute_id, None, True))
 
 
 _DESCRIPTION_MIN_CHARS = 4
 """Description words shorter than this ("the", "of") are not indexed: they match anything."""
 
 
-def _index_description(index: SchemaIndex, entry: Entry, description: str) -> None:
-    for word in set(words_of(description)):
+def _index_description(index: SchemaIndex, tokens: Tokens, entry: Entry, description: str) -> None:
+    for word in set(tokens.words(description)):
         if len(word) >= _DESCRIPTION_MIN_CHARS:
             index.add(word, entry)
 
 
-_INDEXES: OrderedDict[int, tuple[Schema, SchemaIndex]] = OrderedDict()
+_INDEXES: OrderedDict[tuple[int, Tokens], tuple[Schema, SchemaIndex]] = OrderedDict()
 _INDEX_ENTRIES = 64
 _INDEX_LOCK = Lock()
 
 
-def schema_index(schema: Schema) -> SchemaIndex:
+def schema_index(schema: Schema, tokens: Tokens | None = None) -> SchemaIndex:
     """The index of `schema`, kept per schema object (compiled schemas and projections are
-    cached, so one schema version keeps one index)."""
-    key = id(schema)
+    cached, so one schema version keeps one index) and tokenization."""
+    tokens = tokens or Tokens()
+    key = (id(schema), tokens)
     with _INDEX_LOCK:
         found = _INDEXES.get(key)
         if found is not None and found[0] is schema:
             _INDEXES.move_to_end(key)
             return found[1]
-    built = build_index(schema)
+    built = build_index(schema, tokens)
     with _INDEX_LOCK:
         _INDEXES[key] = (schema, built)
         while len(_INDEXES) > _INDEX_ENTRIES:
@@ -234,12 +260,16 @@ def schema_index(schema: Schema) -> SchemaIndex:
 
 @dataclass(frozen=True, slots=True)
 class Phrase:
+    """A run of words; `raw` is the whole text, normalized but not split, which the exact
+    levels try too (values with punctuation inside)."""
+
     start: int
     words: tuple[str, ...]
+    raw: str | None = None
 
     @property
     def text(self) -> str:
-        return " ".join(self.words)
+        return self.raw if self.raw is not None else " ".join(self.words)
 
     @property
     def span(self) -> range:
@@ -301,9 +331,14 @@ class _Context:
         )
 
 
-def phrases_of(words: Sequence[str], settings: ResolveSettings) -> list[Phrase]:
-    """Every run of words, longest first, then in text order."""
+def phrases_of(
+    words: Sequence[str], settings: ResolveSettings, raw: str | None = None
+) -> list[Phrase]:
+    """The raw text (when given and not a run already), then every run of words, longest
+    first, then in text order."""
     found: list[Phrase] = []
+    if raw and words and (raw != " ".join(words) or len(words) > settings.max_phrase_words):
+        found.append(Phrase(0, tuple(words), raw))
     for size in range(min(settings.max_phrase_words, len(words)), 0, -1):
         for start in range(len(words) - size + 1):
             run = tuple(words[start : start + size])
@@ -348,20 +383,21 @@ async def resolve(
         raise invalid(
             "/body/limit", f"must not exceed {settings.results.max_limit}", "limit_exceeded"
         )
+    tokens = Tokens(settings.separators, settings.edges)
     context = _Context(
         point,
         settings,
         _levels(request, settings),
         _kinds(point, request),
-        schema_index(point.schema),
+        schema_index(point.schema, tokens),
     )
-    words = words_of(request.text)[: settings.max_words]
+    words = tokens.words(request.text)[: settings.max_words]
     skipped: list[ResolveSkipped] = []
     if not words or not context.kinds:
         return ResolveResponse(**served(point), candidates=[], unmatched=words)
     point = await with_rows(session, runtime, point, "Resolution")
     context.point = point
-    phrases = phrases_of(words, settings)
+    phrases = phrases_of(words, settings, value_index.normalize(request.text))
     covered: set[int] = set()
     matches: list[Match] = []
     if context.levels & {"exact", "synonym"}:
@@ -392,7 +428,12 @@ async def _exact(
     """Levels 1 and 2: names, aliases and stored values equal to a phrase (or its folded
     forms)."""
     settings = context.settings
-    forms = {p: variants(p.words, settings.plural_rules) for p in phrases}
+    forms = {
+        p: [p.text, " ".join(p.words)]
+        if p.raw is not None
+        else variants(p.words, settings.plural_rules)
+        for p in phrases
+    }
     hits: dict[str, list[value_index.ValueHit]] = defaultdict(list)
     if "exact" in context.levels:
         terms = sorted({form for found in forms.values() for form in found})
@@ -401,7 +442,7 @@ async def _exact(
             context.point.layout,
             terms,
             kind_ids=sorted(context.kinds),
-            limit=settings.exact_values,
+            per_term=settings.exact_per_phrase,
         ):
             hits[hit.term].append(hit)
     found: list[Match] = []
@@ -491,17 +532,27 @@ async def _similar(
     open_ = [
         p
         for p in phrases
-        if not covered.intersection(p.span) and len(p.text) >= settings.trigram_min_chars
+        if p.raw is None
+        and not covered.intersection(p.span)
+        and len(p.text) >= settings.trigram_min_chars
     ]
     if not open_:
         return []
+    # Names of the Kinds in reach only: the work is phrases times these names.
+    names = [
+        (name, grams)
+        for name, grams in context.index.grams.items()
+        if any(e.kind_id in context.kinds for e in context.index.phrases[name])
+    ]
+    # An overlay's index holds its base's values too; some fall out once counted.
+    per_term = settings.per_phrase * (2 if context.point.layout.overlay else 1)
     hits: dict[str, list[value_index.ValueHit]] = defaultdict(list)
     for hit in await value_index.similar_values(
         session,
         context.point.layout,
         [p.text for p in open_],
         threshold=settings.trigram_threshold,
-        per_term=settings.per_phrase,
+        per_term=per_term,
         kind_ids=sorted(context.kinds),
         runtime=runtime.store,
     ):
@@ -512,7 +563,7 @@ async def _similar(
             continue
         matched: dict[_Key, Match] = {}
         grams = trigrams(phrase.text)
-        for name, name_grams in context.index.grams.items():
+        for name, name_grams in names:
             similar = similarity(grams, name_grams)
             if similar < settings.trigram_threshold:
                 continue
@@ -647,7 +698,9 @@ def _strings(stored: Any, max_chars: int) -> list[str]:
 async def _candidates(
     session: AsyncSession, context: _Context, matches: Sequence[Match], limit: int
 ) -> list[ResolveCandidate]:
-    """Best first, `limit` of them; on an overlay, values counted over the resolved rows."""
+    """Best first, `limit` of them; on an overlay, values counted over the resolved rows.
+    Matches are counted in rank order until `limit` of them are left, so a value match that
+    counting empties gives its place to the next one."""
     ranked = sorted(
         matches,
         key=lambda m: (
@@ -659,26 +712,32 @@ async def _candidates(
             m.attribute_id or "",
         ),
     )
-    chosen: list[Match] = []
+    kept: list[Match] = []
     seen: set[tuple[str, str | None, tuple[str, ...], tuple[int, ...]]] = set()
+    held: dict[tuple[str, str], int] | None = None
     for match in ranked:
+        if len(kept) >= limit:
+            break
         if match.key in seen:
             continue
         seen.add(match.key)
-        chosen.append(match)
-        if len(chosen) >= limit:
-            break
-    await _count(session, context, chosen)
-    return [_out(context, m) for m in chosen if m.values or not m.valued]
+        held = await _count(session, context, [match], held)
+        if match.values or not match.valued:
+            kept.append(match)
+    return [_out(context, m) for m in kept]
 
 
-async def _count(session: AsyncSession, context: _Context, chosen: Sequence[Match]) -> None:
+async def _count(
+    session: AsyncSession,
+    context: _Context,
+    chosen: Sequence[Match],
+    held: dict[tuple[str, str], int] | None = None,
+) -> dict[tuple[str, str], int] | None:
     """Counts of the kept values: over the resolved rows on an overlay (the index holds a
     superset there); from the index for values an alias or a nearest Record named. Values no
     Record holds are dropped; an Attribute the index does not hold keeps its values uncounted.
     """
     layout = context.point.layout
-    held: dict[tuple[str, str], int] | None = None
     for match in chosen:
         if not match.values or match.attribute_id is None:
             continue
@@ -706,6 +765,7 @@ async def _count(session: AsyncSession, context: _Context, chosen: Sequence[Matc
         else:
             continue
         match.values = {v: n for v, n in counts.items() if n > 0}
+    return held
 
 
 def _out(context: _Context, match: Match) -> ResolveCandidate:

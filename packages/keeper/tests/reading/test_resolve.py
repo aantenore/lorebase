@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from lorebase_core.model.yaml_schema import load_schema
 from lorebase_keeper.reading.resolve import (
+    Tokens,
     build_index,
     folded,
     name_words,
@@ -44,6 +45,19 @@ def test_words_are_normalized() -> None:
         "cafe",
         "creme",
     ]
+    assert words_of("C++ and S/M at 50%, (rock & roll).") == [
+        "c++",
+        "and",
+        "s/m",
+        "at",
+        "50%",
+        "rock",
+        "&",
+        "roll",
+    ]
+    hindi = "".join(chr(c) for c in (0x939, 0x93F, 0x928, 0x94D, 0x926, 0x940))
+    assert words_of(f"{hindi} words") == [hindi, "words"]
+    assert Tokens(separators="", edges="").words("a,b c.") == ["a,b", "c."]
     assert name_words("unit_price") == "unit price"
     assert name_words("PurchaseOrder") == "purchase order"
 
@@ -84,6 +98,10 @@ def test_phrases_longest_first() -> None:
     settings = ResolveSettings(max_phrase_words=2, min_word_chars=2)
     phrases = phrases_of(["red", "a", "shoes"], settings)
     assert [p.text for p in phrases] == ["red a", "a shoes", "red", "shoes"]
+    raw = phrases_of(["rock", "&", "roll"], settings, "rock & roll")
+    assert raw[0].text == "rock & roll"
+    assert raw[0].raw is not None
+    assert phrases_of(["red"], settings, "red")[0].raw is None
 
 
 def test_predicates() -> None:

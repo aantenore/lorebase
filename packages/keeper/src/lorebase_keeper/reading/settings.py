@@ -284,6 +284,12 @@ class PartialMatchSettings(SectionModel):
     )
 
 
+DEFAULT_SEPARATORS = ',;:!?()[]{}"'
+"""Characters splitting the words of a resolved text besides blanks."""
+DEFAULT_EDGES = ".'"
+"""Characters stripped from the ends of each word of a resolved text."""
+
+
 class ResolveLevels(SectionModel):
     """Matching levels of `POST /resolve`, tried in this order; each can be turned off."""
 
@@ -346,10 +352,20 @@ class ResolveSettings(SectionModel):
     per_phrase: int = Field(
         default=5, ge=1, le=50, description="Similar values kept per phrase, best first."
     )
-    exact_values: int = Field(
-        default=200,
+    exact_per_phrase: int = Field(
+        default=20,
         ge=1,
-        description="Exact value matches read for one request (every phrase together).",
+        le=500,
+        description="Exact value matches read per phrase form, most held first.",
+    )
+    separators: str = Field(
+        default=DEFAULT_SEPARATORS,
+        description="Characters that split words besides blanks. Others stay inside words, "
+        "so values such as C++, S/M or 50% match as written.",
+    )
+    edges: str = Field(
+        default=DEFAULT_EDGES,
+        description="Characters stripped from both ends of each word (a final full stop).",
     )
     plural_rules: list[tuple[str, str]] = Field(
         default_factory=lambda: [("s", ""), ("es", "")],
