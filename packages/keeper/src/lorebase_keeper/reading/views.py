@@ -191,6 +191,52 @@ class SearchResponse(Served):
     )
 
 
+class ResolveCandidate(BaseModel):
+    """A schema element or indexed value some words of the text may stand for."""
+
+    target: Literal["kind", "attribute", "value"] = Field(
+        description="What matched: a Kind, an Attribute (by name), or values of an Attribute."
+    )
+    kind: str = Field(description="Kind api name.")
+    attribute: str | None = Field(
+        default=None, description="Attribute api name (attribute and value candidates)."
+    )
+    type: str | None = Field(default=None, description="Attribute type, e.g. decimal(12,2).")
+    values: list[str] | None = Field(
+        default=None, description="Stored values the words stand for (value candidates)."
+    )
+    predicate: dict[str, Any] | None = Field(
+        default=None,
+        description="Ready-to-use where fragment of lorebase_query / POST /query for the Kind "
+        "(value candidates).",
+    )
+    score: float = Field(description="Confidence, 0 to 1; higher first.")
+    level: Literal["exact", "synonym", "trigram", "embedding"] = Field(
+        description="How it matched: exact name or value, alias, similar spelling, or values "
+        "of the Records nearest to the query vector."
+    )
+    matched: str = Field(description="The words of the text that matched.")
+    records: int | None = Field(
+        default=None,
+        description="Records holding the values on the branch read (value candidates).",
+    )
+
+
+class ResolveSkipped(BaseModel):
+    level: str
+    reason: str
+
+
+class ResolveResponse(Served):
+    candidates: list[ResolveCandidate]
+    unmatched: list[str] = Field(
+        default_factory=list, description="Words no candidate covers (often filler words)."
+    )
+    skipped: list[ResolveSkipped] = Field(
+        default_factory=list, description="Levels that did not run, and why."
+    )
+
+
 # Rendering ----------------------------------------------------------------------------------
 
 

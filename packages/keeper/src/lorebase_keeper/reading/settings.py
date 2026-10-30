@@ -284,6 +284,89 @@ class PartialMatchSettings(SectionModel):
     )
 
 
+class ResolveLevels(SectionModel):
+    """Matching levels of `POST /resolve`, tried in this order; each can be turned off."""
+
+    exact: bool = Field(
+        default=True, description="Schema names and indexed values equal to the words."
+    )
+    synonym: bool = Field(
+        default=True, description="Aliases of Kinds, Attributes and values (schema)."
+    )
+    trigram: bool = Field(
+        default=True,
+        description="Names and indexed values similar to the words (pg_trgm), when the levels "
+        "above found nothing for them.",
+    )
+    embedding: bool = Field(
+        default=True,
+        description="Values of the Records nearest to the caller's query_vector, when no "
+        "level above found anything (needs semantic search: an embedding template and "
+        "vectors).",
+    )
+
+
+class ResolveScores(SectionModel):
+    """Scores of `POST /resolve` candidates by level (similar matches are scaled by their
+    similarity)."""
+
+    exact: float = Field(default=1.0, gt=0, le=1)
+    synonym: float = Field(default=0.95, gt=0, le=1)
+    trigram: float = Field(default=0.85, gt=0, le=1)
+    embedding: float = Field(default=0.7, gt=0, le=1)
+    description: float = Field(
+        default=0.6,
+        gt=0,
+        le=1,
+        description="Factor of a word found in a Kind or Attribute description (trigram level).",
+    )
+
+
+class ResolveSettings(SectionModel):
+    """Resolution of words to schema elements and indexed values (`POST /resolve`, design
+    8.9). The value index itself is configured under store.values."""
+
+    results: Bounds = Field(default_factory=lambda: Bounds(default_limit=20, max_limit=100))
+    max_text_chars: int = Field(default=500, ge=1, description="Longest text accepted.")
+    max_words: int = Field(
+        default=40, ge=1, le=200, description="Words of the text considered; the rest is ignored."
+    )
+    max_phrase_words: int = Field(
+        default=3, ge=1, le=5, description="Longest run of words matched as one phrase."
+    )
+    min_word_chars: int = Field(
+        default=2, ge=1, description="Shorter words are never matched on their own."
+    )
+    trigram_min_chars: int = Field(
+        default=3, ge=1, description="Shortest phrase (in characters) matched by similarity."
+    )
+    trigram_threshold: float = Field(
+        default=0.45, gt=0, le=1, description="Least trigram similarity of a similar match."
+    )
+    per_phrase: int = Field(
+        default=5, ge=1, le=50, description="Similar values kept per phrase, best first."
+    )
+    exact_values: int = Field(
+        default=200,
+        ge=1,
+        description="Exact value matches read for one request (every phrase together).",
+    )
+    plural_rules: list[tuple[str, str]] = Field(
+        default_factory=lambda: [("s", ""), ("es", "")],
+        description="Suffix pairs (plural, singular) folded both ways on each word before "
+        'lookup, e.g. [["s", ""]] matches shoe and shoes; empty turns folding off. '
+        'Add pairs for other languages, e.g. ["e", "a"].',
+    )
+    embedding_records: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Nearest Records whose indexed values the embedding level reads.",
+    )
+    levels: ResolveLevels = Field(default_factory=ResolveLevels)
+    scores: ResolveScores = Field(default_factory=ResolveScores)
+
+
 class SearchSettings(SectionModel):
     """Ranking of `POST /search`."""
 
@@ -342,6 +425,7 @@ class SearchSettings(SectionModel):
     partial: PartialMatchSettings = Field(default_factory=PartialMatchSettings)
     semantic: SemanticSettings = Field(default_factory=SemanticSettings)
     hybrid: HybridSettings = Field(default_factory=HybridSettings)
+    resolve: ResolveSettings = Field(default_factory=ResolveSettings)
 
 
 register_section(READ_SECTION, ReadSettings)

@@ -115,3 +115,32 @@ class SearchRequest(_Body):
     tuning: SearchTuning | None = Field(
         default=None, description="Ranking knobs in place of the `search` settings."
     )
+
+
+ResolveLevel = Literal["exact", "synonym", "trigram", "embedding"]
+
+
+class ResolveRequest(_Body):
+    """Words to ground in the schema and the indexed values (design 8.9)."""
+
+    branch: str | None = None
+    at: str | None = Field(default=None, description=AT)
+    text: str = Field(
+        min_length=1,
+        description="Words to resolve, e.g. a user's question; split into phrases of one to "
+        "a few words.",
+    )
+    kinds: list[str] | None = Field(
+        default=None, description="Kind api names to look in; default: every Kind you may read."
+    )
+    levels: list[ResolveLevel] | None = Field(
+        default=None,
+        description="Matching levels to use (exact, synonym, trigram, embedding); default: "
+        "those the server enables.",
+    )
+    query_vector: list[float] | None = Field(
+        default=None,
+        description="Embedding of `text` (configured model and dimension): enables the "
+        "embedding level when nothing else matched.",
+    )
+    limit: int | None = Field(default=None, ge=1, description="Candidates returned.")

@@ -1,4 +1,5 @@
-"""Read API (design 8, 11.1): Records, Links, query, traversal, neighborhoods and search.
+"""Read API (design 8, 11.1): Records, Links, query, traversal, neighborhoods, search and
+resolution of words to schema and values.
 
 Every read takes `branch` (default: the Domain's default branch) and `at`, a Revision id or
 tag, served from the Revision tree (key reads and listings ordered by key) or from a snapshot
@@ -21,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.query import Query as DslQuery
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading import graph, record_history, records, search
+from lorebase_keeper.reading import graph, record_history, records, resolve, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, JSON, respond
 from lorebase_keeper.reading.cursors import fingerprint
 from lorebase_keeper.reading.points import (
@@ -37,6 +38,7 @@ from lorebase_keeper.reading.requests import (
     AT,
     NeighborhoodRequest,
     QueryRequest,
+    ResolveRequest,
     SearchRequest,
     TraverseRequest,
 )
@@ -47,6 +49,7 @@ from lorebase_keeper.reading.views import (
     QueryResponse,
     RecordPage,
     RecordResponse,
+    ResolveResponse,
     SearchResponse,
     TraverseResponse,
     served,
@@ -490,4 +493,25 @@ async def search_records(
     """Lexical, semantic (caller-supplied vector) or hybrid search (design 8.4)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
     result = await search.search(session, runtime, point, body)
+    return await _sent(session, runtime, point, body, result)
+
+
+@router.post(
+    f"{BASE}/resolve",
+    summary="Resolve words to schema elements and values",
+    responses=_ERRORS,
+    response_model=ResolveResponse,
+)
+async def resolve_words(
+    domain_id: str,
+    body: ResolveRequest,
+    access: DataRead,
+    runtime: ReadRuntimeDep,
+    session: ReadSessionDep,
+) -> Response:
+    """Ground the words of a text in the schema and the indexed values (design 8.9): ranked
+    candidate Kinds, Attributes and values, each with the words it matched and, for values,
+    a ready-to-use predicate. No query is run and nothing is interpreted beyond matching."""
+    point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
+    result = await resolve.resolve(session, runtime, point, body)
     return await _sent(session, runtime, point, body, result)
