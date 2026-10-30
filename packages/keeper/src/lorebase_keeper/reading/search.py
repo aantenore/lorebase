@@ -263,8 +263,10 @@ async def search(
                     runtime,
                     target,
                     point.domain.id,
+                    _fingerprints(point, target),
                     half=precision == "half",
                     scan=scan,
+                    filtered=where is not None,
                 ),
                 settings.hybrid.semantic_weight,
             )
@@ -637,7 +639,7 @@ def _indexed_readable(point: ReadPoint, target: Target) -> Target:
     return Target(target.name, tuple(readable), target.trait)
 
 
-def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElement[bool]:
+def _embedded_kinds(point: ReadPoint, target: Target) -> list[str]:
     """Kinds whose vectors embed only values the caller may read: a Kind that embeds a
     sensitive Attribute (`search.embedding_sensitive`) ranks by it only for cleared callers."""
     readable = []
@@ -653,16 +655,31 @@ def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElemen
             if a in kind.attributes
         ):
             readable.append(kind.id)
+    return readable
+
+
+def _fingerprints(point: ReadPoint, target: Target) -> list[str]:
+    """Template fingerprints of the searched Kinds whose vectors the caller may rank by."""
+    known = template_fingerprints(target.kinds)
+    return sorted({known[k] for k in _embedded_kinds(point, target) if k in known})
+
+
+def _embedded_readable(r: Any, point: ReadPoint, target: Target) -> ColumnElement[bool]:
+    """The Records of `_embedded_kinds`."""
+    readable = _embedded_kinds(point, target)
     return r.c.kind_id.in_(readable) if readable else false()
 
 
 @dataclass(frozen=True, slots=True)
 class SemanticScan:
-    """How the filtered vector list is fetched (design 8.8): `overfetch` nearest rows per
-    wanted one before the filters apply, or, with `overfetch` of `None`, an iterative index
-    scan that goes on until the filters leave enough rows (`lorebase_store.embeddings`)."""
+    """How the vector list is fetched (design 8.8): the `overfetch` nearest vectors per wanted
+    row of the searched Kinds, taken from `embeddings` alone, then joined to the Records. With
+    `iterative`, the index scan goes on until it has them although the filter on the template
+    fingerprints (one Kind's vectors are a small part of the model's) rejects most of what it
+    visits (`lorebase_store.embeddings`)."""
 
-    overfetch: int | None
+    overfetch: int
+    iterative: bool
 
 
 async def _semantic_scan(session: AsyncSession, runtime: ReadRuntime) -> SemanticScan:
@@ -671,11 +688,11 @@ async def _semantic_scan(session: AsyncSession, runtime: ReadRuntime) -> Semanti
     semantic = runtime.search.semantic
     if semantic.iterative_scan == "auto" and await iterative_scans(session):
         await use_iterative_scan(session, semantic.max_scan_tuples)
-        return SemanticScan(None)
+        return SemanticScan(semantic.overfetch_factor, True)
     # The index scan ends after `hnsw.ef_search` rows, whatever the LIMIT: raise it to what is
     # over-fetched (pgvector caps it at 1000).
     await use_ef_search(session, runtime.search.candidates * semantic.overfetch_factor)
-    return SemanticScan(semantic.overfetch_factor)
+    return SemanticScan(semantic.overfetch_factor, False)
 
 
 def _embedding_match(r: Any, e: Any, runtime: ReadRuntime, target: Target) -> ColumnElement[bool]:
@@ -699,9 +716,11 @@ def _semantic(
     runtime: ReadRuntime,
     target: Target,
     domain_id: str,
+    fingerprints: list[str],
     *,
     half: bool = False,
-    scan: SemanticScan | None = None,
+    scan: SemanticScan,
+    filtered: bool = False,
 ) -> Select[Any]:
     """Records ranked by the vector stored for their object hash under the fingerprint of
     their Kind's embedding template in the searched branch's schema: another branch's vector
@@ -709,62 +728,63 @@ def _semantic(
     distance is computed in half precision, as the HNSW index of the storage profile holds it
     (`lorebase_store.embeddings.index_precision`).
 
-    The filters of `base` are part of the statement and come before its `LIMIT`
-    (`SemanticScan` says how the index copes with them): iterative scans run in a materialized
-    subquery, and the rows are ordered again by exact distance outside it."""
+    The nearest vectors come first, from `embeddings` alone, so that the planner reads the
+    HNSW index (joined to the Records, it estimates a few rows, sorts a hash join of both
+    tables and the cost grows with the model's vectors). A fingerprint names one Kind (the
+    template fingerprint includes the Kind id), so `fingerprints`, those of the searched Kinds,
+    leave the vectors of other Kinds out of that list. The Records then give the branch and
+    the filters of `base`; the list is as long as `search.candidates` unless fewer of the
+    `candidates * overfetch` nearest vectors pass them (`_semantic_cut_short` says if more
+    would).
+
+    A request with Attribute conditions (`filtered`) under an iterative scan joins the Records
+    first instead: the conditions must come before the limit for the list to fill, which no
+    number of nearest vectors guarantees. That statement reads the HNSW index only when the
+    planner finds it cheaper than sorting the model's vectors."""
     dims = runtime.store_settings.embeddings.dims
     candidates = runtime.search.candidates
     e = EMBEDDINGS.alias("e")
     kind = HALFVEC(dims) if half else VECTOR(dims)
-    vector_literal = literal(vector, kind)
-
-    def distance_to(embedding: Any) -> ColumnElement[Any]:
-        return cast(embedding, kind).op("<=>", return_type=Float)(vector_literal)
-
-    if scan is not None and scan.overfetch is not None:
-        # The index returns the nearest rows of the model; the filters apply to those only.
-        distance = distance_to(e.c.embedding)
-        nearest = (
-            select(e.c.domain_id, e.c.object_hash, e.c.fingerprint, distance.label("distance"))
-            .where(
-                e.c.domain_id == literal(domain_id),
-                e.c.model == literal(runtime.search.semantic.model),
-                e.c.dims == literal(dims, literal_execute=True),
-            )
-            .order_by(distance)
-            .limit(candidates * scan.overfetch)
-            .subquery("nearest")
-        )
-        fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
-        return (
-            select(r.c.kind_id, r.c.key, (literal(1.0, Float) - nearest.c.distance).label("score"))
-            .join(
-                nearest,
-                and_(
-                    nearest.c.domain_id == r.c.domain_id,
-                    nearest.c.object_hash == r.c.object_hash,
-                    nearest.c.fingerprint == fingerprint,
-                ),
-            )
+    distance = cast(e.c.embedding, kind).op("<=>", return_type=Float)(literal(vector, kind))
+    if filtered and scan.iterative:
+        listed = (
+            select(r.c.kind_id, r.c.key, (literal(1.0, Float) - distance).label("score"))
+            .join(e, _embedding_match(r, e, runtime, target))
             .where(*base)
-            .order_by(nearest.c.distance, r.c.kind_id, r.c.key)
+            .order_by(distance, r.c.kind_id, r.c.key)
             .limit(candidates)
         )
-    distance = distance_to(e.c.embedding)
-    listed = (
-        select(r.c.kind_id, r.c.key, (literal(1.0, Float) - distance).label("score"))
-        .join(e, _embedding_match(r, e, runtime, target))
-        .where(*base)
-        .order_by(distance, r.c.kind_id, r.c.key)
-        .limit(candidates)
+        # Relaxed-order scans return rows slightly out of order: the CTE is computed as written
+        # and ordered again, by exact distance, where it is read.
+        rows = listed.cte("nearest_records").prefix_with("MATERIALIZED")
+        return select(rows).order_by(rows.c.score.desc(), rows.c.kind_id, rows.c.key)
+    nearest = (
+        select(e.c.domain_id, e.c.object_hash, e.c.fingerprint, distance.label("distance"))
+        .where(
+            e.c.domain_id == literal(domain_id),
+            e.c.model == literal(runtime.search.semantic.model),
+            e.c.dims == literal(dims, literal_execute=True),
+            e.c.fingerprint.in_(fingerprints),
+        )
+        .order_by(distance)
+        .limit(candidates * scan.overfetch)
+        .cte("nearest_vectors")
+        .prefix_with("MATERIALIZED")
     )
-    if scan is None:
-        return listed
-    # Relaxed-order scans return rows slightly out of order: the CTE is computed as written
-    # and ordered again, by exact distance, where it is read.
-    nearest_rows = listed.cte("nearest_records").prefix_with("MATERIALIZED")
-    return select(nearest_rows).order_by(
-        nearest_rows.c.score.desc(), nearest_rows.c.kind_id, nearest_rows.c.key
+    fingerprint = fingerprint_of(r.c.kind_id, template_fingerprints(target.kinds))
+    return (
+        select(r.c.kind_id, r.c.key, (literal(1.0, Float) - nearest.c.distance).label("score"))
+        .join(
+            nearest,
+            and_(
+                nearest.c.domain_id == r.c.domain_id,
+                nearest.c.object_hash == r.c.object_hash,
+                nearest.c.fingerprint == fingerprint,
+            ),
+        )
+        .where(*base)
+        .order_by(nearest.c.distance, r.c.kind_id, r.c.key)
+        .limit(candidates)
     )
 
 

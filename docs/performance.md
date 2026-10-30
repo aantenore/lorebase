@@ -1193,46 +1193,68 @@ Docker Desktop). 40 queries from the same distribution go through the Keeper app
 row-level security. Recall@20 is against the exact cosine top 20 of the filter (sequential scan,
 index scans off). Milliseconds are the whole request.
 
-| search | results (mean / fewest) | recall@20 | `semantic_truncated` | p50 | p95 |
-|---|---|---:|---:|---:|---:|
-| no filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 81.2 | 98.7 |
-| 40% filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 53.8 | 77.0 |
-| 1% filter, iterative scan | 20.0 / 20 | 1.000 | 0 of 40 | 15.0 | 17.6 |
-| 1% filter, over-fetch x4 | 7.8 / 2 | 0.389 | 40 of 40 | 20.6 | 23.6 |
-| 40% filter, over-fetch x4 | 20.0 / 20 | 0.964 | 0 of 40 | 35.9 | 68.0 |
-| 1% filter, over-fetch x100 | 9.8 / 2 | 0.491 | 39 of 40 | 33.5 | 78.7 |
+Before revision `0044` (current statement before the change), p50 / p95 in ms, recall@20:
 
-The same run on 300,000 vectors (index 586 MB, built in 57 s), p50 / p95: no filter 269.7 /
-327.6 ms, 40% filter 133.4 / 213.9, 1% filter 20.3 / 32.2, over-fetch x4 at 1% 24.2 / 32.3 and
-at 40% 58.5 / 72.6.
+| search | 100,000 vectors | 300,000 vectors |
+|---|---|---|
+| no filter, iterative scan | 80.4 / 119.0, 1.000 | 328.6 / 513.1, 1.000 |
+| 40% filter, iterative scan | 54.9 / 86.5, 1.000 | 131.5 / 237.8, 1.000 |
+| 1% filter, iterative scan | 13.9 / 16.0, 1.000 | 18.8 / 23.4, 1.000 |
+| 40% filter, over-fetch x4 | 36.7 / 46.2, 0.944 | 63.0 / 73.6, 0.911 |
 
-- **The limit is kept and the order is exact** with iterative scans (20 results of 20, recall
-  1.000, no `semantic_truncated`), and a 1% filter is the cheapest case. The budget of design
-  8.7 is 200 ms p95 at 100,000 vectors (measured 99 to 141 ms, the unfiltered case); the test asserts it, a recall of at least 0.90 and the
-  limit.
-- **The plan does not read the HNSW index.** The statement joins `embeddings` to `mat_records`
-  on `object_hash`, and `mat_records` has no index on `(domain_id, branch, object_hash)`.
-  Postgres keeps the order of an HNSW scan through a join only with a nested loop, which needs
-  that index for the Record side. Without it the planner computes the distance of every vector
-  of the model and sorts (hash join of both tables), or, for a selective filter, reads the
-  filter's Records by key and computes the distance of their vectors. Both are exact, which is
-  why recall is 1.000 and why iterative scans change nothing today. The first is linear in the
-  table (82 ms at 100,000 vectors, 270 ms at 300,000) and misses the budget past about
-  200,000 vectors; the second costs the size of the filter, so a 1% filter is the cheap case.
-  Tried by hand on the 100,000-vector database with an index on `mat_records (domain_id,
-  branch, object_hash)`: the planner runs the HNSW scan under the join and stops as soon as
-  200 rows pass (9 ms with no filter against 78, 21 ms at 40% against 50), and keeps the exact
-  plan for the 1% filter (36 ms). The index is not in the migrations (one more index on the
-  largest table), so `test_iterative_scan_reads_the_hnsw_index` is an expected failure that
-  starts failing when it exists.
-- **Over-fetch** (`iterative_scan: off`, or pgvector before 0.8) reads the HNSW index and is
-  fast, but it sees only the nearest `candidates * overfetch_factor` rows: a 1% filter finds
-  about 8 of the 200 wanted, so the list is short (7.8 results of 20, recall 0.39 here) and
-  `semantic_truncated` says so on every query; a broad filter fills the list (recall 0.96).
-  Before the fix of this release the same run returned 0.2 results of 20: an HNSW scan ends
-  after `hnsw.ef_search` rows (40) whatever its `LIMIT`, so the over-fetch never happened.
-  `ef_search` follows the over-fetch now, capped at pgvector's 1000, so a factor above 5 with
-  the default 200 candidates adds nothing (the x100 row).
+After (revision `0044` and the statement of design 8.8), 20 of 20 results and no
+`semantic_truncated` in every row:
+
+| search | 100,000 vectors | 300,000 vectors |
+|---|---|---|
+| no filter, iterative scan | 19.5 / 27.8, 0.971 | 25.2 / 34.5, 0.917 |
+| 40% filter, iterative scan | 25.9 / 34.5, 0.989 | 31.4 / 38.4, 0.929 |
+| 1% filter, iterative scan | 20.3 / 35.0, 1.000 | 35.4 / 39.1, 1.000 |
+| 1% filter, over-fetch x4 | 19.2 / 25.2, 1.000 | 36.2 / 42.9, 1.000 |
+| 40% filter, over-fetch x4 | 19.4 / 31.3, 0.978 | 19.8 / 28.6, 0.915 |
+
+(index 195 MB built in 14 s at 100,000 vectors, 586 MB in 50 s at 300,000.)
+
+- **The budget of design 8.7 holds at 300,000 vectors** (200 ms p95; 34.5 to 39.1 ms measured)
+  and the cost no longer grows with the table: unfiltered 25 ms at 300,000 against 20 ms at
+  100,000. `test_iterative_scan_reads_the_hnsw_index` asserts that the plan reads the HNSW
+  index, under the row-level-security role.
+- **Recall is the index's.** The unfiltered and 40% rows are approximate (HNSW, m=16,
+  ef_construction=64): 0.97 to 0.99 at 100,000 vectors, 0.92 to 0.93 at 300,000, below the
+  exact 1.000 of the former plan; the test asserts a mean of at least 0.90. Raising
+  `hnsw.ef_search` to 800 changed nothing at 300,000, so it is the graph's quality
+  (`m`, `ef_construction`), not the scan, that bounds it. A 1% Kind is exact: the search reads
+  the vectors of the Kind's template fingerprint, and for that share of the table the planner
+  reads those rows and sorts them.
+- **What changed in the statement.** The nearest vectors are taken from `embeddings` alone
+  (a materialized subquery, `ORDER BY distance LIMIT search.candidates * overfetch_factor`,
+  restricted to the template fingerprints of the searched Kinds), and the Records are joined to
+  that list. Joined first, the planner estimated a few hundred rows (the fingerprint of a Record
+  is a `CASE` on its Kind, without statistics; the row-level-security conditions on both
+  tables) and chose to sort a hash join of both tables, whatever indexes existed. A fingerprint
+  names one Kind (the template fingerprint includes the Kind id), so no column was added. A
+  request with Attribute conditions (`where`) under iterative scans keeps the former join, which
+  puts the conditions before the limit.
+- **The index of revision `0044`** (`mat_records (domain_id, branch, object_hash)`) is the probe
+  of that join. Without it, 300,000 vectors: unfiltered 151.1 / 213.0 ms (over the budget),
+  40% filter 80.1 / 113.4.
+- **Write cost of the index** (`tests/perf/bench.py --scale 100 --extra-links 2 --iterations 20
+  --warmup 5 --branch-iterations 2 --commit-iterations 12 --commit-changes 1000
+  --overlay-iterations 2`, 18,500 Records, two runs each, p50 ms, before / after): commit of 1000
+  changes 358.3, 345.8 / 347.5, 355.3 (no difference); copy branch, background job 1902.9,
+  1820.0 / 1871.7, 1946.9 (+2.6%, within the noise); one copy batch 50.7, 48.2 / 48.4, 49.2;
+  branch deletion, background job 1115.6, 1124.5 / 1317.6, 1263.9 (about +15%: deleting rows
+  updates the index too); one deletion batch 21.5, 22.5 / 22.5, 21.6. Commits, which insert a
+  few rows per Record changed, do not measurably pay; the index costs space (about 40 bytes per
+  Record and branch row) and bulk deletes.
+
+- **Over-fetch** (`iterative_scan: off`, or pgvector before 0.8) takes the same list without
+  the iterative scan: only the nearest `candidates * overfetch_factor` vectors of the searched
+  Kinds' fingerprints are considered. Before revision `0044` a 1% filter found about 8 of the
+  200 wanted (7.8 results of 20, recall 0.39, `semantic_truncated` on every query); now the
+  fingerprint restricts the vectors before the limit, so a one-Kind filter fills the list, and
+  `semantic_truncated` remains for filters the vectors do not carry (`where`, branch
+  membership). `hnsw.ef_search` follows the over-fetch, capped at pgvector's 1000.
 
 ## Storage profiles
 

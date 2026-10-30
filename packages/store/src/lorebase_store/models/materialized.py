@@ -64,6 +64,9 @@ class MatRecord(Base):
             "search",
             postgresql_using="gin",
         ),
+        # Revision 0044: the join of the nearest vectors (domain_id, object_hash) in semantic
+        # search.
+        Index("ix_mat_records_object_hash", "domain_id", "branch", "object_hash"),
         Index(
             "ix_mat_records_values",
             "values",

@@ -28,7 +28,7 @@ leave fewer than `search.candidates` rows, or none. Keeper handles that in one o
 
 | Case | What runs |
 |------|-----------|
-| pgvector 0.8 or later and `search.semantic.iterative_scan: auto` (default) | `SET LOCAL hnsw.iterative_scan = relaxed_order` and `hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction; the index scan goes on until the filters leave enough rows. The nearest rows are a materialized subquery that the outer query orders again by exact distance, so the relaxed order never reaches the response |
+| pgvector 0.8 or later and `search.semantic.iterative_scan: auto` (default) | `SET LOCAL hnsw.iterative_scan = relaxed_order` and `hnsw.max_scan_tuples = search.semantic.max_scan_tuples` (default 20000) inside the read transaction; the index scan goes on until the filters leave enough rows. The nearest vectors of the searched Kinds (`search.candidates * search.semantic.overfetch_factor`) are a materialized subquery over `embeddings` alone, joined to the Records and ordered again by exact distance, so the relaxed order never reaches the response; with a `where` the Records are joined first, so the conditions come before the limit |
 | older pgvector, or `iterative_scan: off` | the index subquery fetches `search.candidates * search.semantic.overfetch_factor` (default 4) nearest rows; the outer query filters and keeps `search.candidates` |
 
 The pgvector version is read once per process (`pg_extension.extversion`) and `/readyz` reports
