@@ -25,15 +25,31 @@ Three properties hold on every read an agent makes:
    lineage, within a token budget you choose.
 2. **Then targeted reads** when the pack is not enough: one Record, one Relation, a DSL query,
    a traversal, a search (design 8 and 11.1). When the task is phrased in someone's words,
-   resolve them first (`POST /resolve`, below) to learn which Kinds, Attributes and values
-   they mean.
-3. **Ask why** with `GET .../explain` before acting on a surprising value.
+   resolve them first (`POST /resolve`), then write the query from the predicates it returns,
+   with `"aggregate": {"group_by": ...}` for counts ([below](#resolve-words-before-querying)).
+3. **Ask why** with `GET .../explain` before acting on a surprising value, and with `history`
+   and `lineage` when the sequence of changes or the evidence of one value matters
+   ([section 3](#history-and-lineage)).
 4. **Write through Operations** (`POST /operations/{op}/execute`), with `dry_run` first and an
    `idempotency_key`; pass `expected_head` (the `revision` of your pack) to fail instead of
    overwriting a newer state. When the change needs review, add a `task` and an `intent`:
    Keeper opens the Proposal for you (section 4).
 5. **Follow changes** with the event stream (`GET /branches/{b}/events`), the polling fallback
    (`GET /branches/{b}/changes?since=`) or a webhook, and refresh only what changed.
+
+Parameters that shape the loop, on the calls that take them:
+
+| Parameter | On | Effect |
+|-----------|----|--------|
+| `lens` | context packs, `POST /search`, Herald's `lorebase_context` and `lorebase_search` | a read preset of the schema: Kinds, Relations, depth, sections and budget as defaults ([below](#lenses-and-traits)) |
+| `traits` | context packs, `POST /search`; `"trait"` in place of `"kind"` in `POST /query` | the Kinds implementing those Traits that the caller may read |
+| `at` | Record reads, history, lineage, health, queries | the answer as of an earlier Revision or tag |
+| `budget_tokens`, `depth`, `relations` | context packs | how much of the graph the pack holds |
+| `expected_head`, `idempotency_key`, `task`, `intent` | Operation executions | safe retries and reviewed writes ([section 4](#4-write-through-operations)) |
+| `assigned=me` | `GET /proposals`, `GET /reconciliation` | the Proposals and candidates whose stewards include the caller, for an agent that reviews ([governance](governance.md#approvals)) |
+
+None of them widens what the caller may read: grants and invisible Kinds apply to the request
+as written out.
 
 To see how an agent moved through the graph, send a session id with its calls and turn on the
 [agent trace](agent-trace.md): every call becomes a step (query, counts, touched Records and
@@ -261,7 +277,10 @@ retail Domain:
 ```
 
 The agent then writes the query itself, for example a `POST /query` on `Product` with
-`{"and": [<color predicate>, <category predicate>]}`, selecting `price`. Levels, tried per
+`{"and": [<color predicate>, <category predicate>]}`, selecting `price`, or with
+`"aggregate": {"group_by": "brand"}` to count the matches per brand; before quoting a value it
+asks why with `explain` (section 3). The same flow over MCP is in
+[Herald](mcp.md#from-words-to-counts). Levels, tried per
 phrase of one to three words: exact names and indexed values, schema aliases (`aliases` on Kinds
 and Attributes, `value_aliases` on Attributes: `Rosso: [red]`), similar spelling (trigrams), and,
 only when nothing else matched and the request carries a `query_vector`, the values of the
@@ -318,7 +337,7 @@ Both also take `at`: the answer at that Revision, read from a snapshot of it (th
 its first-parent chain up to it). Both are authorized like a Record read (the Kind of the path
 must be readable; only that Kind's Attributes appear) and cached by Revision with an `ETag`.
 CLI: `lorebase record history|lineage KIND KEY [--at REV]`; MCP: `lorebase_history`,
-`lorebase_lineage`.
+`lorebase_lineage` ([examples](mcp.md#history-and-lineage)).
 
 ## 4. Write through Operations
 

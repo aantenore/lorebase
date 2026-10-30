@@ -478,9 +478,11 @@ figure.
 Lineage at a branch head is one statement since migration `0032`: the materialized Record keeps
 the Revision behind each value (`mat_records.lineage_revisions`), and the Record, those
 Revisions, the provenance entries, the Proposals, the creating change and the count of changes
-come back in one row. Before, Keeper read the Record, then the newest
-`read.history.lineage_max_changes` (10,000) changes of the Record, then provenance and
-Proposals, and a value set before that window named no Revision.
+come back in one row. Before, Keeper read the Record, then the newest changes of the Record
+(at most 10,000), then provenance and Proposals, and a value set before that window named no
+Revision. The bounds that remain are `read.history.lineage_scan_changes` (changes searched for
+rows that do not name their Revisions yet) and `read.history.lineage_count_max` (changes
+counted).
 
 Measured on 2026-10-22 on the 100k-Record dataset above (scale 540, 4 extra Links per Part),
 same machine, while other workloads kept it busy (load average about 28): get by key took
