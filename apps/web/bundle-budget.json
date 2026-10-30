@@ -1,4 +1,4 @@
 {
-  "mainChunk": { "maxKb": 220, "maxGzipKb": 66 },
-  "initialJs": { "maxKb": 700, "maxGzipKb": 215 }
+  "mainChunk": { "maxKb": 88, "maxGzipKb": 28 },
+  "initialJs": { "maxKb": 570, "maxGzipKb": 180 }
 }
