@@ -260,9 +260,13 @@ decided per Domain by a Scribe `value_index` pass, queued every
 default branch: enums and Attributes marked `resolvable: true` are held; sensitive, vault,
 derived, `resolvable: false` and non-string Attributes never are; a plain string Attribute while
 its distinct values stay within `store.values.max_distinct` (1000) and, once its Kind holds
-`ratio_min_records` (50) Records, within `max_distinct_ratio` (0.2) of them. Values longer than
-`max_value_chars` (64) are left out. A pass on an unchanged default branch with unchanged
-settings costs one read.
+`ratio_min_records` (50) Records, within `max_distinct_ratio` (0.2) of them; one already held is
+dropped only past `hysteresis` (1.2) times those limits. Values longer than `max_value_chars`
+(64) are left out. Distinct values are counted again when the schema or these settings change,
+or every `stats_interval_s` (3600 s); other passes read the sizes in `mat_values` only and drop an
+Attribute any branch holds more than `hard_max_distinct` (10,000) values of. A schema change on
+the default branch that makes an Attribute sensitive, vault, derived, of another type or
+`resolvable: false` removes its values in the same commit and queues a pass.
 
 **After the upgrade.** Migration `0045` creates the tables, the triggers and the definer
 function `lb_values_similar` (granted to `database.application_role`; for a role created later,
@@ -275,11 +279,16 @@ lorebase-scribe value-index DOMAIN            # decide the selection and backfil
 lorebase-scribe value-index DOMAIN --rebuild  # recount every value from the Records
 ```
 
-Adding an Attribute to the selection backfills it on every branch of the Domain under a
-`SHARE` lock on `mat_records`: writes of every Domain wait for it (reads do not), about 2.5 s
-for five Attributes over 100,000 Records ([performance](performance.md#resolution)); the lock
-wait is bounded by `store.commit.lock_timeout_ms`, and a pass that cannot get it fails and is
-retried like any job. Run the first pass of a large install in a quiet period. `--rebuild` is
+A pass that adds or drops Attributes takes the Domain's value lock (a transaction advisory lock)
+exclusively: writers of that Domain wait at their next statement until the pass commits;
+readers and other Domains do not wait. The backfill reads each Kind once for all its added
+Attributes, at most `store.values.max_added_per_pass` (20) Attributes per pass, the rest
+queued as the next pass; 1.5 s for five Attributes over 100,000 Records
+([performance](performance.md#resolution)), so plan the first pass of a Domain of tens of
+millions of Records for a quiet period, or lower `max_added_per_pass`. The pass runs under
+`store.values.pass_statement_timeout_ms` (120 s), which bounds how long writers can wait; the
+wait for the lock itself is bounded by `store.commit.lock_timeout_ms`, and a pass that times
+out fails and is retried like any job. `--rebuild` is
 the repair path: it recounts the Domain from its Records and should leave the table unchanged
 (the tests check that triggers and recount agree). `store.values.enabled: false` drops every
 selection on the next pass; resolution then matches schema names and aliases only.
