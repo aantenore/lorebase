@@ -1798,7 +1798,11 @@
                     "enum": [
                       "kind",
                       "attribute",
-                      "relation"
+                      "relation",
+                      "kind_alias",
+                      "attribute_alias",
+                      "value_alias",
+                      "attribute_description"
                     ],
                     "type": "string"
                   }
@@ -4488,7 +4492,7 @@
           "read"
         ],
         "summary": "Query Records with the DSL",
-        "description": "Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates.",
+        "description": "Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates. The\nanswer says how complete it can be (`coverage`, design 8.11) unless the request turns it\noff.",
         "operationId": "query_records_api_v1_domains__domain_id__query_post",
         "security": [
           {
@@ -4840,7 +4844,7 @@
           "read"
         ],
         "summary": "Resolve words to schema elements and values",
-        "description": "Ground the words of a text in the schema and the indexed values (design 8.9): ranked\ncandidate Kinds, Attributes and values, each with the words it matched and, for values,\na ready-to-use predicate. No query is run and nothing is interpreted beyond matching.",
+        "description": "Ground the words of a text in the schema and the indexed values (design 8.9): ranked\ncandidate Kinds, Attributes and values, each with the words it matched and, for values,\na ready-to-use predicate. No query is run and nothing is interpreted beyond matching.\nPhrases that matched nothing are listed in `coverage.unknown` and, where the operator\nturned it on, kept for vocabulary suggestions (design 8.10).",
         "operationId": "resolve_words_api_v1_domains__domain_id__resolve_post",
         "security": [
           {
@@ -13085,6 +13089,52 @@
         "title": "AttributeCondition",
         "description": "Compare an Attribute, `key` or `title` with a value."
       },
+      "AttributeCoverage": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "attribute": {
+            "type": "string",
+            "title": "Attribute"
+          },
+          "missing": {
+            "type": "number",
+            "title": "Missing",
+            "description": "Share of the Kind's Records without a value, 0 to 1."
+          },
+          "missing_records": {
+            "type": "integer",
+            "title": "Missing Records",
+            "description": "Records without a value (estimated if sampled)."
+          },
+          "used_in": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "where",
+                "select",
+                "order_by",
+                "resolve"
+              ]
+            },
+            "type": "array",
+            "title": "Used In",
+            "description": "Where the request used the Attribute (resolve: a candidate named it)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "attribute",
+          "missing",
+          "missing_records",
+          "used_in"
+        ],
+        "title": "AttributeCoverage",
+        "description": "How many Records of a Kind miss an Attribute the request used."
+      },
       "AttributeLineageOut": {
         "properties": {
           "revision": {
@@ -14585,6 +14635,62 @@
           "partitions"
         ],
         "title": "CountsResponse"
+      },
+      "CoverageOut": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/KindCoverage"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeCoverage"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceFreshness"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unknown",
+            "description": "Resolution: phrases that matched nothing in this Domain (no Kind, Attribute or indexed value)."
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes",
+            "description": "One line per signal, for agents and people."
+          },
+          "omitted": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Omitted",
+            "description": "Why statistics are left out (e.g. not the default branch)."
+          }
+        },
+        "type": "object",
+        "title": "CoverageOut",
+        "description": "How complete an answer can be (design 8.11): an empty result is not missing data. Read\nfrom statistics of the default branch head, never from the Records; only Kinds and\nAttributes the caller may read are described."
       },
       "CreateApiKey": {
         "properties": {
@@ -17592,6 +17698,64 @@
         "description": "Items matching every given filter."
       },
       "JsonValue": {},
+      "KindCoverage": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Records",
+            "description": "Live Records of the Kind when counted."
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of",
+            "description": "Revision (hex) the statistics were counted at."
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "approximate": {
+            "type": "boolean",
+            "title": "Approximate",
+            "description": "The head moved since, or the Kind was counted over a sample."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "records",
+          "as_of",
+          "approximate"
+        ],
+        "title": "KindCoverage",
+        "description": "The statistics the coverage of a Kind was read from."
+      },
       "KindHealth": {
         "properties": {
           "kind": {
@@ -20240,6 +20404,18 @@
             ],
             "title": "At",
             "description": "Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision."
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage",
+            "description": "Add the coverage block (design 8.11): missing values of the Attributes used, Source freshness. Default: read.coverage.enabled."
           }
         },
         "additionalProperties": false,
@@ -20284,6 +20460,17 @@
                 "type": "null"
               }
             ]
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How complete the answer can be (unless coverage: false)."
           }
         },
         "type": "object",
@@ -22123,6 +22310,24 @@
             ],
             "title": "Limit",
             "description": "Candidates returned."
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage",
+            "description": "Add the coverage block (design 8.11): missing values of the Attributes used, Source freshness. Default: read.coverage.enabled."
+          },
+          "record_misses": {
+            "type": "boolean",
+            "title": "Record Misses",
+            "description": "false: never keep the phrases that matched nothing for vocabulary suggestions (they are kept only where the operator turned it on).",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -22165,6 +22370,17 @@
             "type": "array",
             "title": "Skipped",
             "description": "Levels that did not run, and why."
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Phrases unknown in this Domain and how many Records miss the Attributes of the candidates (unless coverage: false)."
           }
         },
         "type": "object",
@@ -23511,6 +23727,70 @@
         "title": "SessionInfo",
         "description": "The browser session of the caller."
       },
+      "SourceFreshness": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "Source api name."
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At",
+            "description": "End of its last successful run (dry runs aside); null: never."
+          },
+          "stale_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale After",
+            "description": "The Source's stale_after."
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "description": "Its last successful run is older than stale_after (or it never ran)."
+          },
+          "unseen_records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unseen Records",
+            "description": "Records it owns that no run has seen for stale_after (incremental Sources with stale_after), as of the statistics."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "source",
+          "last_synced_at",
+          "stale"
+        ],
+        "title": "SourceFreshness",
+        "description": "When a Source feeding a Kind last synchronized, and what it has not seen lately."
+      },
       "SourcePreviewOut": {
         "properties": {
           "domain": {
@@ -23797,7 +24077,11 @@
             "enum": [
               "kind",
               "attribute",
-              "relation"
+              "relation",
+              "kind_alias",
+              "attribute_alias",
+              "value_alias",
+              "attribute_description"
             ],
             "title": "Type"
           },
@@ -23830,23 +24114,59 @@
             "title": "Target",
             "description": "To Kind of a Relation."
           },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Vocabulary suggestions: the Attribute they change."
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "Value aliases: the stored value the alias stands for."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Attribute descriptions: the proposed description."
+          },
           "labels": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Labels",
-            "description": "Labels as the documents wrote them."
+            "description": "Labels as the documents wrote them; the missed phrases of a vocabulary suggestion."
           },
           "support": {
             "type": "integer",
             "title": "Support",
-            "description": "Observations, over every document."
+            "description": "Observations, over every document; misses for a vocabulary suggestion."
           },
           "documents": {
             "type": "integer",
             "title": "Documents",
-            "description": "Documents it was observed in."
+            "description": "Documents it was observed in; distinct missed phrases for a vocabulary suggestion."
           },
           "confidence": {
             "type": "number",
@@ -23887,7 +24207,7 @@
             },
             "type": "array",
             "title": "Examples",
-            "description": "Evidence: document, chunk, offsets into the parsed text, quote."
+            "description": "Evidence: document, chunk, offsets into the parsed text, quote; for a vocabulary suggestion the missed phrase, its misses, distinct callers and the similarity that linked it."
           },
           "sources": {
             "items": {

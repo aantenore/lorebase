@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -638,15 +639,37 @@ def query_command(
         body["at"] = at
     client = app.client()
     domain_id = app.domain(domain)
+    first = client.records.query(domain_id, body)
     if body.get("aggregate"):
-        result = client.records.query(domain_id, body)
-        app.out.emit(result, lambda: _print_aggregate(app, result))
+        app.out.emit(first, lambda: _print_aggregate(app, first))
+        _print_coverage(app, first.coverage)
         return
-    items, more = app.take(client.records.iterate_query(domain_id, body), limit, everything)
+
+    def pages() -> Iterator[m.RecordItem]:
+        page = first
+        while True:
+            yield from page.items
+            if page.next_cursor is None:
+                return
+            following = {**body, "cursor": page.next_cursor, "coverage": False}
+            page = client.records.query(domain_id, following)
+
+    items, more = app.take(pages(), limit, everything)
     selected = [str(s) for s in body.get("select") or [] if s not in ("key", "title")]
     _print_records(app, items, selected)
     if more:
         app.note_truncated(len(items))
+    _print_coverage(app, first.coverage)
+
+
+def _print_coverage(app: AppContext, coverage: m.Coverage | None) -> None:
+    """The coverage notes (design 8.11), one line each, besides the results."""
+    if coverage is None:
+        return
+    for note in coverage.notes:
+        app.out.info(note)
+    if coverage.omitted:
+        app.out.info(f"coverage: {coverage.omitted}")
 
 
 def _query_body(text: str) -> dict[str, Any]:
@@ -828,3 +851,4 @@ def resolve_command(
         app.out.info(f"{skipped.level} skipped: {skipped.reason}")
     if result.unmatched:
         app.out.info("unmatched: " + ", ".join(result.unmatched))
+    _print_coverage(app, result.coverage)

@@ -57,7 +57,15 @@ CheckStatus = Literal["passed", "failed", "pending"]
 ContextFormat = Literal["json", "markdown"]
 ItemDecisionValue = Literal["pending", "accepted", "rejected"]
 ItemType = Literal["record", "value", "link"]
-SuggestionType = Literal["kind", "attribute", "relation"]
+SuggestionType = Literal[
+    "kind",
+    "attribute",
+    "relation",
+    "kind_alias",
+    "attribute_alias",
+    "value_alias",
+    "attribute_description",
+]
 
 
 class Model(BaseModel):
@@ -559,8 +567,53 @@ class Aggregate(Model):
     truncated: bool = False
 
 
+class AttributeCoverage(Model):
+    """How many Records of a Kind miss an Attribute the request used."""
+
+    kind: str
+    attribute: str
+    missing: float
+    """Share of the Kind's Records without a value, 0 to 1."""
+    missing_records: int
+    used_in: list[Literal["where", "select", "order_by", "resolve"]]
+
+
+class SourceFreshness(Model):
+    """When a Source feeding a Kind last synchronized, and what it has not seen lately."""
+
+    kind: str
+    source: str
+    last_synced_at: datetime | None
+    stale_after: str | None = None
+    stale: bool
+    unseen_records: int | None = None
+
+
+class KindCoverage(Model):
+    """The statistics the coverage of a Kind was read from."""
+
+    kind: str
+    records: int | None
+    as_of: str | None
+    computed_at: datetime | None = None
+    approximate: bool
+
+
+class Coverage(Model):
+    """How complete an answer can be: missing values of the Attributes used, Source
+    freshness, phrases unknown to the Domain, one note per signal."""
+
+    kinds: list[KindCoverage] = Field(default_factory=list)
+    attributes: list[AttributeCoverage] = Field(default_factory=list)
+    sources: list[SourceFreshness] = Field(default_factory=list)
+    unknown: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    omitted: str | None = None
+
+
 class QueryResult(RecordPage):
     aggregate: Aggregate | None = None
+    coverage: Coverage | None = None
 
 
 class LinkItem(Model):
@@ -660,6 +713,7 @@ class ResolveResult(Served):
     candidates: list[ResolveCandidate]
     unmatched: list[str] = Field(default_factory=list)
     skipped: list[ResolveSkipped] = Field(default_factory=list)
+    coverage: Coverage | None = None
 
 
 class QueryRequest(RequestModel):
@@ -676,6 +730,8 @@ class QueryRequest(RequestModel):
     aggregate: dict[str, JsonValue] | None = None
     branch: str | None = None
     at: str | None = None
+    coverage: bool | None = None
+    """Add the coverage block (default: the server's setting); false turns it off."""
 
 
 class RecordAddress(RequestModel):
@@ -756,6 +812,10 @@ class ResolveRequest(RequestModel):
     levels: list[ResolveLevel] | None = None
     query_vector: list[float] | None = None
     limit: int | None = Field(default=None, ge=1)
+    coverage: bool | None = None
+    record_misses: bool | None = None
+    """False: the phrases that matched nothing are never kept for vocabulary suggestions
+    (default: the server's, true)."""
 
 
 # Revisions, log and diff ------------------------------------------------------------------
@@ -1784,13 +1844,17 @@ class SuggestionDuplicate(Model):
 
 
 class SchemaSuggestion(Model):
-    """A Kind, Attribute or Relation extraction found outside the schema."""
+    """A Kind, Attribute or Relation extraction found outside the schema, or an alias or
+    description proposed from resolution misses (vocabulary suggestions)."""
 
     id: str
     type: SuggestionType
     name: str
     kind: str | None = None
     target: str | None = None
+    attribute: str | None = None
+    value: str | None = None
+    description: str | None = None
     labels: list[str]
     support: int
     documents: int
