@@ -2175,28 +2175,10 @@ Acceptance:
 
 ### Implementation status
 
-Architect calls with code in the repository (M1 in progress). Paths are under `packages/core/src/lorebase_core/` unless noted. Calls not listed are not implemented yet, or are policies with nothing to build (AC-04, AC-14).
+Every architect call above has code on `main`, except the ones that are policies with nothing to build (AC-04, AC-14, AC-21). The [roadmap](roadmap.md) tracks, milestone by milestone, what is merged and covered by tests and what is still open; the [CHANGELOG](../CHANGELOG.md) has the details of each change. Two places where the code goes beyond a call as first written:
 
-| ID | Status | Implemented in |
-|----|--------|----------------|
-| AC-01 | Implemented | `model/ids.py` (prefixed ULIDs), `model/base.py` (`id` plus renamable `api_name`); YAML rename rule in `model/yaml_schema.py` (5.13) |
-| AC-02 | Implemented | `model/record.py` (`(kind, key)`, natural key or minted ULID), `validate/data_rules.py` |
-| AC-03 | Implemented | `model/record.py` and `tree/root.py` (`link_key`: one Link per Relation and endpoint pair), `validate/changeset.py` |
-| AC-05 | Implemented | `types/types.py` (scalar types, arrays of scalars only), `types/casts.py` |
-| AC-06 | Implemented | `expr/` (compile, type check, evaluate, plan steps; 6.15); `validate_schema` checks every expression when `SchemaRules.allow_expressions` is set, which `schema.expressions_enabled` (default on) sets wherever a schema is validated; Keeper executes stored Operations (`keeper.operations.expressions_enabled`, default on); the materializer recomputes Derivations |
-| AC-07 | Implemented | `model/derivation.py`; `validate/data_rules.py` rejects stored derived values; `lorebase_store.materialize.derived` recomputes them in the `derived` column of the materialized head (6.15) |
-| AC-08 | Implemented in the engine | `model/lineage.py`, `revision/changeset.py` (provenance on changes, outside hashes); the merge engine carries provenance through `ProvenanceLoader` |
-| AC-09 | Implemented | `canonical/jcs.py`, `canonical/hashing.py`, `types/encoding.py` (6.15) |
-| AC-10 | Schema only | `objects` and `tree_nodes` are keyed per Domain in `packages/store` (revision `0001`); no repository code yet |
-| AC-11 | Implemented | `tree/` (`node.py`, `hamt.py`, `diff.py`, `root.py`), `revision/changeset.py` (6.15) |
-| AC-13 | Implemented | `revision/ancestry.py` (lowest common ancestors, `merge_base`), `merge/engine.py` (virtual base) |
-| AC-15, AC-16 | Implemented | `lorebase_store.materialize` (full copies, rebuilds and overlay branches, revision `0010`), `lorebase_store.layout` (overlay reads) |
-| AC-12, AC-18 | Schema only | Ref compare-and-swap and `SKIP LOCKED` claim contracts are documented in [store-schema-notes.md](store-schema-notes.md); no commit pipeline or job runner yet |
-| AC-30 | Implemented | `.importlinter` forbids `keeper` and `herald` from importing `inference` |
-| AC-34 | Implemented | `lorebase_scribe.sources.delta` (comparison with the last-written state, local edits, seeding), `lorebase_scribe.sources.sync` (staging, `keep` resolutions, audit), `lorebase_store.merging.preserved` and `merge/engine.py` (`base_overrides`, the preserved base), `lorebase_store.repositories.source_written` (advanced in the merge), migration `0040`; the extraction hold in `lorebase_scribe.extraction.assemble` |
-| AC-35 | Implemented | `lorebase_store.repositories.documents` (versions, retire, purge, migration `0041`), `lorebase_keeper.routes.documents` (intake by key, versions, retirement, purge), `lorebase_scribe.reconcile.versions` (job `document_version_check`), `lorebase_core.reconcile.evidence_gone_verdict` |
-| AC-31, AC-32, AC-33 | Implemented | `lorebase_core.reconcile` (claims, normalization, classification, fingerprints), `lorebase_scribe.reconcile` (triggers, sweep, semantic stage), `lorebase_keeper.services.reconciliation` (decisions through `update_{kind}`, decision branches, duplicate merges), migration `0038`; valid time on `ProvenanceEntry` and `Attribute.valid_time` |
-| AC-25, AC-29 | Partial | `packages/inference`: interfaces, settings, registry and the deterministic fake provider; no HTTP provider yet |
+- AC-16: overlay branches (planned for M5) are implemented, with copy on write instead of a recomputed tree diff (6.11).
+- AC-23: the backend image has a second build target, `backend-ml` (image `lorebase-ml`), with the embedding libraries and a model baked in, used by Guide and Scribe; Keeper, Herald and the migrations stay on the smaller image.
 
-Merge (6.8 to 6.10) is implemented in `merge/` on top of AC-09, AC-11 and AC-13; its decisions are in 6.15.
+Where to start reading: the engine (canonical form, trees, Revisions, merge, expressions, reconciliation rules) is in `packages/core/src/lorebase_core/`; storage, the commit pipeline, materialization and the value index in `packages/store`; the REST API in `packages/keeper`; jobs, Sources, extraction and reconciliation in `packages/scribe`; model providers in `packages/inference`; the MCP server in `packages/herald` ([17](#17-repository-layout)).
 
