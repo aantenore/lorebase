@@ -38,6 +38,7 @@ TOOLS = {
     "lorebase_get",
     "lorebase_query",
     "lorebase_search",
+    "lorebase_resolve",
     "lorebase_neighborhood",
     "lorebase_context",
     "lorebase_explain",
@@ -258,6 +259,52 @@ async def test_search_is_lexical_unless_a_vector_is_given(
         missing = error_text(await client.call_tool("lorebase_search", {}))
     assert out.splitlines()[1] == '1. Part/P-1 "Bearing" (0.5) - roller'
     assert "[query-required]" in missing
+
+
+async def test_resolve_sends_the_words_and_lists_candidates_with_their_predicate(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on(
+        "POST",
+        f"{API}/resolve",
+        {
+            "revision": REVISION,
+            "served_from": "materialized",
+            "candidates": [
+                {
+                    "target": "value",
+                    "kind": "Part",
+                    "attribute": "category",
+                    "values": ["bearing"],
+                    "predicate": {"attr": "category", "op": "eq", "value": "bearing"},
+                    "score": 0.9,
+                    "level": "exact",
+                    "matched": "bearing",
+                    "records": 3,
+                }
+            ],
+            "unmatched": ["the"],
+        },
+    )
+    async with connect() as client:
+        out = text(
+            await client.call_tool(
+                "lorebase_resolve",
+                {"text": "the bearing", "kinds": ["Part"], "levels": ["exact"], "limit": 4},
+            )
+        )
+        assert fake.last_body() == {
+            "text": "the bearing",
+            "kinds": ["Part"],
+            "levels": ["exact"],
+            "limit": 4,
+        }
+        bad = await client.call_tool("lorebase_resolve", {"text": "x", "levels": ["fuzzy"]})
+    lines = out.splitlines()
+    assert lines[1] == "1. value Part.category = bearing | exact 0.9 for 'bearing', 3 records"
+    assert lines[2] == '   where: {"attr":"category","op":"eq","value":"bearing"}'
+    assert lines[-1] == "unmatched: the"
+    assert bad.is_error
 
 
 async def test_search_lists_the_typo_corrections_keeper_applied(

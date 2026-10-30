@@ -475,6 +475,62 @@ def search_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     return "\n".join(lines)
 
 
+def resolve_view(body: m.ResolveResult, output: OutputSettings) -> View:
+    shown, omitted = capped(
+        [
+            {
+                key: value
+                for key, value in {
+                    "target": c.target,
+                    "ref": c.kind if c.attribute is None else f"{c.kind}.{c.attribute}",
+                    "type": c.type,
+                    "values": c.values,
+                    "predicate": c.predicate,
+                    "records": c.records,
+                    "level": c.level,
+                    "score": round(c.score, 4),
+                    "matched": c.matched,
+                }.items()
+                if value is not None
+            }
+            for c in body.candidates
+        ],
+        output.max_items,
+    )
+    view: View = {"revision": body.revision, "candidates": shown}
+    if body.unmatched:
+        view["unmatched"] = body.unmatched
+    if body.skipped:
+        view["skipped"] = [{"level": s.level, "reason": s.reason} for s in body.skipped]
+    if omitted:
+        view["omitted"] = omitted
+    return view
+
+
+def resolve_text(view: Mapping[str, Any], output: OutputSettings) -> str:
+    lines = [f"rev {view['revision']}: {len(view['candidates'])} candidates"]
+    for index, candidate in enumerate(view["candidates"], start=1):
+        head = f"{index}. {candidate['target']} {candidate['ref']}"
+        if candidate.get("type"):
+            head += f" ({candidate['type']})"
+        if candidate.get("values"):
+            head += " = " + ", ".join(
+                value_text(v, output.max_value_chars) for v in candidate["values"]
+            )
+        tail = f"{candidate['level']} {candidate['score']} for {candidate['matched']!r}"
+        if candidate.get("records") is not None:
+            tail += f", {candidate['records']} records"
+        lines.append(f"{head} | {tail}")
+        if candidate.get("predicate"):
+            lines.append(f"   where: {value_text(candidate['predicate'], output.max_value_chars)}")
+    lines.extend(more_line(view.get("omitted", 0), "lower `limit` or name `kinds`"))
+    if view.get("unmatched"):
+        lines.append("unmatched: " + ", ".join(view["unmatched"]))
+    for skipped in view.get("skipped", []):
+        lines.append(f"skipped {skipped['level']}: {skipped['reason']}")
+    return "\n".join(lines)
+
+
 # Explanation ----------------------------------------------------------------------------------
 
 

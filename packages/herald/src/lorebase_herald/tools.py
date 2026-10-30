@@ -240,6 +240,36 @@ class LorebaseTools:
         view = views.search_view(found, self.output)
         return render(view, views.search_text(view, self.output), self.fmt(fmt), self.output)
 
+    async def resolve(
+        self,
+        credential: str | None,
+        *,
+        text: str,
+        kinds: Sequence[str] | None,
+        levels: Sequence[str] | None,
+        query_vector: Sequence[float] | None,
+        limit: int | None,
+        domain: str | None,
+        branch: str | None,
+        at: str | None,
+        fmt: str | None,
+    ) -> str:
+        request = self.request(
+            m.ResolveRequest,
+            text=text,
+            kinds=list(kinds) if kinds else None,
+            levels=list(levels) if levels else None,
+            query_vector=list(query_vector) if query_vector else None,
+            limit=limit or None,
+            branch=self.branch(branch),
+            at=at,
+        )
+        name = self.domain(domain)
+        async with self.session(credential) as client:
+            found = await client.records.resolve(name, request)
+        view = views.resolve_view(found, self.output)
+        return render(view, views.resolve_text(view, self.output), self.fmt(fmt), self.output)
+
     async def neighborhood(
         self,
         credential: str | None,
