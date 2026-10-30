@@ -379,16 +379,15 @@ decide the remaining value Conflicts from the Lineage of both branches
 ([design 6.10](design.md#610-resolution-flows)).
 
 Automatic merges into a protected target happen only with `auto_merge_protected` (default
-true): the policy is part of the reviewed schema. With it off, those Proposals stay open. Even
-with it on, an automatic merge never stands in for a review: when the effective approval rules of
-the target (`keeper.proposals.required_approvals`, `required_approvals_from_stewards`,
-`required_roles`, each overridden by the Domain setting of the same name) require any approval,
-the merge is not performed, the Proposal stays open for review, and the run's stats say why
-(`merge_blocked: approvals`, with the rules in `blocking_rules`). The default branch is
-protected and `required_approvals` defaults to 1, so a Source merges into it on its own only
-where the operator or the Domain sets `required_approvals: 0` (and no steward or role rule
-applies). Unprotected targets are not affected. A run with no changes leaves an open Proposal
-untouched; with an automatic policy it retries its merge.
+true): the policy is part of the reviewed schema, and the setting is the operator's trust in
+automation, so it waives the plain `required_approvals` count. It does not waive the rules that
+name who must approve: when steward approvals (`required_approvals_from_stewards` above 0) or
+required roles (`required_roles` not empty) apply to the target, from `keeper.proposals` or the
+Domain setting of the same name, the merge is not performed, the Proposal stays open for review,
+and the run's stats say why (`merge_blocked: approvals`, with the rules in `blocking_rules`).
+With `auto_merge_protected` off, those Proposals stay open whatever the rules. Unprotected
+targets are not affected. A run with no changes leaves an open Proposal untouched; with an
+automatic policy it retries its merge.
 
 A dry run (`dry_run: true`) reads, maps and computes the delta against the state step 3 would
 produce, records the counts in the run (`local_edits` and `seeded` included) and writes

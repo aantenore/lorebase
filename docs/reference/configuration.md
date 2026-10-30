@@ -769,7 +769,7 @@ Storage profile (docs/performance.md#storage-profiles): memory and disk traded f
 | `store.storage.lexicon_index` | `null` | trigram index of the typo lexicon (null: off with compact) |
 | `store.storage.embedding_precision` | `null` | half \| full HNSW index (null: half with compact) |
 | `store.storage.hnsw_m` | `null` | HNSW links per node, 2-100 (null: pgvector's 16) |
-| `store.storage.hnsw_ef_construction` | `null` | HNSW build candidate list, &gt;= 2 \* hnsw_m (null: pgvector's 64); both apply to indexes built from then on (docs/operations.md) |
+| `store.storage.hnsw_ef_construction` | `128` | HNSW build candidate list, &gt;= 2 \* hnsw_m (null: pgvector's 64); both apply to indexes built from then on; an existing index keeps its own until rebuilt (docs/operations.md) |
 | `store.storage.compression` | `null` | lz4 \| pglz for values above ~2 kB (null: pglz with compact) |
 | `store.storage.records_fillfactor` | `null` | 50-100 (null: 90 with fast, 100 otherwise) |
 | `store.storage.prewarm` | `null` | apply ends with `storage prewarm` (null: on with fast) |
@@ -1522,7 +1522,7 @@ Source synchronization (design 9.1)
 | `scribe.sources.commit_batch` | `5000` | changes per Revision; one row's changes are never split |
 | `scribe.sources.max_row_errors` | `100` | skipped rows tolerated; more fail the run without committing |
 | `scribe.sources.error_samples` | `20` | row errors kept in the run record |
-| `scribe.sources.auto_merge_protected` | `true` | automatic merge policies also merge into protected branches whose approval rules (keeper.proposals) require no approval |
+| `scribe.sources.auto_merge_protected` | `true` | automatic merge policies also merge into protected branches (waives required_approvals, not steward or role rules) |
 
 #### `scribe.sources.csv`
 
@@ -1616,7 +1616,7 @@ Documents into reviewable Proposals (docs/extraction.md)
 | `scribe.extraction.min_confidence` | `0.3` | weaker candidates are dropped |
 | `scribe.extraction.mode` | `doubts_only` | ingestion mode of Domains without their own: review_all (nothing accepted at once) or doubts_only; direct is refused here, a Domain's settings.extraction may choose it |
 | `scribe.extraction.domain_may_loosen` | `[mode]` | members a Domain may set looser than these (mode, auto_accept_threshold, min_confidence); []: none |
-| `scribe.extraction.direct_merge_protected` | `true` | direct-mode jobs may merge into a protected branch whose approval rules (keeper.proposals) require no approval; false: their Proposals wait for approvals |
+| `scribe.extraction.direct_merge_protected` | `true` | direct-mode jobs may merge into a protected branch (waives required_approvals, not steward or role rules); false: their Proposals wait for approvals |
 | `scribe.extraction.new_record_kinds` | `null` | Kinds that may get new Records; null: every natural-key Kind |
 | `scribe.extraction.value_cue_words` | `8` | a rule-found value needs a cue word this close before it |
 | `scribe.extraction.max_items_per_job` | `5000` |  |
