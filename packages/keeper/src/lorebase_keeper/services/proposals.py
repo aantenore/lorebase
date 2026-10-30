@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.merge import Conflict, MergePolicy, Resolution, ResolutionError
-from lorebase_core.model import new_ulid
+from lorebase_core.model import Schema, new_ulid
 from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.context import StoreAccess, require_branch, require_domain, require_revision
 from lorebase_keeper.errors import NOT_FOUND, VALIDATION_FAILED, ProblemError, ProblemType
@@ -55,7 +55,12 @@ from lorebase_keeper.services.proposal_reads import (
 )
 from lorebase_keeper.services.reconciliation_settle import settle_merged
 from lorebase_keeper.services.schema import SchemaGuard, schema_at
-from lorebase_keeper.services.stewards import Stewards, proposal_subject
+from lorebase_keeper.services.stewards import (
+    Assigned,
+    AssigneeList,
+    Stewards,
+    proposal_subject,
+)
 from lorebase_store.approval_rules import effective_rules
 from lorebase_store.merging import (
     AttemptResult,
@@ -88,6 +93,7 @@ from lorebase_store.repositories import (
     ResolutionRow,
     ReviewRepository,
     ReviewRow,
+    scope_to_domain,
 )
 from lorebase_store.runtime import StoreRuntime
 
@@ -1090,3 +1096,51 @@ def _limited(attempt: MergeAttemptRow, partitions: PartitionFilter) -> MergeAtte
     ]
     outcome["unmatched_resolutions"] = []
     return replace(attempt, outcome=outcome)
+
+
+# Steward assignments ------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Assignment:
+    """Steward roles, shown assignees and whether the caller is an assignee."""
+
+    roles: tuple[str, ...]
+    assignees: AssigneeList
+    mine: bool
+
+    def matches(self, assigned: Assigned | None) -> bool:
+        """Whether the Proposal passes the `assigned` filter of a listing."""
+        if assigned is None:
+            return True
+        if assigned == "me":
+            return self.mine
+        return bool(self.roles) == (assigned == "any")
+
+
+async def assignments(
+    store: StoreAccess,
+    stewards: Stewards,
+    principal: Principal,
+    domain_id: str,
+    rows: Sequence[ProposalRow],
+) -> dict[str, Assignment]:
+    """The steward assignment of each Proposal, by the schema of its target's head."""
+    schemas: dict[str, Schema | None] = {}
+    kinds: dict[str, tuple[str, ...] | None] = {}
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        for target in sorted({row.target_ref for row in rows}):
+            head = await head_schema(session, domain_id, target, runtime=store.runtime)
+            schemas[target] = None if head is None else head.schema
+        for row in rows:
+            kinds[row.id] = await proposal_kinds(session, domain_id, row)
+    found: dict[str, Assignment] = {}
+    for row in rows:
+        subject = proposal_subject(schemas[row.target_ref], kinds[row.id], row.target_ref)
+        found[row.id] = Assignment(
+            roles=subject.roles,
+            assignees=await stewards.listing(principal, domain_id, subject),
+            mine=await stewards.is_assignee(principal, domain_id, subject),
+        )
+    return found

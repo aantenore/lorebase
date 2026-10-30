@@ -35,9 +35,7 @@ caller is an assignee of, those with steward roles, or those without.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -46,7 +44,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from lorebase_core.canonical import hex
 from lorebase_core.merge import ConflictKind
-from lorebase_core.model import Schema, Sensitivity
+from lorebase_core.model import Sensitivity
 from lorebase_keeper.auth.audit import annotate
 from lorebase_keeper.auth.deps import Access, AuthDep, PrincipalDep, authorize, require
 from lorebase_keeper.auth.permissions import Permission
@@ -56,16 +54,7 @@ from lorebase_keeper.deps import IdempotencyKeyDep, KeeperSettingsDep
 from lorebase_keeper.errors import VALIDATION_FAILED, Problem, ProblemError, ValidationProblem
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.points import read_guard
-from lorebase_keeper.reading.sensitivity import (
-    Disclosure,
-    Masking,
-    collapse_issues,
-    conflict_hidden,
-    default_schema,
-    mask_conflict,
-    masking_for,
-)
-from lorebase_keeper.reading.visibility import projection
+from lorebase_keeper.reading.sensitivity import collapse_issues, mask_conflict
 from lorebase_keeper.routes.domains import REPLAYED_HEADER
 from lorebase_keeper.services import agent_writes
 from lorebase_keeper.services import proposals as service
@@ -73,33 +62,26 @@ from lorebase_keeper.services.errors import commit_problem, findings_of
 from lorebase_keeper.services.pii_import import require_schema_change
 from lorebase_keeper.services.proposal_reads import (
     ConflictScope,
+    ConflictVisibility,
     conflict_scope,
+    conflict_visibility,
+    disclosed,
     readable_proposals,
     require_target_read,
     visible_scope,
 )
 from lorebase_keeper.services.reads import ReadGuard
-from lorebase_keeper.services.stewards import (
-    Assigned,
-    AssigneeList,
-    Stewards,
-    proposal_subject,
-)
+from lorebase_keeper.services.stewards import Assigned, Stewards
 from lorebase_keeper.settings import KeeperSettings
 from lorebase_store.commit import CommitError, ValidationFailedError
-from lorebase_store.commit.schema import load_compiled
-from lorebase_store.merging import proposal_kinds
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
-from lorebase_store.reads import head_schema
 from lorebase_store.repositories import (
     ConflictRow,
-    MaterializedRepository,
     MergeAttemptRow,
     ProposalFilter,
     ProposalRow,
     ResolutionRow,
     ReviewRow,
-    scope_to_domain,
 )
 
 router = APIRouter(tags=["proposals"])
@@ -424,43 +406,6 @@ def _checks(
     return checks
 
 
-@dataclass(frozen=True)
-class _Assignment:
-    """Steward roles, shown assignees and whether the caller is an assignee."""
-
-    roles: tuple[str, ...]
-    assignees: AssigneeList
-    mine: bool
-
-
-async def _assignments(
-    store: StoreDep,
-    stewards: Stewards,
-    principal: Any,
-    domain_id: str,
-    rows: list[ProposalRow],
-) -> dict[str, _Assignment]:
-    """The steward assignment of each Proposal, by the schema of its target's head."""
-    schemas: dict[str, Schema | None] = {}
-    kinds: dict[str, tuple[str, ...] | None] = {}
-    async with store.sessions() as session, session.begin():
-        await scope_to_domain(session, domain_id)
-        for target in sorted({row.target_ref for row in rows}):
-            head = await head_schema(session, domain_id, target, runtime=store.runtime)
-            schemas[target] = None if head is None else head.schema
-        for row in rows:
-            kinds[row.id] = await proposal_kinds(session, domain_id, row)
-    found: dict[str, _Assignment] = {}
-    for row in rows:
-        subject = proposal_subject(schemas[row.target_ref], kinds[row.id], row.target_ref)
-        found[row.id] = _Assignment(
-            roles=subject.roles,
-            assignees=await stewards.listing(principal, domain_id, subject),
-            mine=await stewards.is_assignee(principal, domain_id, subject),
-        )
-    return found
-
-
 def _stewards(auth: Any, keeper: KeeperSettings) -> Stewards:
     return Stewards(auth, keeper.stewards)
 
@@ -470,7 +415,7 @@ def _proposal(
     approval: service.Approval | None = None,
     *,
     counted: bool = True,
-    assignment: _Assignment | None = None,
+    assignment: service.Assignment | None = None,
 ) -> ProposalOut:
     shown = (
         {}
@@ -594,76 +539,7 @@ def _attempt_summary(attempt: MergeAttemptRow) -> AttemptOut:
     return AttemptOut(**fields)
 
 
-@dataclass(frozen=True)
-class _Visibility:
-    """What the caller may see of Conflict values: the target branch's schema (None when it
-    is not materialized) and the caller's masking."""
-
-    schema: Schema | None
-    masking: Masking
-    left_out: frozenset[str] = frozenset()
-    """Ids the caller's projection of the schema leaves out (Kinds invisible to it, design
-    13.3): Conflicts and automatic resolutions never show them."""
-
-    def hidden(self, payload: Mapping[str, Any]) -> bool:
-        return conflict_hidden(payload, self.schema, self.masking)
-
-    def names_left_out(self, value: Any) -> bool:
-        if not self.left_out:
-            return False
-        text = json.dumps(value, default=str)
-        return any(i in text for i in self.left_out)
-
-    def scrub(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """`payload` without the values of Attributes left out, and without a message or
-        details naming something left out."""
-        if not self.left_out:
-            return payload
-        out = dict(payload)
-        for name in (*_CONFLICT_SIDES, "values"):
-            out[name] = _without(out.get(name), self.left_out)
-        if self.names_left_out([out.get("message"), out.get("details")]):
-            out["message"] = "The versions differ."
-            out["details"] = {}
-        return out
-
-
-_CONFLICT_SIDES = ("base", "ours", "theirs")
-
-
-def _without(value: Any, ids: frozenset[str]) -> Any:
-    """A value map (or an element body holding `values`) without the entries of `ids`."""
-    if not isinstance(value, dict):
-        return value
-    if isinstance(value.get("values"), dict):
-        return {**value, "values": _without(value["values"], ids)}
-    return {k: v for k, v in value.items() if k not in ids}
-
-
-async def _visibility(
-    store: StoreDep,
-    guard: ReadGuard,
-    domain_id: str,
-    target: str,
-    keeper: KeeperSettings,
-    scope: ConflictScope | None = None,
-) -> _Visibility:
-    writes = store.runtime.settings.writes
-    async with store.sessions() as session, session.begin():
-        await scope_to_domain(session, domain_id)
-        compiled = await MaterializedRepository(session, domain_id, target, writes=writes).schema()
-        reference = await default_schema(session, domain_id, store.runtime)
-    schema = None if compiled is None else load_compiled(compiled.compiled)
-    masking = await masking_for(
-        guard.authorizer, guard.principal, domain_id, reference, keeper.reads.sensitivity
-    )
-    left_out: frozenset[str] = frozenset()
-    if schema is not None and scope is not None and scope.invisible and scope.kinds is not None:
-        left_out = projection(schema, scope.kinds).hidden
-    return _Visibility(schema, masking if schema is None else masking.over(schema), left_out)
-
-
-def _conflict(row: ConflictRow, seen: _Visibility) -> ConflictOut:
+def _conflict(row: ConflictRow, seen: ConflictVisibility) -> ConflictOut:
     payload = seen.scrub(mask_conflict(row.payload, seen.schema, seen.masking))
     resolution = None if row.resolution is None else seen.scrub(row.resolution)
     if resolution is not None and seen.hidden(row.payload):
@@ -689,18 +565,15 @@ async def _attempt(
     scope: ConflictScope | None = None,
 ) -> ConflictsOut:
     """The attempt as the caller may see it: values masked by schema (`_conflicts`), then
-    the vault references left in it resolved as on every read (`Disclosure`)."""
-    seen = await _visibility(store, guard, domain_id, target, keeper, scope)
-    attempt = _conflicts(view, seen)
-    schemas = () if seen.schema is None else (seen.schema,)
-    async with store.sessions() as session, session.begin():
-        await scope_to_domain(session, domain_id)
-        disclosure = Disclosure(session, domain_id, schemas, seen.masking, store.runtime.vault)
-        body = await disclosure.model(attempt)
+    the vault references left in it resolved as on every read (`disclosed`)."""
+    seen = await conflict_visibility(
+        store, guard, domain_id, target, keeper.reads.sensitivity, scope
+    )
+    body = await disclosed(store, domain_id, seen, _conflicts(view, seen))
     return ConflictsOut.model_validate_json(body)
 
 
-def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
+def _conflicts(view: service.AttemptView, seen: ConflictVisibility) -> ConflictsOut:
     hidden = {row.fingerprint for row in view.conflicts if seen.hidden(row.payload)}
     shown = {row.fingerprint for row in view.conflicts} - hidden
     full = seen.masking.clearance.covers(Sensitivity, ())
@@ -731,7 +604,7 @@ def _conflicts(view: service.AttemptView, seen: _Visibility) -> ConflictsOut:
 
 
 def _detail(
-    view: service.ProposalView, scope: ConflictScope, assignment: _Assignment | None = None
+    view: service.ProposalView, scope: ConflictScope, assignment: service.Assignment | None = None
 ) -> ProposalDetailOut:
     """`view`, whose attempt `service.scoped` limited to `scope`."""
     base = _proposal(view.proposal, view.approval, counted=scope.everything, assignment=assignment)
@@ -790,7 +663,7 @@ async def _readable(
 
 
 async def _store_problem(
-    error: CommitError, retry_after_s: int, seen: Callable[[], Awaitable[_Visibility]]
+    error: CommitError, retry_after_s: int, seen: Callable[[], Awaitable[ConflictVisibility]]
 ) -> ProblemError:
     """The problem answering a store failure; validation issues about values the caller may
     not read (`seen`) have a generic code."""
@@ -862,7 +735,7 @@ async def create_proposal(
     )
     scope = await visible_scope(guard, proposal)
     stewards = _stewards(auth, keeper)
-    assigned = await _assignments(store, stewards, principal, domain_id, [proposal])
+    assigned = await service.assignments(store, stewards, principal, domain_id, [proposal])
     return _detail(
         await service.scoped(store, domain_id, created.view, scope), scope, assigned[proposal.id]
     )
@@ -919,23 +792,15 @@ async def list_proposals(
     )
     readable = await readable_proposals(guard, rows)
     stewards = _stewards(auth, keeper)
-    assignments = await _assignments(store, stewards, guard.principal, domain_id, readable)
+    assignments = await service.assignments(store, stewards, guard.principal, domain_id, readable)
     items = [
         _proposal(
             r, counted=(await visible_scope(guard, r)).everything, assignment=assignments[r.id]
         )
         for r in readable
-        if _passes(assignments[r.id], assigned)
+        if assignments[r.id].matches(assigned)
     ]
     return Page[ProposalOut](items=items, next_cursor=next_cursor)
-
-
-def _passes(assignment: _Assignment, assigned: Assigned | None) -> bool:
-    if assigned is None:
-        return True
-    if assigned == "me":
-        return assignment.mine
-    return bool(assignment.roles) == (assigned == "any")
 
 
 @router.get(PROPOSAL, summary="Get a Proposal", responses=_ERRORS)
@@ -951,7 +816,9 @@ async def get_proposal(
     scope = await _readable(store, guard, domain_id, proposal_id)
     stewards = _stewards(auth, keeper)
     view = await service.get(store, domain_id, proposal_id, keeper.proposals, stewards=stewards)
-    assigned = await _assignments(store, stewards, guard.principal, domain_id, [view.proposal])
+    assigned = await service.assignments(
+        store, stewards, guard.principal, domain_id, [view.proposal]
+    )
     return _detail(
         await service.scoped(store, domain_id, view, scope), scope, assigned[view.proposal.id]
     )
@@ -1110,7 +977,9 @@ async def merge_proposal(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
+            lambda: conflict_visibility(
+                store, guard, domain_id, proposal.target_ref, keeper.reads.sensitivity, scope
+            ),
         ) from None
     attempt = await _attempt(
         outcome.view, store, guard, domain_id, proposal.target_ref, keeper, scope
@@ -1187,7 +1056,9 @@ async def list_conflicts(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
+            lambda: conflict_visibility(
+                store, guard, domain_id, proposal.target_ref, keeper.reads.sensitivity, scope
+            ),
         ) from None
     return await _attempt(view, store, guard, domain_id, proposal.target_ref, keeper, scope)
 
@@ -1239,7 +1110,9 @@ async def resolve_conflict(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
+            lambda: conflict_visibility(
+                store, guard, domain_id, proposal.target_ref, keeper.reads.sensitivity, scope
+            ),
         ) from None
     annotate(request, action="proposal.resolve", target=proposal_id, conflicts=[conflict_id])
     return _resolution(rows[0], frozenset())
@@ -1296,7 +1169,9 @@ async def resolve_conflicts(
         raise await _store_problem(
             error,
             keeper.branches.lock_retry_after_s,
-            lambda: _visibility(store, guard, domain_id, proposal.target_ref, keeper, scope),
+            lambda: conflict_visibility(
+                store, guard, domain_id, proposal.target_ref, keeper.reads.sensitivity, scope
+            ),
         ) from None
     assert view is not None
     annotate(
