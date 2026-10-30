@@ -79,6 +79,7 @@ class SuggestionView:
     withheld: bool
     attribute: str | None = None
     """Api name of the Attribute a vocabulary suggestion changes."""
+    vocabulary: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,7 @@ def view_of(
     schema: Schema,
     options: SuggestionOptions,
     masking: Masking | None,
+    readable: frozenset[str] | None = None,
 ) -> SuggestionView:
     """What a listing shows of `row` against `schema` for a caller with `masking`."""
     type_ = SuggestionType(row.suggestion_type)
@@ -152,7 +154,7 @@ def view_of(
         tags=sensitive_attributes(schema),
     )
     if type_ in VOCABULARY:
-        return _vocabulary_view(row, schema, duplicate, masking)
+        return _vocabulary_view(row, schema, duplicate, masking, readable)
     withheld = False
     if duplicate is not None and duplicate.sensitive:
         owner = schema.attribute_owner(duplicate.id)
@@ -177,13 +179,16 @@ def _vocabulary_view(
     schema: Schema,
     duplicate: ExistingMatch | None,
     masking: Masking | None,
+    readable: frozenset[str] | None,
 ) -> SuggestionView:
-    """A vocabulary suggestion: withheld when its Attribute's values are masked for the
-    caller (or the Attribute is gone, or no masking is known)."""
+    """A vocabulary suggestion: withheld unless the caller may read the Records of its Kind
+    (`readable`, None: every Kind) and the values of its Attribute (no masking known: not)."""
     kind = schema.kinds.get(row.kind_ref or "")
     attribute = None if kind is None else kind.attributes.get(row.target_ref or "")
-    withheld = attribute is not None and (
-        masking is None or masking.hidden(attribute, (kind.id,) if kind else ())
+    withheld = (
+        kind is None
+        or (readable is not None and kind.id not in readable)
+        or (attribute is not None and (masking is None or masking.hidden(attribute, (kind.id,))))
     )
     return SuggestionView(
         row=row,
@@ -193,6 +198,7 @@ def _vocabulary_view(
         duplicate=duplicate,
         withheld=withheld,
         attribute=None if attribute is None else attribute.api_name,
+        vocabulary=True,
     )
 
 
@@ -206,6 +212,7 @@ async def page(
     all_support: bool,
     limit: int,
     position: dict[str, Any] | None,
+    readable: frozenset[str] | None = None,
 ) -> SuggestionPage:
     """Suggestions by support, the most supported first: pending ones need
     `schema.suggestions.min_support` (pending Kinds also `kind_min_attributes`), unless
@@ -242,7 +249,7 @@ async def page(
     if more and rows and listed + len(rows) < options.max_suggestions:
         last = rows[-1]
         following = {"support": last.support, "id": last.id, "listed": listed + len(rows)}
-    return SuggestionPage([view_of(r, schema, options, masking) for r in rows], following)
+    return SuggestionPage([view_of(r, schema, options, masking, readable) for r in rows], following)
 
 
 async def merge_variants(store: StoreAccess, domain_id: str) -> MergeOutcome:
@@ -265,6 +272,7 @@ async def decide(
     branches: BranchSettings,
     proposals: ProposalSettings,
     masking: Masking | None,
+    readable: frozenset[str] | None = None,
 ) -> DecisionOutcome:
     """Reject, reset or accept suggestions. Accepted ones are applied together on a new branch
     and proposed into the default branch; nothing is decided when that fails."""
@@ -290,6 +298,15 @@ async def decide(
             )
         if decision.name is not None and not decision.name.strip():
             raise invalid(f"/body/decisions/{index}/name", "must not be empty")
+        if decision.decision == ACCEPTED:
+            seen = view_of(row, schema, options, masking, readable)
+            if seen.vocabulary and seen.withheld:
+                raise invalid(
+                    f"/body/decisions/{index}",
+                    "this suggestion is withheld from you: its Kind's Records or its "
+                    "Attribute's values are not readable to you",
+                    suggestion=row.id,
+                )
     accepted = [d for d in decisions if d.decision == ACCEPTED]
     outcome = DecisionOutcome(views=[])
     now = store.clock()
@@ -329,7 +346,7 @@ async def decide(
                 decided_at=now if status == REJECTED else None,
             )
         stored = await repository.get_many(ids)
-    outcome.views = [view_of(stored[i], schema, options, masking) for i in ids]
+    outcome.views = [view_of(stored[i], schema, options, masking, readable) for i in ids]
     return outcome
 
 

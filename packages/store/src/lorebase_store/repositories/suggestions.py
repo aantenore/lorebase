@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.infer.suggestions import (
     PROPOSED,
+    VOCABULARY,
     AttributeSighting,
     Observation,
     SuggestionOptions,
@@ -236,6 +237,75 @@ def combine(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class SweepOutcome:
+    """What `sweep_vocabulary` did: suggestions rewritten and deleted."""
+
+    changed: int = 0
+    deleted: int = 0
+
+
+def share_branch(key: str) -> str | None:
+    """The branch of a vocabulary share key (`miss:<branch>:<phrase>`,
+    `llm:<branch>:<attribute>`); None for other keys."""
+    kind, _, rest = key.partition(":")
+    if kind not in ("miss", "llm") or ":" not in rest:
+        return None
+    return rest.partition(":")[0]
+
+
+def share_phrase(key: str) -> str | None:
+    """The phrase of a `miss:<branch>:<phrase>` key; None for other keys."""
+    if not key.startswith("miss:"):
+        return None
+    return key.split(":", 2)[2] if key.count(":") >= 2 else None
+
+
+def swept(
+    row: Mapping[str, Any],
+    keep_share: Callable[[str], bool],
+    keep_phrase: Callable[[str, str], bool],
+    options: SuggestionOptions,
+) -> dict[str, Any] | None:
+    """Column values of a vocabulary suggestion without the shares `keep_share` refuses: a
+    description share stays while one phrase its evidence cites is kept (`keep_phrase`, the
+    others are removed from the evidence); labels keep the phrases of the shares left. None
+    when no share is left."""
+    examples: list[dict[str, Any]] = []
+    cited: dict[str, list[str]] = {}
+    for example in row.get("examples") or []:
+        key = str(example.get("document_id") or "")
+        phrases = example.get("phrases")
+        if isinstance(phrases, list):
+            branch = share_branch(key) or ""
+            kept = [p for p in phrases if isinstance(p, str) and keep_phrase(branch, p)]
+            cited[key] = kept
+            if kept:
+                examples.append({**example, "phrases": kept})
+        elif keep_share(key):
+            examples.append(dict(example))
+    shares = {
+        key: dict(share)
+        for key, share in (row.get("observations") or {}).items()
+        if (cited.get(key) if key in cited else keep_share(key))
+    }
+    if not shares:
+        return None
+    phrases = {share_phrase(k) for k in shares} - {None}
+    labels = [label for label in row.get("labels") or [] if not phrases or label in phrases]
+    support = sum(int(v.get("n", 0)) for v in shares.values())
+    total = sum(float(v.get("c", 0.0)) for v in shares.values())
+    return {
+        "observations": shares,
+        "support": support,
+        "confidence": round(total / support, 4) if support else 0.0,
+        "examples": [e for e in examples if str(e.get("document_id") or "") in shares][
+            : max(options.max_examples, 0)
+        ],
+        "labels": labels,
+    }
+
+
 def consolidate(
     observations: Sequence[Observation],
     stored: Sequence[Mapping[Any, Any]],
@@ -417,7 +487,11 @@ class SchemaSuggestionRepository:
                 )
             ).mappings()
         }
-        room = options.max_tracked - await self.count()
+        vocabulary = [t.value for t in VOCABULARY]
+        room = {
+            False: options.max_tracked - await self.count(excluded_types=vocabulary),
+            True: options.max_vocabulary_tracked - await self.count(PENDING, types=vocabulary),
+        }
         created = updated = dropped = 0
         for key in sorted(groups):
             group = groups[key]
@@ -431,10 +505,11 @@ class SchemaSuggestionRepository:
                 )
                 updated += 1
                 continue
-            if room <= 0:
+            first = group[0]
+            family = first.type in VOCABULARY
+            if room[family] <= 0:
                 dropped += len(group)
                 continue
-            first = group[0]
             inserted = (
                 await self._session.execute(
                     pg_insert(table)
@@ -475,7 +550,7 @@ class SchemaSuggestionRepository:
                 )
                 updated += 1
                 continue
-            room -= 1
+            room[family] -= 1
             created += 1
         return RecordOutcome(created, updated, dropped)
 
@@ -572,11 +647,78 @@ class SchemaSuggestionRepository:
             kept += 1
         return MergeOutcome(merged=merged, kept=kept)
 
-    async def count(self, status: str | None = None) -> int:
+    async def count(
+        self,
+        status: str | None = None,
+        *,
+        types: Sequence[str] = (),
+        excluded_types: Sequence[str] = (),
+    ) -> int:
         query = select(func.count()).select_from(SUGGESTIONS).where(self._scoped())
         if status is not None:
             query = query.where(SUGGESTIONS.c.status == status)
+        if types:
+            query = query.where(SUGGESTIONS.c.suggestion_type.in_(list(types)))
+        if excluded_types:
+            query = query.where(SUGGESTIONS.c.suggestion_type.not_in(list(excluded_types)))
         return int((await self._session.execute(query)).scalar_one())
+
+    async def sweep_vocabulary(
+        self,
+        keep_share: Callable[[Mapping[str, Any], str], bool],
+        keep_phrase: Callable[[str, str], bool],
+        options: SuggestionOptions,
+        now: datetime,
+    ) -> SweepOutcome:
+        """Drop the shares of vocabulary suggestions that `keep_share(row, key)` refuses and
+        the phrases of description evidence `keep_phrase(branch, phrase)` refuses
+        (`swept`); a suggestion left without shares is deleted, decided or not."""
+        await self._serialize()
+        table = SUGGESTIONS
+        rows = (
+            await self._session.execute(
+                select(table)
+                .where(
+                    self._scoped(),
+                    table.c.suggestion_type.in_([t.value for t in VOCABULARY]),
+                )
+                .order_by(table.c.id)
+                .with_for_update()
+            )
+        ).mappings()
+        changed = deleted = 0
+        for found in list(rows):
+            row: dict[str, Any] = dict(found)
+
+            def keep(key: str, row: Mapping[str, Any] = row) -> bool:
+                return keep_share(row, key)
+
+            values = swept(row, keep, keep_phrase, options)
+            if values is None:
+                await self._session.execute(
+                    delete(table).where(self._scoped(), table.c.id == row["id"])
+                )
+                deleted += 1
+            elif any(values[k] != row[k] for k in values):
+                await self._session.execute(
+                    update(table)
+                    .where(self._scoped(), table.c.id == row["id"])
+                    .values(**values, updated_at=now)
+                )
+                changed += 1
+        return SweepOutcome(changed, deleted)
+
+    async def purge_vocabulary(self) -> int:
+        """Delete every vocabulary suggestion (they quote resolution misses); the number
+        deleted."""
+        await self._serialize()
+        result = await self._session.execute(
+            delete(SUGGESTIONS).where(
+                self._scoped(),
+                SUGGESTIONS.c.suggestion_type.in_([t.value for t in VOCABULARY]),
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def page(
         self,

@@ -5,6 +5,7 @@ than the head, and which misses are kept."""
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
 from lorebase_core.model import Record, Schema
 from lorebase_core.validate import RecordUpsert
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
@@ -22,7 +24,7 @@ from lorebase_store.auth import SqlAuthStore
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import BranchMode, create_branch
 from lorebase_store.models.enums import GrantScope, PrincipalType
-from lorebase_store.repositories import scope_to_domain
+from lorebase_store.repositories import SchemaSuggestionRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import CoverageSettings, DatabaseSettings, StoreSettings
 
@@ -35,7 +37,13 @@ pytestmark = pytest.mark.integration
 BASE = f"/api/v1/domains/{DOMAIN}"
 PEPPER = "coverage-tests-pepper-0123456789-012345"
 CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
-SECTION = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
+SECTION = {
+    "auth": {
+        "mode": "api_key",
+        "api_keys": {"pepper": PEPPER},
+        "authz": {"custom_roles": {"suggestion-reader": ["document.read", "schema.read"]}},
+    }
+}
 OVERLAY = "agent/coverage"
 RECORDING = {"resolve_misses": {"enabled": True}}
 
@@ -62,8 +70,13 @@ async def _key(store: SqlAuthStore, name: str, role: str, grants: list[dict[str,
     async with store.unit() as unit:
         principal = await unit.principals.add(PrincipalType.SERVICE, name)
         for grant in grants:
+            given = dict(grant)
             await unit.grants.add(
-                domain_id=DOMAIN, subject=principal.id, role=role, created_by="usr_seed", **grant
+                domain_id=DOMAIN,
+                subject=principal.id,
+                role=given.pop("role", role),
+                created_by="usr_seed",
+                **given,
             )
         generated = CODEC.generate()
         await unit.api_keys.add(
@@ -116,6 +129,16 @@ async def seed(
                 "product reader",
                 "viewer",
                 [{"scope_type": GrantScope.KIND, "scope_ref": "Product"}],
+            ),
+            # Reads suggestions Domain-wide, Records of Product only.
+            "reviewer": await _key(
+                store,
+                "product reviewer",
+                "viewer",
+                [
+                    {"role": "suggestion-reader"},
+                    {"scope_type": GrantScope.KIND, "scope_ref": "Product"},
+                ],
             ),
         }
     finally:
@@ -192,7 +215,10 @@ async def test_resolution_lists_unknown_phrases(seeded: Seeded) -> None:
         off = await _post(http, seeded, "resolve", {"text": "zzqx", "coverage": False})
     block = body["coverage"]
     assert block["unknown"] == ["zzqx", "in"]
-    assert "'zzqx' matched nothing in this Domain (no Kind, Attribute or value)" in block["notes"]
+    assert (
+        "'zzqx' matched nothing you can read in this Domain (no Kind, Attribute or value)"
+        in block["notes"]
+    )
     assert ("Product", "color") in _attributes(block)
     assert off["coverage"] is None
 
@@ -213,6 +239,9 @@ async def test_misses_are_recorded_only_where_allowed(seeded: Seeded) -> None:
         await _post(http, seeded, "resolve", {"text": "zzqx"})
         await _post(http, seeded, "resolve", {"text": "zzqx"}, "viewer")
         await _post(http, seeded, "resolve", {"text": "qqvv", "record_misses": False})
+        # A narrowed search may miss what exists elsewhere: not recorded.
+        await _post(http, seeded, "resolve", {"text": "qqvv", "levels": ["exact"]})
+        await _post(http, seeded, "resolve", {"text": "qqvv", "kinds": ["Product"]})
     narrow = {"resolve": {"misses": {"permission": "schema.write"}}}
     async with keeper(seeded.app_url, SECTION, store=RECORDING, search=narrow) as http:
         await _post(http, seeded, "resolve", {"text": "wwkk"}, "viewer")
@@ -248,3 +277,71 @@ async def test_statistics_older_than_the_head_are_approximate(seeded: Seeded) ->
         body = await _post(http, seeded, "query", query)
     assert body["coverage"]["kinds"][0]["approximate"] is True
     assert any("(approximate)" in note for note in body["coverage"]["notes"])
+
+
+async def test_vocabulary_suggestions_are_withheld_outside_the_reviewers_kinds(
+    seeded: Seeded,
+) -> None:
+    """Design 8.10: a reviewer who may not read a Kind's Records sees neither the phrases nor
+    the values of its vocabulary suggestions, and cannot accept them."""
+    product = seeded.schema.kind_by_api_name("Product")
+    customer = seeded.schema.kind_by_api_name("Customer")
+    assert product is not None
+    assert customer is not None
+    color = product.attribute_by_api_name("color")
+    assert color is not None
+
+    def seen(type_: SuggestionType, phrase: str, kind: str, target: str | None) -> Observation:
+        key = f"miss:main:{phrase}"
+        return Observation(
+            type_,
+            phrase,
+            key,
+            0.6,
+            "resolve_misses",
+            kind=kind,
+            target=target,
+            payload={"value": "Rosso"} if target else None,
+            weight=3,
+            evidence={"document_id": key, "phrase": phrase, "misses": 3},
+        )
+
+    async with owner_session(seeded.owner_url) as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await SchemaSuggestionRepository(session, DOMAIN).record(
+            [
+                seen(SuggestionType.VALUE_ALIAS, "scarlet", product.id, color.id),
+                seen(SuggestionType.KIND_ALIAS, "patron", customer.id, None),
+            ],
+            job_id="vocabulary",
+            options=SuggestionOptions(),
+            now=Clock()(),
+            new_id=lambda: f"ssg_{uuid.uuid4().hex}",
+        )
+    suggestions = f"{BASE}/schema/suggestions"
+    async with keeper(seeded.app_url, SECTION) as http:
+        headers = {"Authorization": f"Bearer {seeded.facts['keys']['reviewer']}"}
+        listed = await http.get(suggestions, params={"all": "true"}, headers=headers)
+        assert listed.status_code == 200, listed.text
+        items = {i["type"]: i for i in listed.json()["items"]}
+        admin = await http.get(
+            suggestions,
+            params={"all": "true"},
+            headers={"Authorization": f"Bearer {seeded.facts['keys']['admin']}"},
+        )
+        refused = await http.post(
+            f"{suggestions}:decide",
+            json={"decisions": [{"suggestion": items["kind_alias"]["id"], "decision": "accepted"}]},
+            headers=headers,
+        )
+    visible = items["value_alias"]
+    assert (visible["name"], visible["value"], visible["withheld"]) == ("scarlet", "Rosso", False)
+    hidden = items["kind_alias"]
+    assert hidden["withheld"] is True
+    assert hidden["name"] == "(withheld)"
+    assert hidden["labels"] == []
+    assert hidden["examples"] == []
+    assert "patron" not in listed.text
+    assert "patron" in admin.text
+    assert refused.status_code in (403, 422), refused.text
+    assert "patron" not in refused.text

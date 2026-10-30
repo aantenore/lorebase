@@ -160,6 +160,12 @@ class CoverageReadSettings(SectionModel):
         description="Add the block to queries and resolutions that do not say `coverage`; "
         "a request may still turn it off (false) or on (true).",
     )
+    max_unseen_age_s: float = Field(
+        default=3600.0,
+        gt=0,
+        description="Records unseen by Sources counted longer ago than this mark the "
+        "statistics approximate (Scribe recounts them every coverage pass).",
+    )
     note_min_share: float = Field(
         default=0.01,
         ge=0,
@@ -376,6 +382,12 @@ class ResolveMissRecording(SectionModel):
     )
     flush_interval_s: float = Field(
         default=5.0, gt=0, description="Longest time a miss waits in memory before it is written."
+    )
+    max_new_per_caller: int = Field(
+        default=100,
+        ge=1,
+        description="New phrases one caller adds per Domain between two writes; further ones "
+        "are dropped (store.resolve_misses.max_phrases_per_caller bounds what it holds).",
     )
     write_timeout_s: float = Field(default=5.0, gt=0, description="Budget of one batch write.")
 

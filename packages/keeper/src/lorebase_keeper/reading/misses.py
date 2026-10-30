@@ -3,9 +3,11 @@
 A resolution hands its missed phrases to the recorder without waiting; the recorder adds them
 up in memory per Domain, branch and phrase (misses, caller digests, first and last seen) and a
 background task writes the totals every `search.resolve.misses.flush_interval_s` in one
-transaction (`lorebase_store.resolve_misses.record_misses`). At most `queue_size` distinct
-phrases wait in memory; a new phrase beyond is dropped, and so is a batch whose write fails
-(`lorebase.resolve.misses.dropped` by reason). Like the agent trace, nothing is retried: the
+transaction per Domain (`lorebase_store.resolve_misses.record_misses`), so a Domain whose
+write fails loses only its own misses. At most `queue_size` distinct phrases wait in memory,
+and one caller adds at most `max_new_per_caller` of them per interval; a new phrase beyond is
+dropped, and so is a Domain's batch whose write fails (`lorebase.resolve.misses.dropped` by
+reason). Like the agent trace, nothing is retried: the
 counts feed suggestions for review, not an audit.
 
 `missed_phrases` decides what a resolution missed: each run of consecutive words no candidate
@@ -87,7 +89,10 @@ class MissRecorder:
     meter_provider: MeterProvider | None = None
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     _pending: dict[tuple[str, str, str], _Pending] = field(default_factory=dict, init=False)
+    _new: dict[tuple[str, str], int] = field(default_factory=dict, init=False)
+    """New phrases per (Domain, caller) since the last write."""
     _writer: asyncio.Task[None] | None = field(default=None, init=False)
+    _writing: asyncio.Task[None] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         meter = (self.meter_provider or metrics.get_meter_provider()).get_meter("lorebase.keeper")
@@ -100,7 +105,7 @@ class MissRecorder:
             "lorebase.resolve.misses.dropped",
             unit="{phrase}",
             description="Resolution misses dropped, by reason (queue_full, domain_full, "
-            "write_failed, shutdown).",
+            "caller_limit, write_failed, shutdown).",
         )
 
     def offer(self, domain_id: str, branch: str, phrases: Sequence[str], caller: str) -> int:
@@ -117,6 +122,11 @@ class MissRecorder:
                 if len(self._pending) >= self.settings.queue_size:
                     self._dropped.add(1, {"reason": "queue_full"})
                     continue
+                added = self._new.get((domain_id, caller), 0)
+                if added >= self.settings.max_new_per_caller:
+                    self._dropped.add(1, {"reason": "caller_limit"})
+                    continue
+                self._new[(domain_id, caller)] = added + 1
                 found = self._pending[key] = _Pending(0, set(), now, now)
             found.misses += 1
             if len(found.callers) < self.store.max_callers:
@@ -133,6 +143,7 @@ class MissRecorder:
 
     def _take(self) -> list[MissSighting]:
         pending, self._pending = self._pending, {}
+        self._new = {}
         return [
             MissSighting(
                 domain_id=domain,
@@ -147,40 +158,55 @@ class MissRecorder:
         ]
 
     async def _write(self, batch: Sequence[MissSighting]) -> None:
-        if not batch:
-            return
-        try:
-            async with asyncio.timeout(self.settings.write_timeout_s):
-                async with self.sessions() as session, session.begin():
-                    stored = await record_misses(session, batch, settings=self.store)
-        except Exception as exc:
-            self._dropped.add(len(batch), {"reason": "write_failed"})
-            logger.error(
-                "resolution misses dropped",
-                exc_info=not isinstance(exc, TimeoutError),
-                extra={"phrases": len(batch), "reason": type(exc).__name__},
-            )
-            return
-        self._recorded.add(stored)
-        if stored < len(batch):
-            self._dropped.add(len(batch) - stored, {"reason": "domain_full"})
+        """Each Domain's sightings in a transaction of its own, within `write_timeout_s`."""
+        by_domain: dict[str, list[MissSighting]] = {}
+        for sighting in batch:
+            by_domain.setdefault(sighting.domain_id, []).append(sighting)
+        for domain_id, sightings in sorted(by_domain.items()):
+            try:
+                async with asyncio.timeout(self.settings.write_timeout_s):
+                    async with self.sessions() as session, session.begin():
+                        stored = await record_misses(session, sightings, settings=self.store)
+            except Exception as exc:
+                self._dropped.add(len(sightings), {"reason": "write_failed"})
+                logger.error(
+                    "resolution misses dropped",
+                    exc_info=not isinstance(exc, TimeoutError),
+                    extra={
+                        "domain": domain_id,
+                        "phrases": len(sightings),
+                        "reason": type(exc).__name__,
+                    },
+                )
+                continue
+            self._recorded.add(stored)
+            if stored < len(sightings):
+                self._dropped.add(len(sightings) - stored, {"reason": "domain_full"})
 
     async def _run(self) -> None:
         while True:
             await asyncio.sleep(self.settings.flush_interval_s)
-            await self._write(self._take())
+            # Shielded: closing waits for a write in flight instead of cutting it.
+            self._writing = asyncio.ensure_future(self._write(self._take()))
+            await asyncio.shield(self._writing)
 
     async def flush(self) -> None:
         """Write what is pending now."""
         await self._write(self._take())
 
     async def aclose(self) -> None:
-        """Write what is pending (within one write timeout), then stop."""
+        """Stop the writer, let a write in flight finish and write what is pending, within
+        one write timeout each; what is left is dropped."""
         if self._writer is not None:
             self._writer.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._writer
             self._writer = None
+        writing, self._writing = self._writing, None
+        if writing is not None and not writing.done():
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                async with asyncio.timeout(self.settings.write_timeout_s):
+                    await writing
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(self.settings.write_timeout_s):
                 await self.flush()

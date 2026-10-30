@@ -15,7 +15,8 @@ lorebase-scribe coverage DOMAIN [--force]
                                      branch head now
 lorebase-scribe consolidate DOMAIN   prune expired resolution misses and propose vocabulary
                                      suggestions from the frequent ones now
-lorebase-scribe misses purge DOMAIN  delete every recorded resolution miss of a Domain
+lorebase-scribe misses purge DOMAIN  delete every recorded resolution miss of a Domain and
+                                     the vocabulary suggestions quoting them
 lorebase-scribe modes clear          forget the structured output modes remembered per chat
                                      endpoint
 """
@@ -36,8 +37,8 @@ from lorebase_scribe.service import open_scribe
 from lorebase_scribe.sources import SourceSync
 from lorebase_store.coverage import run_coverage
 from lorebase_store.endpoint_modes import clear_modes
-from lorebase_store.repositories import scope_to_domain
-from lorebase_store.resolve_misses import purge_misses
+from lorebase_store.repositories import SchemaSuggestionRepository, scope_to_domain
+from lorebase_store.resolve_misses import lock_domain, purge_misses
 from lorebase_store.values import run_value_index
 
 SERVICE_NAME = "scribe"
@@ -95,7 +96,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     consolidate.add_argument("domain")
     misses = commands.add_parser("misses", help="Recorded resolution misses.")
-    misses.add_argument("action", choices=["purge"], help="Delete every miss of the Domain.")
+    misses.add_argument(
+        "action",
+        choices=["purge"],
+        help="Delete every miss of the Domain and the vocabulary suggestions quoting them.",
+    )
     misses.add_argument("domain")
     modes = commands.add_parser("modes", help="Structured output modes of the chat endpoints.")
     modes.add_argument("action", choices=["clear"], help="Forget every remembered mode.")
@@ -192,7 +197,10 @@ async def _misses_purge(settings: Settings, domain: str) -> dict[str, object]:
         session.begin(),
     ):
         await scope_to_domain(session, domain)
-        return {"domain": domain, "purged": await purge_misses(session, domain)}
+        await lock_domain(session, domain)
+        purged = await purge_misses(session, domain)
+        suggestions = await SchemaSuggestionRepository(session, domain).purge_vocabulary()
+        return {"domain": domain, "purged": purged, "suggestions": suggestions}
 
 
 def main(argv: Sequence[str] | None = None) -> int:

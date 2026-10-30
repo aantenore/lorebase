@@ -122,7 +122,15 @@ class SuggestionOptions(BaseModel):
     max_tracked: int = Field(
         default=2000,
         ge=1,
-        description="Suggestions kept per Domain; observations of new ones beyond are dropped.",
+        description="Suggestions from document extraction kept per Domain; observations of new "
+        "ones beyond are dropped.",
+    )
+    max_vocabulary_tracked: int = Field(
+        default=500,
+        ge=1,
+        description="Pending vocabulary suggestions (from resolution misses) kept per Domain, "
+        "counted apart from extraction's so that neither crowds out the other; new ones "
+        "beyond are dropped.",
     )
     name_similarity: float = Field(
         default=0.85,
@@ -604,8 +612,12 @@ def attribute_phrases(attribute: Attribute) -> frozenset[str]:
 
 
 def value_phrases(attribute: Attribute) -> frozenset[str]:
-    """The compared forms of the stored values that carry aliases and of their aliases."""
+    """The compared forms of the values the schema names for an Attribute: enum values,
+    values that carry aliases, and those aliases."""
     found: set[str] = set()
+    spec = attribute.type.element if attribute.type.name is AttributeType.ARRAY else attribute.type
+    if spec is not None:
+        found.update(phrase_form(v) for v in spec.enum_values or ())
     for stored, aliases in (attribute.value_aliases or {}).items():
         found.add(phrase_form(stored))
         found.update(phrase_form(a) for a in aliases)
@@ -806,12 +818,36 @@ def _with_alias(
     return (*kept, alias)
 
 
+def _draft_phrases(draft: _Draft) -> dict[str, str]:
+    """Every name and alias of the draft schema (the schema with the changes applied so far),
+    compared form -> what it names."""
+    kinds = {k.api_name: k for k in draft.schema.kinds.values()}
+    kinds.update(draft.kinds)
+    taken: dict[str, str] = {}
+    for kind in kinds.values():
+        for phrase in kind_phrases(kind):
+            taken.setdefault(phrase, f"Kind {kind.api_name}")
+        for attribute in kind.attributes.values():
+            where = f"{kind.api_name}.{attribute.api_name}"
+            for phrase in attribute_phrases(attribute):
+                taken.setdefault(phrase, f"Attribute {where}")
+            for phrase in value_phrases(attribute):
+                taken.setdefault(phrase, f"a value of {where}")
+    return taken
+
+
 def _vocabulary_change(
     draft: _Draft, suggestion: Suggestion, tags: Mapping[str, frozenset[Sensitivity]]
 ) -> None:
-    """Apply an alias or description suggestion to the draft copy of its Kind."""
+    """Apply an alias or description suggestion to the draft copy of its Kind. An alias
+    that already names anything in the draft (a Kind, an Attribute, a value or one of their
+    aliases, the suggestions accepted with it included) is refused: it would be ambiguous."""
     owner = draft.kind(suggestion.kind, suggestion)
     alias = phrase_form(suggestion.name)
+    if suggestion.type is not SuggestionType.ATTRIBUTE_DESCRIPTION:
+        named = _draft_phrases(draft).get(alias)
+        if named is not None:
+            raise SuggestionError(suggestion.id, f"{alias!r} already names {named}")
     if suggestion.type is SuggestionType.KIND_ALIAS:
         if not alias:
             raise SuggestionError(suggestion.id, "the alias is empty")

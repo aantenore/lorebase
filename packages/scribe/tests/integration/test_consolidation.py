@@ -10,8 +10,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
 from lorebase_core.model import Schema
 from lorebase_inference.interfaces import ChatOptions, ChatResult, Message, Usage
 from lorebase_scribe.consolidation import ConsolidationPass
@@ -90,7 +92,7 @@ async def test_misses_become_vocabulary_suggestions(
     await miss(sessions, enabled, "vat numbr", 5, seen=now)
     await miss(sessions, enabled, "zebra crossing", 5, seen=now)  # near nothing
     await miss(sessions, enabled, "terminatt", 1, seen=now)  # below min_misses
-    settings = ConsolidationSettings(min_misses=2)
+    settings = ConsolidationSettings(min_misses=2, min_callers=1)
     first = await ConsolidationPass(sessions, enabled, settings, clock=clock).run(DOMAIN)
     assert (first.phrases, first.linked, first.created) == (5, 3, 3), first.as_dict()
     assert first.discarded == {"collision": 1, "unlinked": 1}
@@ -137,20 +139,32 @@ async def test_misses_expire_and_nothing_is_proposed_when_recording_is_off(
     assert left == ["plantz"]
 
 
-async def test_domain_cap_drops_new_phrases_but_keeps_counting_known_ones(
+async def test_domain_cap_evicts_the_least_missed_and_bounds_each_caller(
     sessions: async_sessionmaker[AsyncSession], clock: Clock, schema: Schema
 ) -> None:
     capped = StoreRuntime.from_settings(
-        StoreSettings(resolve_misses={"enabled": True, "max_per_domain": 1, "max_callers": 2})
+        StoreSettings(
+            resolve_misses={
+                "enabled": True,
+                "max_per_domain": 2,
+                "max_callers": 2,
+                "max_phrases_per_caller": 1,
+            }
+        )
     )
     now = clock()
-    await miss(sessions, capped, "plantz", 1, callers=("a",), seen=now)
-    await miss(sessions, capped, "other", 1, seen=now)
-    await miss(sessions, capped, "plantz", 2, callers=("b", "c"), seen=now)
+    await miss(sessions, capped, "plantz", 5, callers=("a", "b"), seen=now)
+    await miss(sessions, capped, "plantz", 1, callers=("c",), seen=now)  # known: counts
+    await miss(sessions, capped, "first junk", 1, callers=("spammer",), seen=now)
+    await miss(sessions, capped, "second junk", 1, callers=("spammer",), seen=now)  # caller cap
+    await miss(sessions, capped, "useful", 2, callers=("d",), seen=clock())  # evicts the junk
+    await miss(sessions, capped, "noise", 1, callers=("e",), seen=clock())  # evicts nothing
     found = await scalar(
-        sessions, "SELECT json_agg(json_build_array(phrase, misses, callers)) FROM resolve_misses"
+        sessions,
+        "SELECT json_agg(json_build_array(phrase, misses, callers) ORDER BY phrase) "
+        "FROM resolve_misses",
     )
-    assert found == [["plantz", 3, ["a", "b"]]]
+    assert found == [["plantz", 6, ["a", "b"]], ["useful", 2, ["d"]]]
 
 
 class Describer:
@@ -168,7 +182,7 @@ class Describer:
         return ChatResult(data, Usage(100, 20), "fake-model")
 
 
-@pytest.mark.parametrize(("evidence", "described"), [(["terminatd"], 1), (["something else"], 0)])
+@pytest.mark.parametrize(("evidence", "described"), [(["tierr"], 1), (["something else"], 0)])
 async def test_model_step_must_cite_missed_phrases(
     sessions: async_sessionmaker[AsyncSession],
     enabled: StoreRuntime,
@@ -177,7 +191,8 @@ async def test_model_step_must_cite_missed_phrases(
     evidence: list[str],
     described: int,
 ) -> None:
-    await miss(sessions, enabled, "terminatd", 12, seen=clock())
+    await miss(sessions, enabled, "tierr", 12, callers=("c1", "c2"), seen=clock())
+    await miss(sessions, enabled, "terminatd", 12, callers=("c1", "c2"), seen=clock())
     model = Describer(evidence)
     settings = ConsolidationSettings(min_misses=2, llm=ConsolidationLlmSettings(enabled=True))
     report = await ConsolidationPass(
@@ -188,13 +203,16 @@ async def test_model_step_must_cite_missed_phrases(
         chat=lambda: model,  # type: ignore[arg-type,return-value]
     ).run(DOMAIN)
     assert report.described == described
-    assert "terminatd" in model.prompts[0]
-    assert "terminated" not in model.prompts[0].replace("terminatd", "")  # no values
-    found = (await stored(sessions)).get("attribute_description:status")
+    assert len(model.prompts) == 1
+    assert "tierr" in model.prompts[0]
+    # A phrase linked to a value is a near-copy of a stored value: never sent.
+    assert "terminatd" not in model.prompts[0]
+    assert "terminated" not in model.prompts[0]
+    found = (await stored(sessions)).get("attribute_description:tier")
     if described:
         assert found is not None
         assert found.payload == {"description": "Lifecycle state of the supplier."}
-        assert found.examples[0]["phrases"] == ["terminatd"]
+        assert found.examples[0]["phrases"] == ["tierr"]
     else:
         assert found is None
         assert report.discarded["llm_unverified"] == 1
@@ -237,3 +255,161 @@ async def test_coverage_counts_records_and_missing_values(
         stats = await coverage.read_coverage(session, DOMAIN, "main", [supplier.id])
     assert stats[supplier.id].sampled
     assert stats[supplier.id].records == len(expected)
+    assert all(0 <= n <= len(expected) for n in stats[supplier.id].missing.values())
+    first_unseen = stats[supplier.id].unseen_at
+    refreshed = await coverage.run_coverage(sessions, DOMAIN, settings=settings, clock=clock)
+    assert refreshed.skipped == "unchanged"
+    assert set(refreshed.refreshed) == set(schema.kinds)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        again_stats = await coverage.read_coverage(session, DOMAIN, "main", [supplier.id])
+    assert first_unseen is not None
+    assert again_stats[supplier.id].unseen_at is not None
+    assert again_stats[supplier.id].unseen_at > first_unseen  # Records unseen are recounted
+    assert again_stats[supplier.id].revision == stats[supplier.id].revision
+
+
+async def suggestions_of(sessions: async_sessionmaker[AsyncSession]) -> dict[str, SuggestionRow]:
+    return await stored(sessions)
+
+
+async def test_pruned_phrases_leave_suggestions_and_purge_erases_them(
+    sessions: async_sessionmaker[AsyncSession],
+    enabled: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    """Design 8.10: no phrase outlives the retention period in a suggestion, decided or not."""
+    now = clock()
+    settings = ConsolidationSettings(min_misses=2, min_callers=1)
+    await miss(sessions, enabled, "terminatd", 4, seen=now)
+    await miss(sessions, enabled, "plantz", 3, seen=now)
+    await ConsolidationPass(sessions, enabled, settings, clock=clock).run(DOMAIN)
+    found = await stored(sessions)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await SchemaSuggestionRepository(session, DOMAIN).decide(
+            [found["kind_alias:plantz"].id],
+            status="rejected",
+            decided_by="usr_reviewer",
+            decided_at=now,
+        )
+    later = Clock()
+    later._now = now + timedelta(days=31)
+    await miss(sessions, enabled, "terminatd", 1, seen=later())  # still missed: kept
+    report = await ConsolidationPass(sessions, enabled, settings, clock=later).run(DOMAIN)
+    assert report.pruned == 1
+    assert report.removed == 1
+    left = await stored(sessions)
+    assert set(left) == {"value_alias:terminatd"}
+    assert "plantz" not in str(left)
+
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        assert await SchemaSuggestionRepository(session, DOMAIN).purge_vocabulary() == 1
+    assert await stored(sessions) == {}
+
+
+async def test_a_relinked_phrase_leaves_its_previous_pending_suggestion(
+    sessions: async_sessionmaker[AsyncSession],
+    enabled: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    plant = schema.kind_by_api_name("Plant")
+    assert plant is not None
+    stale = Observation(
+        SuggestionType.KIND_ALIAS,
+        "terminatd",
+        "miss:main:terminatd",
+        0.5,
+        "resolve_misses",
+        kind=plant.id,
+        weight=4,
+        evidence={"document_id": "miss:main:terminatd", "phrase": "terminatd"},
+    )
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await SchemaSuggestionRepository(session, DOMAIN).record(
+            [stale],
+            job_id="old",
+            options=SuggestionOptions(),
+            now=clock(),
+            new_id=lambda: "ssg_stale",
+        )
+    await miss(sessions, enabled, "terminatd", 4, seen=clock())
+    settings = ConsolidationSettings(min_misses=2, min_callers=1)
+    await ConsolidationPass(sessions, enabled, settings, clock=clock).run(DOMAIN)
+    assert set(await stored(sessions)) == {"value_alias:terminatd"}
+
+
+async def test_vocabulary_suggestions_cannot_crowd_out_extraction(
+    sessions: async_sessionmaker[AsyncSession], clock: Clock, schema: Schema
+) -> None:
+    options = SuggestionOptions(max_tracked=2, max_vocabulary_tracked=1)
+    plant = schema.kind_by_api_name("Plant")
+    assert plant is not None
+
+    def alias(phrase: str) -> Observation:
+        return Observation(
+            SuggestionType.KIND_ALIAS, phrase, f"miss:main:{phrase}", 0.5, "resolve_misses",
+            kind=plant.id,
+        )  # fmt: skip
+
+    extracted = Observation(SuggestionType.KIND, "Quality notice", "doc_1", 0.9, "rules")
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        repository = SchemaSuggestionRepository(session, DOMAIN)
+        counter = iter(range(100))
+        vocabulary = await repository.record(
+            [alias("a junk"), alias("b junk"), alias("c junk")],
+            job_id="j",
+            options=options,
+            now=clock(),
+            new_id=lambda: f"ssg_{next(counter)}",
+        )
+        extraction = await repository.record(
+            [extracted],
+            job_id="j",
+            options=options,
+            now=clock(),
+            new_id=lambda: f"ssg_{next(counter)}",
+        )
+    assert (vocabulary.created, vocabulary.dropped) == (1, 2)
+    assert extraction.created == 1
+
+
+async def test_last_successful_run_is_one_index_probe(
+    sessions: async_sessionmaker[AsyncSession], clock: Clock, schema: Schema
+) -> None:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        await session.execute(
+            text(
+                "INSERT INTO source_runs (domain_id, id, source_id, status, started_at, "
+                "finished_at, stats) SELECT :d, 'run_' || g, 'src_x', "
+                "CAST(CASE WHEN g % 3 = 0 THEN 'failed' ELSE 'succeeded' END AS run_status), "
+                "now() - make_interval(mins => 5000 - g), now() - make_interval(mins => 5000 - g), "
+                "CASE WHEN g = 4999 THEN '{\"dry_run\": true}'::jsonb ELSE '{}'::jsonb END "
+                "FROM generate_series(1, 5000) AS g"
+            ),
+            {"d": DOMAIN},
+        )
+        await session.execute(text("ANALYZE source_runs"))
+        last = await coverage.last_runs(session, DOMAIN, ["src_x", "src_none"])
+        plan = "\n".join(
+            str(r[0])
+            for r in (
+                await session.execute(
+                    text(f"EXPLAIN {coverage._LAST_RUNS.text}"),
+                    {"domain": DOMAIN, "sources": ["src_x"]},
+                )
+            ).all()
+        )
+    newest = await scalar(
+        sessions,
+        "SELECT max(finished_at) FROM source_runs WHERE source_id = 'src_x' "
+        "AND status = 'succeeded' AND coalesce(stats ->> 'dry_run', 'false') <> 'true'",
+    )
+    assert last == {"src_x": newest, "src_none": None}
+    assert "ix_source_runs_last_succeeded" in plan
