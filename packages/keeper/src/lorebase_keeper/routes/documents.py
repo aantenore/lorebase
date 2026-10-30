@@ -65,66 +65,38 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile
 
-from lorebase_core.model import new_ulid
-from lorebase_core.reconcile import CandidateStatus, CandidateType
 from lorebase_keeper.auth.audit import annotate, suppress
 from lorebase_keeper.auth.deps import Access, AuthDep, require
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.auth.rbac import NO_CONTEXT
-from lorebase_keeper.context import StoreDep, require_domain
+from lorebase_keeper.context import StoreDep
 from lorebase_keeper.deps import KeeperSettingsDep
 from lorebase_keeper.errors import (
     BAD_GATEWAY,
     BAD_REQUEST,
-    NOT_FOUND,
     PAYLOAD_TOO_LARGE,
     VALIDATION_FAILED,
     Problem,
     ProblemError,
-    ProblemType,
 )
 from lorebase_keeper.pagination import Page, PageParamsDep, encode_cursor
 from lorebase_keeper.reading.caching import respond
 from lorebase_keeper.reading.runtime import ReadRuntimeDep
 from lorebase_keeper.services import document_urls
+from lorebase_keeper.services import documents as service
 from lorebase_keeper.services.config import DocumentSettings
-from lorebase_store.auth import AuditRepository, NewAuditEntry
-from lorebase_store.blobs import TEXT_REF_KEY, BlobNotFoundError, PostgresBlobStore, sha256
-from lorebase_store.jobs import (
-    DOCUMENT_VERSION_CHECK_JOB,
-    EXTRACTION_JOB,
-    cancel_queued_jobs,
-    document_version_check_payload,
-    enqueue_job,
-    extraction_payload,
-)
-from lorebase_store.repositories import (
-    DocumentRepository,
-    DocumentRow,
-    ExtractionJobRepository,
-    ExtractionJobRow,
-    ProposalItemRepository,
-    SchemaSuggestionRepository,
-)
-from lorebase_store.repositories.documents import DOCUMENT_STATUSES, PURGED
-from lorebase_store.repositories.reconciliation_candidates import (
-    CandidateFilter,
-    ReconciliationCandidateRepository,
-)
+from lorebase_store.repositories import DocumentRow, ExtractionJobRow
+from lorebase_store.repositories.documents import DOCUMENT_STATUSES
 
 router = APIRouter(tags=["documents"])
 
 DOCUMENTS = "/domains/{domain_id}/documents"
-DOCUMENT_PREFIX = "doc"
 MULTIPART = "multipart/form-data"
 _TIERS = frozenset({0, 1, 2})
 _SIGNATURES = {"application/pdf": b"%PDF-", "application/zip": b"PK\x03\x04"}
 
-DOCUMENT_RETIRED = ProblemType("document-retired", 409, "Document is retired")
 UPLOAD_ACTION = "document.upload"
-VERSION_ACTION = "document.version"
 RETIRE_ACTION = "document.retire"
-PURGE_ACTION = "document.purge"
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     403: {"model": Problem, "description": "The caller lacks the permission Domain-wide."},
@@ -491,86 +463,31 @@ async def upload_document(
         tiers = _tiers(body.tiers, "/body/tiers")
         metadata = {"source": "url", "url": body.url}
     media_type = _media_type(filename, data, settings)
-    digest = sha256(data)
-    asked = extract
-    extract = settings.extract_on_upload if extract is None else extract
-    job_id: int | None = None
-    check_job: int | None = None
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        ref = await PostgresBlobStore().put(session, domain_id, data)
-        repository = DocumentRepository(session, domain_id)
-        candidate = DocumentRow(
-            id=f"{DOCUMENT_PREFIX}_{new_ulid()}",
+    uploaded = await service.upload(
+        store,
+        domain_id,
+        service.NewDocument(
             filename=filename,
+            data=data,
             media_type=media_type,
-            sha256=digest,
-            size=len(data),
-            blob_ref=ref,
-            created_by=access.principal.id,
             metadata=metadata,
             source_key=key,
-        )
-        replaced: DocumentRow | None = None
-        if key is None:
-            row, created = await repository.add(candidate)
-        else:
-            outcome = await repository.add_version(candidate)
-            row, created, replaced = outcome.row, outcome.created, outcome.replaced
-        if extract and not row.extractable:
-            if asked:
-                raise ProblemError(
-                    DOCUMENT_RETIRED,
-                    f"Document {row.id!r} is {row.status}: it is not extracted again.",
-                )
-            extract = False
-        if extract:
-            job_id = await enqueue_job(
-                session,
-                EXTRACTION_JOB,
-                domain_id=domain_id,
-                payload=extraction_payload([row.id], tiers=tiers, requested_by=access.principal.id),
-                unique=True,
-            )
-        elif created and row.replaces is not None:
-            check_job = await enqueue_job(
-                session,
-                DOCUMENT_VERSION_CHECK_JOB,
-                domain_id=domain_id,
-                payload=document_version_check_payload(row.id, mode="version"),
-                unique=True,
-            )
-        if created and key is not None and row.version > 1:
-            previous = replaced or (
-                None if row.replaces is None else await repository.get(row.replaces)
-            )
-            await AuditRepository(session).append(
-                NewAuditEntry(
-                    actor=access.principal.id,
-                    action=VERSION_ACTION,
-                    domain_id=domain_id,
-                    target=row.id,
-                    details={
-                        "source_key": key,
-                        "version": row.version,
-                        "replaces": row.replaces,
-                        "size": row.size,
-                        "sha256": digest.hex(),
-                        "replaced_size": None if previous is None else previous.size,
-                        "replaced_sha256": None if previous is None else previous.sha256.hex(),
-                    },
-                    at=store.clock(),
-                )
-            )
+            extract=extract,
+            tiers=tiers,
+        ),
+        access.principal.id,
+        extract_on_upload=settings.extract_on_upload,
+    )
+    row, created = uploaded.row, uploaded.created
     annotate(
         request,
         action=UPLOAD_ACTION,
         target=row.id,
-        sha256=digest.hex(),
+        sha256=uploaded.sha256.hex(),
         size=len(data),
         media_type=media_type,
         duplicate=not created,
-        job=job_id,
+        job=uploaded.job_id,
         source_key=key,
         version=row.version,
     )
@@ -578,7 +495,10 @@ async def upload_document(
         response.status_code = 200
     response.headers["Location"] = f"{request.url.path.rstrip('/')}/{row.id}"
     return DocumentUploaded(
-        document=_document(row), duplicate=not created, job_id=job_id, check_job_id=check_job
+        document=_document(row),
+        duplicate=not created,
+        job_id=uploaded.job_id,
+        check_job_id=uploaded.check_job_id,
     )
 
 
@@ -603,11 +523,7 @@ async def list_documents(
             )
         except (KeyError, ValueError):
             raise ProblemError(VALIDATION_FAILED, "The cursor is not a document cursor.") from None
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        rows = await DocumentRepository(session, domain_id).page(
-            limit=params.limit + 1, after=after, source_key=key
-        )
+    rows = await service.page(store, domain_id, limit=params.limit + 1, after=after, source_key=key)
     more = len(rows) > params.limit
     rows = rows[: params.limit]
     last = rows[-1] if rows else None
@@ -629,25 +545,13 @@ async def get_document(
     auth: AuthDep,
 ) -> DocumentDetailOut:
     """The document's metadata and its extraction jobs, newest first."""
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        row = await DocumentRepository(session, domain_id).get(document_id)
-        if row is None:
-            raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
-        jobs = await ExtractionJobRepository(session, domain_id).of_document(
-            document_id, limit=keeper.documents.jobs_listed
-        )
-        stale = await ReconciliationCandidateRepository(session, domain_id).count(
-            CandidateFilter(
-                type=CandidateType.STALE,
-                status=CandidateStatus.OPEN,
-                source=f"document:{document_id}",
-            )
-        )
+    found = await service.detail(
+        store, domain_id, document_id, jobs_listed=keeper.documents.jobs_listed
+    )
     return DocumentDetailOut(
-        **_document(row).model_dump(),
-        extraction_jobs=[_job(j) for j in jobs],
-        open_stale_candidates=stale,
+        **_document(found.row).model_dump(),
+        extraction_jobs=[_job(j) for j in found.jobs],
+        open_stale_candidates=found.open_stale_candidates,
         can_retire=await auth.authorizer.allows(
             access.principal, Permission.DOCUMENT_RETIRE, domain_id, NO_CONTEXT
         ),
@@ -672,37 +576,13 @@ async def list_document_versions(
             before = int(params.position["v"])
         except (KeyError, TypeError, ValueError):
             raise ProblemError(VALIDATION_FAILED, "The cursor is not a version cursor.") from None
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        repository = DocumentRepository(session, domain_id)
-        row = await repository.get(document_id)
-        if row is None:
-            raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
-        if row.source_key is None:
-            rows = [] if before is not None else [row]
-        else:
-            rows = await repository.versions(row.source_key, limit=params.limit + 1, before=before)
+    rows = await service.versions(
+        store, domain_id, document_id, limit=params.limit + 1, before=before
+    )
     more = len(rows) > params.limit
     rows = rows[: params.limit]
     next_cursor = encode_cursor({"v": rows[-1].version}) if more and rows else None
     return Page[DocumentOut](items=[_document(r) for r in rows], next_cursor=next_cursor)
-
-
-async def _retire(
-    session: Any, domain_id: str, row: DocumentRow, principal: str, at: datetime
-) -> tuple[DocumentRow, int | None]:
-    """Retire `row` if it is not yet and queue its evidence check (module doc)."""
-    retired = await DocumentRepository(session, domain_id).retire(row.id, by=principal, at=at)
-    if retired is None:
-        return row, None
-    job = await enqueue_job(
-        session,
-        DOCUMENT_VERSION_CHECK_JOB,
-        domain_id=domain_id,
-        payload=document_version_check_payload(row.id, mode="retire"),
-        unique=True,
-    )
-    return retired, job
 
 
 @router.post(
@@ -721,12 +601,7 @@ async def retire_document(
     """Retire a document: it stays readable, is never extracted again, and values whose
     evidence was this document raise `stale` reconciliation candidates."""
     annotate(request, action=RETIRE_ACTION, target=document_id, reason=body.reason)
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        row = await DocumentRepository(session, domain_id).lock(document_id)
-        if row is None:
-            raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
-        row, job = await _retire(session, domain_id, row, access.principal.id, store.clock())
+    row, job = await service.retire(store, domain_id, document_id, access.principal.id)
     annotate(request, job=job, status=row.status)
     return DocumentRetired(document=_document(row), job_id=job)
 
@@ -749,86 +624,17 @@ async def purge_document(
     doc); retires it first if needed."""
     if body.confirm != document_id:
         raise _invalid("/body/confirm", "must be the id of the document to purge")
-    erased = keeper.reads.sensitivity.erased_value
-    blobs = PostgresBlobStore()
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        repository = DocumentRepository(session, domain_id)
-        # The row lock serialises the purge with extraction jobs writing this document's
-        # text, chunks or items: they take it too and stop once it is retired or purged.
-        row = await repository.lock(document_id)
-        if row is None:
-            raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
-        at = store.clock()
-        already = row.status == PURGED
-        job: int | None = None
-        if not already:
-            row, job = await _retire(session, domain_id, row, access.principal.id, at)
-        extraction_jobs = ExtractionJobRepository(session, domain_id)
-        queued = await cancel_queued_jobs(
-            session,
-            EXTRACTION_JOB,
-            domain_id=domain_id,
-            match={"documents": [document_id]},
-            reason=f"document {document_id} purged",
-        )
-        cancelled = await extraction_jobs.cancel_of_document(document_id, at=at)
-        jobs = await extraction_jobs.ids_of_document(document_id)
-        items = await ProposalItemRepository(session, domain_id).erase_quotes(
-            jobs, document_id, erased
-        )
-        candidates = await ReconciliationCandidateRepository(session, domain_id).erase_quotes(
-            document_id, erased
-        )
-        suggestions = await SchemaSuggestionRepository(session, domain_id).erase_quotes(
-            document_id, erased
-        )
-        content = await repository.purge_content(document_id)
-        text_ref = row.metadata.get(TEXT_REF_KEY)
-        text_deleted = False
-        if (
-            isinstance(text_ref, str)
-            and text_ref != row.blob_ref
-            and not await repository.shares_blob(document_id, text_ref)
-        ):
-            text_deleted = await blobs.delete(session, domain_id, text_ref)
-        blob_deleted = False
-        if not await repository.shares_blob(document_id, row.blob_ref):
-            blob_deleted = await blobs.delete(session, domain_id, row.blob_ref)
-        purged = await repository.mark_purged(document_id, by=access.principal.id, at=at)
-        row = purged or row
-        outcome = DocumentPurged(
-            document=_document(row),
-            job_id=job,
-            blob_deleted=blob_deleted,
-            text_deleted=text_deleted,
-            chunks=content.chunks,
-            cache_entries=content.cache_entries,
-            items=items,
-            candidates=candidates,
-            suggestions=suggestions,
-        )
-        await AuditRepository(session).append(
-            NewAuditEntry(
-                actor=access.principal.id,
-                action=PURGE_ACTION,
-                domain_id=domain_id,
-                target=document_id,
-                details={
-                    "reason": body.reason,
-                    "again": already,
-                    "sha256": row.sha256.hex(),
-                    "source_key": row.source_key,
-                    "version": row.version,
-                    "jobs_cancelled": queued + len(cancelled),
-                    **outcome.model_dump(exclude={"document"}),
-                },
-                at=at,
-            )
-        )
-    # The entry above is the audit record of the purge; the request's own entry would repeat it.
+    purged = await service.purge(
+        store,
+        domain_id,
+        document_id,
+        access.principal.id,
+        reason=body.reason,
+        erased_value=keeper.reads.sensitivity.erased_value,
+    )
+    # The service wrote the audit record of the purge; the request's own entry would repeat it.
     suppress(request)
-    return outcome
+    return DocumentPurged(document=_document(purged.row), **purged.counts)
 
 
 @router.get(
@@ -852,29 +658,11 @@ async def get_document_text(
     keeper: KeeperSettingsDep,
 ) -> Response:
     """The text Scribe parsed from the document; extraction evidence offsets index it."""
-    async with store.sessions() as session, session.begin():
-        await require_domain(session, domain_id)
-        row = await DocumentRepository(session, domain_id).get(document_id)
-    if row is None:
-        raise ProblemError(NOT_FOUND, f"Document {document_id!r} not found.")
-    ref = row.metadata.get(TEXT_REF_KEY)
-    if row.text_hash is None or not isinstance(ref, str):
-        raise ProblemError(
-            NOT_FOUND, f"The text of document {document_id!r} has not been parsed yet."
-        )
-    text_hash = row.text_hash.hex()
+    text_hash, ref = await service.parsed_text_ref(store, domain_id, document_id)
     limit = keeper.documents.max_text_chars
 
     async def produce() -> DocumentTextOut:
-        async with store.sessions() as session, session.begin():
-            await require_domain(session, domain_id)
-            try:
-                data = await PostgresBlobStore().get(session, domain_id, ref)
-            except BlobNotFoundError:
-                raise ProblemError(
-                    NOT_FOUND, f"The text of document {document_id!r} is not stored."
-                ) from None
-        text = data.decode("utf-8")
+        text = await service.parsed_text(store, domain_id, document_id, ref)
         return DocumentTextOut(
             document_id=document_id,
             text_sha256=text_hash,
