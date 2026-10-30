@@ -181,8 +181,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         'linked Records; {"derived": name, ...} on derived values. include: {relation: '
         '{"select": [...], "limit": n}}. order_by: [{"attr": name, "dir": "asc"|"desc"}]. '
         'Count with "aggregate": {"group_by": attr}: Records per value of attr (omit group_by '
-        "for a count per Kind). Unsure which Kind, Attribute or value "
-        "the words of a question mean? Call lorebase_resolve first.",
+        "for a count per Kind). Unsure what the words mean? Call lorebase_resolve first. "
+        "Read `coverage:` lines before concluding none match.",
         annotations=READ,
         structured_output=False,
     )
@@ -267,7 +267,8 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
         "Calzature. It never runs a query or interprets the question: pick the candidates "
         "that fit and write lorebase_query yourself. Levels: exact names and values, synonyms "
         "(schema aliases), similar spelling and, only when nothing else matched and you pass "
-        "`query_vector`, values of the nearest Records. `unmatched` lists words nothing covers.",
+        "`query_vector`, values of the nearest Records. `unmatched`: words nothing covers; "
+        "`coverage:` lines: unknown phrases, missing values.",
         annotations=READ,
         structured_output=False,
     )

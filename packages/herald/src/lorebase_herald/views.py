@@ -342,6 +342,23 @@ def rows_text(items: Iterable[Mapping[str, Any]], output: OutputSettings) -> lis
     return lines
 
 
+def coverage_view(coverage: m.Coverage | None) -> View | None:
+    """The coverage block (design 8.11) whole: it is small, and its notes are what an agent
+    reads before concluding that nothing matches."""
+    if coverage is None:
+        return None
+    return coverage.model_dump(mode="json", exclude_defaults=True)
+
+
+def coverage_lines(view: Mapping[str, Any]) -> list[str]:
+    """One line per coverage signal, never cut."""
+    coverage = view.get("coverage") or {}
+    lines = [f"coverage: {note}" for note in coverage.get("notes", [])]
+    if coverage.get("omitted"):
+        lines.append(f"coverage omitted: {coverage['omitted']}")
+    return lines
+
+
 def page_view(body: m.QueryResult, output: OutputSettings) -> View:
     """A page of Records (`/query`)."""
     items, omitted = capped([record_view(r) for r in body.items], output.max_items)
@@ -352,6 +369,8 @@ def page_view(body: m.QueryResult, output: OutputSettings) -> View:
         view["next_cursor"] = body.next_cursor
     if body.aggregate is not None:
         view["aggregate"] = body.aggregate.model_dump(mode="json", exclude_unset=True)
+    if (coverage := coverage_view(body.coverage)) is not None:
+        view["coverage"] = coverage
     return view
 
 
@@ -370,6 +389,7 @@ def page_text(view: Mapping[str, Any], output: OutputSettings) -> str:
     lines.extend(more_line(view.get("omitted", 0), "lower `limit`"))
     if view.get("next_cursor"):
         lines.append(f"next_cursor: {view['next_cursor']}")
+    lines.extend(coverage_lines(view))
     return "\n".join(lines)
 
 
@@ -505,6 +525,8 @@ def resolve_view(body: m.ResolveResult, output: OutputSettings) -> View:
         view["skipped"] = [{"level": s.level, "reason": s.reason} for s in body.skipped]
     if omitted:
         view["omitted"] = omitted
+    if (coverage := coverage_view(body.coverage)) is not None:
+        view["coverage"] = coverage
     return view
 
 
@@ -530,6 +552,7 @@ def resolve_text(view: Mapping[str, Any], output: OutputSettings) -> str:
         lines.append("unmatched: " + ", ".join(view["unmatched"]))
     for skipped in view.get("skipped", []):
         lines.append(f"skipped {skipped['level']}: {skipped['reason']}")
+    lines.extend(coverage_lines(view))
     return "\n".join(lines)
 
 
