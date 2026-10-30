@@ -119,11 +119,13 @@ def test_hnsw_index_sql() -> None:
 
 
 def test_hnsw_build_parameters_are_checked() -> None:
-    assert StorageSettings().hnsw_m is None
-    assert StorageSettings(hnsw_m=32).hnsw_ef_construction is None
+    assert (StorageSettings().hnsw_m, StorageSettings().hnsw_ef_construction) == (None, 128)
+    assert StorageSettings(hnsw_m=64).hnsw_ef_construction == 128
     assert StorageSettings(hnsw_m=48, hnsw_ef_construction=128).hnsw_m == 48
     with pytest.raises(ValidationError, match="at least twice"):
-        StorageSettings(hnsw_m=40)
+        StorageSettings(hnsw_m=40, hnsw_ef_construction=None)
+    with pytest.raises(ValidationError, match="at least twice"):
+        StorageSettings(hnsw_m=65)
     with pytest.raises(ValidationError, match="at least twice"):
         StorageSettings(hnsw_m=16, hnsw_ef_construction=20)
 
