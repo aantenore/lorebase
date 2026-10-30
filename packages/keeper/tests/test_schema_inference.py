@@ -410,11 +410,12 @@ async def test_sql_source_gives_a_proposal(
         sql: object,
         records: object,
         *,
+        application: str,
         schema: Any,
         tables: Any,
         allowed_schemas: Any,
     ) -> list[TableProfile]:
-        seen.update(dialect=dialect, url=url, schema=schema, tables=tables)
+        seen.update(dialect=dialect, url=url, application=application, schema=schema, tables=tables)
         csv = CsvProfilingSettings()
         return [profile_file(SUPPLY_DATA / f"{name}.csv", csv) for name in ("supplier", "contract")]
 
@@ -427,6 +428,7 @@ async def test_sql_source_gives_a_proposal(
     assert seen == {
         "dialect": key,
         "url": f"{key}://reader@db.example.test/erp",
+        "application": "lorebase-keeper",
         "schema": "erp",
         "tables": ("supplier",),
     }

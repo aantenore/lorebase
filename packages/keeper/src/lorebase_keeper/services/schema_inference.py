@@ -66,7 +66,9 @@ from lorebase_store.settings import (
 
 logger = logging.getLogger("lorebase.keeper.schema_inference")
 
-PARQUET_EXTRA = "lorebase-keeper[parquet]"
+APPLICATION_NAME = "lorebase-keeper"
+"""The installing package: named in driver hints and reported to the databases read."""
+PARQUET_EXTRA = f"{APPLICATION_NAME}[parquet]"
 
 
 @dataclass(frozen=True)
@@ -368,6 +370,7 @@ async def infer_from_sql(
             url,
             profiling.sql,
             profiling.records,
+            application=APPLICATION_NAME,
             schema=source.schema,
             tables=source.tables or None,
             allowed_schemas=settings.allowed_schemas.get(source.dsn),

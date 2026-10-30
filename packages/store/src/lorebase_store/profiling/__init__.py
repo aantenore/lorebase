@@ -28,13 +28,16 @@ from lorebase_store.profiling.records import (
     profile_records,
 )
 from lorebase_store.profiling.sql_databases import (
+    SQL_DIALECTS,
     SqlDialect,
+    SqlDialectSpec,
     SqlDriverError,
     SqlProfileError,
     profile_sql_database,
 )
 
 __all__ = [
+    "SQL_DIALECTS",
     "CsvProfileError",
     "ParquetUnavailableError",
     "PostgresProfileError",
@@ -42,6 +45,7 @@ __all__ = [
     "RecordProfiler",
     "RowSampler",
     "SqlDialect",
+    "SqlDialectSpec",
     "SqlDriverError",
     "SqlProfileError",
     "profile_bytes",

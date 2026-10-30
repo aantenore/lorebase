@@ -7,8 +7,11 @@ keys and foreign keys come from the catalog. MySQL sessions are read-only and bo
 ``max_execution_time`` (``max_statement_time`` on MariaDB); SQL Server has no read-only
 transaction, so the login must only be able to read (its waits are bounded by the driver
 timeout and ``LOCK_TIMEOUT``). MySQL runs through asyncmy; pymssql is blocking and runs in a
-worker thread. The drivers are optional extras of the installing package (``SqlDriverError``
-names them when missing). Binary values (a ``rowversion``) are profiled as hex text.
+worker thread. The drivers are optional extras of the installing package, which the caller
+names as ``application`` (``SqlDriverError`` names the extra when missing; the connection
+reports the same name to the server). Binary values (a ``rowversion``) are profiled as hex
+text. ``SQL_DIALECTS`` lists the URL schemes, drivers and extras of each dialect, for every
+package that reads these databases.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import asyncio
 import importlib
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -45,8 +48,6 @@ from lorebase_store.settings import RecordProfilingSettings, SqlProfilingSetting
 
 SqlDialect = Literal["mysql", "mssql"]
 
-APPLICATION_NAME = "lorebase-keeper"
-
 
 class SqlProfileError(ValueError):
     """The requested tables cannot be profiled."""
@@ -57,34 +58,37 @@ class SqlDriverError(SqlProfileError):
 
 
 @dataclass(frozen=True)
-class _Dialect:
+class SqlDialectSpec:
+    """How to reach one dialect: the URL schemes accepted, the SQLAlchemy driver name they
+    are rewritten to, the driver module and the package extra that installs it."""
+
     schemes: frozenset[str]
     driver_name: str
     module: str
     extra: str
 
 
-_DIALECTS: dict[SqlDialect, _Dialect] = {
-    "mysql": _Dialect(
+SQL_DIALECTS: Mapping[SqlDialect, SqlDialectSpec] = {
+    "mysql": SqlDialectSpec(
         frozenset({"mysql", "mariadb", "mysql+asyncmy", "mariadb+asyncmy"}),
         "mysql+asyncmy",
         "asyncmy",
         "mysql",
     ),
-    "mssql": _Dialect(
+    "mssql": SqlDialectSpec(
         frozenset({"mssql", "sqlserver", "mssql+pymssql"}), "mssql+pymssql", "pymssql", "mssql"
     ),
 }
 
 
-def _url(dialect: SqlDialect, location: str) -> URL:
+def _url(dialect: SqlDialect, location: str, application: str) -> URL:
     """The URL on the driver of `dialect`; refuses other schemes without echoing the value."""
-    found = _DIALECTS[dialect]
+    found = SQL_DIALECTS[dialect]
     try:
         importlib.import_module(found.module)
     except ImportError:
         raise SqlDriverError(
-            f"{dialect} sources need {found.module}: install lorebase-keeper[{found.extra}]"
+            f"{dialect} sources need {found.module}: install {application}[{found.extra}]"
         ) from None
     try:
         parsed = make_url(location)
@@ -223,10 +227,11 @@ async def _profile_mysql(
     settings: SqlProfilingSettings,
     run: Callable[[Connection], list[TableProfile]],
     engine_factory: Callable[..., Any],
+    application: str,
 ) -> list[TableProfile]:
     connect_args: dict[str, Any] = {
         "connect_timeout": settings.connect_timeout_s,
-        "program_name": APPLICATION_NAME,
+        "program_name": application,
     }
     if "charset" not in url.query:
         connect_args["charset"] = "utf8mb4"
@@ -252,6 +257,7 @@ def _mssql_work(
     settings: SqlProfilingSettings,
     run: Callable[[Connection], list[TableProfile]],
     engine_factory: Callable[..., Any],
+    application: str,
 ) -> list[TableProfile]:
     # pymssql cannot send ApplicationIntent=ReadOnly: the login must be able to read only.
     timeout_ms = int(settings.statement_timeout_ms)
@@ -261,7 +267,7 @@ def _mssql_work(
         connect_args={
             "login_timeout": math.ceil(settings.connect_timeout_s),
             "timeout": math.ceil(timeout_ms / 1000),
-            "appname": APPLICATION_NAME,
+            "appname": application,
         },
     )
     try:
@@ -278,6 +284,7 @@ async def profile_sql_database(
     settings: SqlProfilingSettings,
     records: RecordProfilingSettings,
     *,
+    application: str,
     schema: str | None = None,
     tables: Sequence[str] | None = None,
     allowed_schemas: Sequence[str] | None = None,
@@ -286,13 +293,18 @@ async def profile_sql_database(
     """Profiles of ``tables`` (default: every table) of a MySQL, MariaDB or SQL Server database
     named by the connection URL ``location``; ``schema`` defaults to the connection's own and
     must be a plain name found in the catalog (and in ``allowed_schemas`` when given; the
-    connection's own schema is then checked too). ``engine_factory`` replaces the engine
-    constructor (tests)."""
-    url = _url(dialect, location)
+    connection's own schema is then checked too). ``application`` is the installing package:
+    the application name the server sees and the package a missing driver's extra belongs
+    to. ``engine_factory`` replaces the engine constructor (tests)."""
+    url = _url(dialect, location, application)
 
     def run(connection: Connection) -> list[TableProfile]:
         return _profile_tables(connection, schema, tables, settings, records, allowed_schemas)
 
     if dialect == "mysql":
-        return await _profile_mysql(url, settings, run, engine_factory or create_async_engine)
-    return await asyncio.to_thread(_mssql_work, url, settings, run, engine_factory or create_engine)
+        return await _profile_mysql(
+            url, settings, run, engine_factory or create_async_engine, application
+        )
+    return await asyncio.to_thread(
+        _mssql_work, url, settings, run, engine_factory or create_engine, application
+    )
