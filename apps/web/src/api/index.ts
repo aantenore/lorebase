@@ -2,7 +2,7 @@ import type { AppConfig } from '@/config/env';
 import type { KeeperApi } from './client';
 import type { Credentials } from './credentials';
 import { createHttpApi } from './http';
-import { asRemote, createMockApi } from './mock/adapter';
+import { lazyAdapter } from './lazy';
 import { redirectToLogin, type SessionClient } from './session';
 
 export type { KeeperApi } from './client';
@@ -31,7 +31,8 @@ export * from './suggestion-types';
 export * from './reconciliation-types';
 
 /**
- * Pick the adapter from configuration: `live` talks to Keeper, `mock` serves sample data.
+ * Pick the adapter from configuration: `live` talks to Keeper, `mock` serves sample data
+ * (loaded on first use).
  * The live adapter reads the token from `credentials` on every request; in session mode it
  * sends the session cookie and the CSRF header of `session` instead.
  */
@@ -60,13 +61,16 @@ export function createKeeperApi(
       },
     });
   }
-  return asRemote(
-    createMockApi({
-      pageSize: config.pageSize,
-      searchLimit: config.searchLimit,
-      maxNodes: config.canvas.maxNodes,
-      perfGraph: config.mockPerfGraph,
-    }),
-    config.mockLatencyMs,
-  );
+  return lazyAdapter(async () => {
+    const { asRemote, createMockApi } = await import('./mock/adapter');
+    return asRemote(
+      createMockApi({
+        pageSize: config.pageSize,
+        searchLimit: config.searchLimit,
+        maxNodes: config.canvas.maxNodes,
+        perfGraph: config.mockPerfGraph,
+      }),
+      config.mockLatencyMs,
+    );
+  });
 }
