@@ -315,3 +315,27 @@ async def test_embedding_level_reads_the_nearest_records(seeded: Seeded) -> None
     assert category["records"] == 100
     assert disabled.json()["candidates"] == []
     assert {"level": "embedding", "reason": "not requested"} in disabled.json()["skipped"]
+
+
+MUMBAI = "".join(chr(c) for c in (0x92E, 0x941, 0x902, 0x92C, 0x908))  # Devanagari, with marks
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        (f"stores in {MUMBAI}", MUMBAI),
+        ("shops in rock & roll", "Rock & Roll"),
+        ("S/M outlets", "S/M"),
+        ("stores at 50%", "50%"),
+        ("Rock & Roll", "Rock & Roll"),
+    ],
+)
+async def test_words_of_other_scripts_and_punctuated_values(
+    seeded: Seeded, text: str, value: str
+) -> None:
+    async with keeper(seeded.app_url, SECTION) as http:
+        response = await _resolve(http, seeded, {"text": text})
+    city = _by(response.json()["candidates"], "Store", "city", "value")
+    assert city is not None, response.json()
+    assert city["values"] == [value]
+    assert city["level"] == "exact"
