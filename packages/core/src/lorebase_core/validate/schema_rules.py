@@ -465,6 +465,7 @@ class _Checker:
                 f"{spec.describe()} attributes cannot be full-text searchable",
                 refs=refs,
             )
+        self.check_resolution(attribute, path, refs, relation_id=relation_id)
         if attribute.valid_time and attribute.is_derived:
             self.add(
                 IssueCode.SCHEMA_ATTRIBUTE_FLAG_INVALID,
@@ -504,6 +505,48 @@ class _Checker:
                 f"unknown Source {attribute.authority}",
                 refs=refs,
             )
+
+    def check_resolution(
+        self,
+        attribute: Attribute,
+        path: tuple[PathPart, ...],
+        refs: Refs,
+        *,
+        relation_id: str | None,
+    ) -> None:
+        """`resolvable` and `value_aliases` (design 8.9): Kind Attributes of a value-indexable
+        type, not sensitive (their values never enter the index); value aliases of an enum name
+        its values."""
+        flagged = [
+            name
+            for name, present in (
+                ("resolvable", attribute.resolvable is True),
+                ("value_aliases", attribute.value_aliases is not None),
+            )
+            if present
+        ]
+        for name in flagged:
+            problem = None
+            if relation_id is not None:
+                problem = "link attributes are not resolved to values"
+            elif not attribute.value_resolvable:
+                problem = f"{attribute.type.describe()} values are not indexed for resolution"
+            elif attribute.sensitivity:
+                problem = "values of sensitive attributes are not indexed for resolution"
+            if problem is not None:
+                self.add(IssueCode.SCHEMA_ATTRIBUTE_FLAG_INVALID, (*path, name), problem, refs=refs)
+        spec = attribute.type.element if attribute.type.element is not None else attribute.type
+        if attribute.value_aliases is None or spec.enum_values is None:
+            return
+        allowed = set(spec.enum_values)
+        for value in attribute.value_aliases:
+            if value not in allowed:
+                self.add(
+                    IssueCode.SCHEMA_ATTRIBUTE_FLAG_INVALID,
+                    (*path, "value_aliases", value),
+                    f"{value!r} is not a value of the enum",
+                    refs=refs,
+                )
 
     def check_sensitive(
         self,

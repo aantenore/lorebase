@@ -7,7 +7,7 @@ from typing import ClassVar, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from lorebase_core.model.attribute import Attribute
+from lorebase_core.model.attribute import Attribute, alias_list, bounded_aliases
 from lorebase_core.model.base import (
     MAX_STEWARD_ROLES,
     ElementStatus,
@@ -77,6 +77,19 @@ class Kind(SchemaElement):
     #: Steward roles of work touching this Kind; they replace the Domain's (design 10.7).
     #: Absent when none.
     stewards: tuple[StewardRole, ...] | None = Field(default=None, max_length=MAX_STEWARD_ROLES)
+    #: Other words for the Kind, for the resolution of words to schema (design 8.9). Absent
+    #: when none.
+    aliases: tuple[str, ...] | None = None
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _clean_aliases(cls, value: object) -> object:
+        return alias_list(value)
+
+    @field_validator("aliases")
+    @classmethod
+    def _bound_aliases(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return bounded_aliases(value)
 
     @field_validator("stewards", mode="before")
     @classmethod
