@@ -659,6 +659,16 @@ store:
     lock_timeout_ms: 2000        # wait for a table lock in `storage apply`, then retry later
   embeddings:
     dims: 384                    # HNSW index dimension; must equal inference.embeddings.dims
+  # Value index of POST /resolve (design 8.9): distinct short values per branch, kept by
+  # triggers on mat_records. Enums and `resolvable: true` Attributes are always held;
+  # sensitive, vault, `resolvable: false` and non-string Attributes never; plain strings
+  # while their distinct values on the default branch stay within the thresholds below.
+  values:
+    enabled: true                # false drops every selection on the next pass
+    max_value_chars: 64          # longer values are left out
+    max_distinct: 1000           # a plain string with more distinct values is not held
+    max_distinct_ratio: 0.2      # ...nor one whose distinct values exceed this share of Records
+    ratio_min_records: 50        # Records a Kind needs before max_distinct_ratio applies
   writes:
     insert_batch_rows: 1000      # rows per multi-row INSERT
     copy_threshold_rows: 5000    # larger batches use COPY into a staging table; 0 disables COPY
@@ -933,6 +943,25 @@ search:
     rrf_k: 60
     lexical_weight: 1.0
     semantic_weight: 1.0
+  # POST /resolve (design 8.9): words of a text to candidate Kinds, Attributes and indexed
+  # values (store.values). Phrases of 1..max_phrase_words words, longest first; levels in
+  # order, a phrase stopping at the first that matches.
+  resolve:
+    results:
+      default_limit: 20
+      max_limit: 100
+    max_text_chars: 500
+    max_words: 40                # words of the text considered
+    max_phrase_words: 3
+    min_word_chars: 2            # shorter words are never matched alone
+    trigram_min_chars: 3         # shortest phrase matched by similarity
+    trigram_threshold: 0.45      # least trigram similarity of a similar match
+    per_phrase: 5                # similar values kept per phrase
+    exact_values: 200            # exact value matches read per request
+    plural_rules: [["s", ""], ["es", ""]]   # (plural, singular) suffixes folded both ways
+    embedding_records: 10        # nearest Records read by the embedding level
+    levels: {exact: true, synonym: true, trigram: true, embedding: true}
+    scores: {exact: 1.0, synonym: 0.95, trigram: 0.85, embedding: 0.7, description: 0.6}
 
 # Agent-facing reads (docs/agents.md). Context packs are also bounded by read.traverse;
 # nothing here calls a model.
@@ -1160,6 +1189,7 @@ scribe:
     gc_dry_run: false
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     embeddings_interval_s: 60.0  # embedding pass of every Domain; 0 disables
+    value_index_interval_s: 300.0  # value index pass of every Domain (store.values); 0 disables
     audit_verify_interval_s: 86400.0   # verification of every audit hash chain; 0 disables
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
