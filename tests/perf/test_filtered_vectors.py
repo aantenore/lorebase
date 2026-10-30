@@ -13,7 +13,8 @@ rows of that Kind, by a sequential scan with the index scans off.
 Asserted: the plan reads the HNSW index; with iterative scans the list keeps its limit and
 matches the exact neighbours (recall@k) within a latency budget; the over-fetch path
 fills the list for a one-Kind filter, which restricts the vectors before its limit. The
-measurements are written to `build/perf/filtered-vectors.md` (override with `LOREBASE_PERF_FILTERED_VECTORS_OUT`).
+measurements are written to `build/perf/filtered-vectors.md` (override with
+`LOREBASE_PERF_FILTERED_VECTORS_OUT`).
 """
 
 from __future__ import annotations
