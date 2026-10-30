@@ -1406,42 +1406,53 @@ Recommended Postgres settings (compose `.env.example`, Helm `ci/storage-<profile
 ## Resolution
 
 `POST /resolve` ([design 8.9](design.md#89-resolution-words-to-schema-and-values)) and the
-upkeep of its value index, measured by `tests/perf/resolve_bench.py` on 2026-10-30.
+upkeep of its value index, measured by `tests/perf/resolve_bench.py` on 2026-10-30 (second run,
+after the per-Domain fence replaced the `SHARE` lock on `mat_records`).
 
 - 100,000 Products of a retail-like Domain (category 20 values, color 12, brand 200, a size
   enum, a two-element tags array, unique names, prices), loaded through the commit pipeline in
-  20 commits (33 s). The selection pass held 5 Attributes (category, color, brand, size, tags;
-  names and SKUs fall out by `store.values.max_distinct_ratio`), 243 value rows; its backfill of
-  every Record took 2.47 s under the `SHARE` lock on `mat_records`.
+  20 commits (29 s). The selection pass held 5 Attributes (category, color, brand, size, tags;
+  names and SKUs fall out by `store.values.max_distinct_ratio`), 243 value rows; its backfill
+  (one scan of the Kind for the five) took 1.50 s, a `--rebuild` 1.55 s.
 - Resolution: the Keeper application in process (ASGI, no socket), a role subject to row-level
   security, definer functions on, response cache and rate limits off; 500 timed calls per set
   after 50 warm-up calls, random texts of 3 to 5 words. `levels 1-2`: texts whose words are
   names, values and aliases, with only the exact and synonym levels; `level 3`: misspelled
   texts with only the trigram level; `all levels`: both sets, every level.
-- Upkeep: commits updating the color of 500 Products, 10 with color held in the index and 10
-  with the index switched off (`store.values.enabled: false`: the triggers probe an empty
-  selection), in two alternating rounds.
+- Upkeep: commits as the role under row-level security in three states, each twice in
+  alternation: the Domain's Attributes held; none held (`store.values.enabled: false`) while
+  another Domain holds 100,000 selection rows; and the value triggers disabled. Per state, 10
+  commits updating the color of 500 Products (500 statements) and 10 one-Record commits.
+- Fence: a 50-Record commit to a third Domain alone, and again while a `--rebuild` of the
+  measured Domain holds that Domain's value lock.
 - Apple M5 Pro, Darwin 25.6.0 arm64, Python 3.12.13, Postgres 16.15 in Docker (testcontainers
   defaults).
 
 | Resolution | Target p95 | p50 ms | p95 ms | p99 ms |
 |------------|-----------:|-------:|-------:|-------:|
-| levels 1-2 (exact, synonym) | 20.00 | 7.13 | 11.48 | 15.56 |
-| level 3 (trigram) | | 7.87 | 13.65 | 24.73 |
-| all levels, mixed text | | 9.22 | 14.17 | 22.47 |
+| levels 1-2 (exact, synonym) | 20.00 | 7.83 | 11.18 | 14.78 |
+| level 3 (trigram) | | 8.46 | 10.90 | 13.24 |
+| all levels, mixed text | | 8.26 | 13.66 | 24.41 |
 
-| Commit of 500 color updates | p50 ms | p95 ms |
-|-----------------------------|-------:|-------:|
-| value index on | 683.8 | 1052.0 |
-| value index off | 638.6 | 685.8 |
+| Commit (application role) | 500 updates p50 ms | p95 ms | 1 Record p50 ms | p95 ms |
+|---------------------------|-------------------:|-------:|----------------:|-------:|
+| Attributes held | 687.6 | 831.2 | 45.89 | 60.11 |
+| none held | 585.7 | 661.5 | 42.95 | 62.27 |
+| value triggers off | 541.6 | 632.3 | 39.69 | 48.22 |
+
+Fence: the commit to the third Domain took 65 ms alone and 64 ms during the rebuild (1.60 s):
+other Domains do not wait. (That a writer of the fenced Domain waits is checked by the store
+tests, `test_the_fence_waits_for_writers_and_spares_other_domains`.)
 
 The times are end to end through FastAPI and include the read transaction, the scope round
 trip and the response; the lookups themselves are a btree probe per phrase form (levels 1-2)
 and one call of `lb_values_similar` (level 3) on a table of a few hundred rows, so they do not
-grow with the Records of the Domain, only with its distinct values. The triggers add about
-45 ms to a commit of 500 updated Records (about 90 µs per Record, 7%); commits that change no
-held Attribute skip the rows (`values` unchanged). The p95 of the "on" commits includes the
-first commits after each switch, which also pay for planning. Run it with
+grow with the Records of the Domain, only with its distinct values. Where nothing is held, the
+triggers cost about 90 µs per statement (fence and probe: 44 ms over 500 statements); where
+values change, about 0.3 ms per updated Record (146 ms over 500, 27%). A row counts only for
+held Attributes whose value changed, so updates of other Attributes pay the probe only. Before
+the probe read the primary key in order, a plain `EXISTS` cost 2-3 ms per statement here (1.5 s
+over 500) because of the other Domain's 100,000 selection rows. Run it with
 `uv run python tests/perf/resolve_bench.py [--records N] [--out FILE]`.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)

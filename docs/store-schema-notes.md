@@ -211,10 +211,18 @@ as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
   a ref that is gone; spent values go through `ix_mat_values_spent`. `norm` is
   `lb_value_norm(value)` (lower case, NFD with combining marks removed, blanks collapsed), served
   by a btree and a trigram GIN index on `(domain_id, branch, norm)`. The selection is
-  Domain-wide and decided by `lorebase_store.values.sync_selection` (Scribe `value_index`),
-  which backfills a new Attribute under `LOCK TABLE mat_records IN SHARE MODE` so that no write
-  falls between the backfill and the triggers seeing it; `mat_value_cursors` remembers the
-  default branch head and fingerprint of the last pass. `lb_values_similar` is a security
+  Domain-wide and decided by `lorebase_store.values.sync_selection` (Scribe `value_index`).
+  Fence: each trigger call first takes `pg_advisory_xact_lock_shared(lb_values_lock_key(domain))`
+  for the Domains of its statement, then probes one row of the selection's primary key for them
+  (in key order with `LIMIT 1`: a plain `EXISTS` let the cached generic plan scan the selection
+  of a Domain holding most of it, 2-3 ms per statement at 100,000 rows); a Domain without
+  selected Attributes stops there. A pass that changes the selection takes the same key
+  exclusively, so the Domain's writers wait for its backfill and no write falls between the
+  backfill and the triggers seeing the new selection; other Domains are not affected.
+  Backfills use `ON CONFLICT DO UPDATE` after deleting the pair's rows, and reads join
+  `mat_value_attributes`, so rows a race leaves for an Attribute no longer held are never
+  served and the next pass removes them. `mat_value_cursors` remembers the fingerprint and time
+  of the last decision. `lb_values_similar` is a security
   definer read function with the checks and grants of revision 0008 (bounded `p_limit`, at
   most 64 terms, Domain in scope, fixed `search_path`). Row-level security as for the other
   Domain tables; `mat_values` rows go with their ref.

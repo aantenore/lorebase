@@ -7,7 +7,10 @@ question, never aggregates and calls no model; it returns ranked candidates with
 matched and a ready-to-use predicate, and the agent writes the query.
 
 **Phrases.** The text is normalized like the value index (`lorebase_store.values.normalize`:
-lower case, accents stripped, blanks collapsed), split into words, and every run of one to
+lower case, accents stripped, blanks collapsed) and split into words at blanks and at
+`search.resolve.separators`, `edges` stripped from each word (`Tokens`); other punctuation and
+combining marks stay in words, so `C++`, `S/M` or Devanagari words match as written. The whole
+normalized text is tried first (levels 1-2), then every run of one to
 `search.resolve.max_phrase_words` words is a phrase. Longer phrases are tried first; the words
 of a phrase that matched are not tried again in shorter ones. Each word is also tried with the
 `plural_rules` suffixes folded both ways (shoes/shoe), so the folding is configured, not built

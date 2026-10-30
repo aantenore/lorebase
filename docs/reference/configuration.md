@@ -795,6 +795,11 @@ Value index of POST /resolve (design 8.9): distinct short values per branch, kep
 | `store.values.max_distinct` | `1000` | a plain string with more distinct values is not held |
 | `store.values.max_distinct_ratio` | `0.2` | ...nor one whose distinct values exceed this share of Records |
 | `store.values.ratio_min_records` | `50` | Records a Kind needs before max_distinct_ratio applies |
+| `store.values.hysteresis` | `1.2` | a held plain string is dropped only past this factor |
+| `store.values.hard_max_distinct` | `10000` | values of one Attribute any branch may hold, enums included |
+| `store.values.stats_interval_s` | `3600.0` | distinct values counted again this often (schema change: at once) |
+| `store.values.max_added_per_pass` | `20` | Attributes one pass adds; the rest go to the next pass |
+| `store.values.pass_statement_timeout_ms` | `120000` | bounds how long the Domain's writers wait for a pass |
 
 ### `store.writes`
 
@@ -1229,7 +1234,9 @@ POST /resolve (design 8.9): words of a text to candidate Kinds, Attributes and i
 | `search.resolve.trigram_min_chars` | `3` | shortest phrase matched by similarity |
 | `search.resolve.trigram_threshold` | `0.45` | least trigram similarity of a similar match |
 | `search.resolve.per_phrase` | `5` | similar values kept per phrase |
-| `search.resolve.exact_values` | `200` | exact value matches read per request |
+| `search.resolve.exact_per_phrase` | `20` | exact value matches read per phrase form |
+| `search.resolve.separators` | `",;:!?()[]{}\""  # split words besides blanks; others stay in words (C++, S/M)` |  |
+| `search.resolve.edges` | `".'"` | stripped from both ends of each word |
 | `search.resolve.plural_rules` | `[["s", ""], ["es", ""]]` | (plural, singular) suffixes folded both ways |
 | `search.resolve.embedding_records` | `10` | nearest Records read by the embedding level |
 | `search.resolve.levels` | `{exact: true, synonym: true, trigram: true, embedding: true}` |  |
