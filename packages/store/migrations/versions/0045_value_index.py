@@ -23,7 +23,8 @@ the distinct values instead, the way revision 0018 keeps the search lexicon.
   lexicon's plan choice for small and large statements. A row is counted per selected
   Attribute whose value changed (an UPDATE that keeps it, or touches other Attributes, adds
   nothing); rows of a branch whose ref is gone (a cascade) leave nothing; spent values (count 0)
-  are deleted through a small partial index.
+  are deleted through a small partial index. `ix_mat_values_attribute` on `(domain_id, kind_id,
+  attribute_id)` serves dropping an Attribute's values on every branch.
 - Fence: each statement first takes the transaction advisory lock of its Domains in shared
   mode (`lb_values_lock_key`), then probes the selection of those Domains (one row of the
   primary key, in its order): a Domain without selected Attributes stops there. A
@@ -33,8 +34,9 @@ the distinct values instead, the way revision 0018 keeps the search lexicon.
   (a writer that wrote before the pass took the lock is waited for; one that writes after it
   reads the new selection). Every writer of `mat_records` goes through the triggers, so no
   writer path needs a lock of its own.
-- `lb_values_similar(domain, branch, kinds, terms, threshold, limit)`: for each term, the
-  `limit` values of selected Attributes of those Kinds (`NULL`: every Kind) on the branch (and
+- `lb_values_similar(domain, branch, kinds, attributes, terms, threshold, limit)`: for each
+  term, the `limit` values of selected Attributes, of the `(kinds[i], attributes[i])` pairs when
+  `attributes` is given, else of the Kinds `kinds` (`NULL`: every Kind), on the branch (and
   its base, for an overlay) whose `norm` is at least `threshold` similar to
   `lb_value_norm(term)`, best first.
   Security definer with the options, checks and grants of revisions 0008 and 0018: trigram
@@ -269,8 +271,8 @@ TRIGGERS = (
 
 LB_VALUES_SIMILAR = """
 CREATE FUNCTION lb_values_similar(
-    p_domain text, p_branch text, p_kinds text[], p_terms text[], p_threshold real,
-    p_limit integer)
+    p_domain text, p_branch text, p_kinds text[], p_attributes text[], p_terms text[],
+    p_threshold real, p_limit integer)
 RETURNS TABLE (term text, kind_id text, attribute_id text, value text, records bigint,
                similarity real)
 {options}
@@ -294,7 +296,15 @@ BEGIN
     PERFORM set_config('pg_trgm.similarity_threshold', p_threshold::text, true);
     SELECT r.base_branch INTO v_base FROM refs r
     WHERE r.domain_id = p_domain AND r.name = p_branch AND r.materialization = 'overlay';
-    IF p_kinds IS NOT NULL THEN
+    IF cardinality(p_attributes) IS DISTINCT FROM cardinality(p_kinds)
+       AND p_attributes IS NOT NULL THEN
+        RAISE EXCEPTION 'p_kinds and p_attributes must have the same length'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_attributes IS NOT NULL THEN
+        -- Pairs (Kind, Attribute): only the Attributes the caller may read values of.
+        v_kinds := ' AND (v.kind_id, v.attribute_id) IN (SELECT * FROM unnest($3, $5))';
+    ELSIF p_kinds IS NOT NULL THEN
         v_kinds := ' AND v.kind_id = ANY ($3)';
     END IF;
     -- Domain and branch are literals: index conditions of the trigram index.
@@ -320,7 +330,7 @@ BEGIN
             'CAST(sum(c.records) AS bigint), CAST(max(similarity(c.norm, $1)) AS real) '
             'FROM (' || v_lookup || ') AS c GROUP BY c.kind_id, c.attribute_id, c.value '
             'ORDER BY 6 DESC, 5 DESC, c.value LIMIT $2'
-        USING v_norm, p_limit, p_kinds, v_term;
+        USING v_norm, p_limit, p_kinds, v_term, p_attributes;
     END LOOP;
 END
 $fn$
@@ -328,7 +338,7 @@ $fn$
 
 MAX_TERMS = 64
 """Terms one call of `lb_values_similar` compares (`lorebase_store.values.MAX_TERMS`)."""
-SIMILAR = "lb_values_similar(text, text, text[], text[], real, integer)"
+SIMILAR = "lb_values_similar(text, text, text[], text[], text[], real, integer)"
 HELPERS = ("lb_value_norm(text)", "lb_value_strings(jsonb, integer)", "lb_values_lock_key(text)")
 
 
@@ -398,6 +408,9 @@ def _tables() -> None:
         ["domain_id", "branch", "norm"],
         postgresql_using="gin",
         postgresql_ops={"norm": "gin_trgm_ops"},
+    )
+    op.create_index(
+        "ix_mat_values_attribute", "mat_values", ["domain_id", "kind_id", "attribute_id"]
     )
     op.create_index(
         "ix_mat_values_spent",

@@ -19,9 +19,12 @@ limit) drops it, so a branch with many distinct values cannot grow the table wit
 **Fence.** A pass that changes anything takes the Domain's value lock exclusively
 (`lb_values_lock_key`, a transaction advisory lock) before it deletes or writes a row; every
 statement writing `mat_records` takes it shared in the triggers before reading the selection.
-Writers of that Domain wait while the pass runs (bounded by `pass_statement_timeout_ms`), other
-Domains never do. Under the lock, an added Attribute's values are deleted and recounted with one
-scan of its Kind's rows (all Attributes added for the Kind together, at most
+Writers of that Domain wait while the pass holds it (at most `pass_timeout_ms`, a budget for the
+whole locked part: each statement gets what is left, Kinds not reached are left to the next
+pass), other Domains never do. A pass decides without the lock and takes it only when the
+decision changes something (or rows of Attributes no longer held are left), reading the schema
+and the selection again under it. Under the lock, an added Attribute's values are deleted and
+recounted with one scan of its Kind's rows (all Attributes added for the Kind together, at most
 `max_added_per_pass` per pass; the rest are left to the next one), dropped Attributes lose their
 rows, and rows of Attributes no longer selected are removed.
 
@@ -38,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -179,11 +183,10 @@ _STATS = text(
     "WHERE m.domain_id = :domain AND m.branch = :branch AND m.kind_id = :kind "
     "AND NOT m.deleted LIMIT :cap) AS d)"
 )
-_TIMEOUTS = text(
-    "SELECT set_config('lock_timeout', :lock, true), "
-    "set_config('statement_timeout', :statement, true)"
-)
+_LOCK_TIMEOUT = text("SELECT set_config('lock_timeout', :lock, true)")
+_STATEMENT_TIMEOUT = text("SELECT set_config('statement_timeout', :statement, true)")
 _FENCE = text("SELECT pg_advisory_xact_lock(lb_values_lock_key(:domain))")
+_SHARED_FENCE = text("SELECT pg_advisory_xact_lock_shared(lb_values_lock_key(:domain))")
 _ADD = text(
     "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
     "SELECT :domain, :kind, a, :max_chars FROM unnest(CAST(:attributes AS text[])) AS a "
@@ -196,6 +199,11 @@ _DROP = text(
 _DROP_VALUES = text(
     "DELETE FROM mat_values WHERE domain_id = :domain AND kind_id = :kind "
     "AND attribute_id = ANY(CAST(:attributes AS text[]))"
+)
+_HAS_ORPHANS = text(
+    "SELECT EXISTS (SELECT 1 FROM mat_values v WHERE v.domain_id = :domain AND NOT EXISTS ("
+    "SELECT 1 FROM mat_value_attributes s WHERE s.domain_id = v.domain_id "
+    "AND s.kind_id = v.kind_id AND s.attribute_id = v.attribute_id))"
 )
 _ORPHANS = text(
     "DELETE FROM mat_values v WHERE v.domain_id = :domain AND NOT EXISTS ("
@@ -305,8 +313,10 @@ async def sync_selection(
     """Bring the selection of the Domain in line with its default branch (module doc).
 
     `force` decides again even when the fingerprint and interval say the last decision
-    stands. Runs in the caller's transaction, in the Domain's row-level security scope; takes
-    the Domain's value lock when it changes anything, so commit soon after.
+    stands. The decision is made without the Domain's value lock; the lock is taken only when
+    it changes something (or rows of Attributes no longer held are left), and then the schema
+    and the selection are read again under it. Runs in the caller's transaction, in the
+    Domain's row-level security scope; commit soon after.
     """
     values = settings.values
     now = now or datetime.now(UTC)
@@ -315,54 +325,102 @@ async def sync_selection(
     if found is None:
         raise LookupError(f"Domain {domain_id!r} not found")
     branch, head = found[0], None if found[1] is None else bytes(found[1])
-    marker = fingerprint(await branch_schema_hash(session, domain_id, branch), values)
-    schema = await branch_schema(session, domain_id, branch)
+    schema_hash = await branch_schema_hash(session, domain_id, branch)
+    marker = fingerprint(schema_hash, values)
     cursor = (await session.execute(_CURSOR, {"domain": domain_id})).one_or_none()
     current = await selection(session, domain_id)
+    fresh = (
+        not force
+        and cursor is not None
+        and cursor[0] == marker
+        and now - cursor[1] < timedelta(seconds=values.stats_interval_s)
+    )
+    schema = await branch_schema(session, domain_id, branch)
+    wanted = await _decide(session, domain_id, branch, schema, values, current, fresh=fresh)
+    if fresh and wanted == set(current):
+        report.skipped = True
+        report.selected = sorted(current)
+        return report
+    if not any(_changes(current, wanted, values.max_value_chars)) and not await _orphaned(
+        session, domain_id
+    ):
+        report.selected = sorted(current)
+        await _save_cursor(session, domain_id, head, marker, now)
+        return report
+    # The budget starts with the lock: it bounds how long the Domain's writers wait.
+    deadline = time.monotonic() + values.pass_timeout_ms / 1000
+    await _fence(session, domain_id, settings, deadline)
+    # Read again under the lock: a schema commit or another pass may have moved them.
+    moved = await branch_schema_hash(session, domain_id, branch)
+    if moved != schema_hash:
+        marker = fingerprint(moved, values)
+        schema = await branch_schema(session, domain_id, branch)
+        current = await selection(session, domain_id)
+        wanted = await _decide(session, domain_id, branch, schema, values, current, fresh=False)
+    else:
+        current = await selection(session, domain_id)
+    removed, todo = _changes(current, wanted, values.max_value_chars)
+    await _within(session, deadline)
+    await _drop(session, domain_id, removed)
+    report.removed = removed
+    added = todo[: values.max_added_per_pass]
+    report.pending = todo[values.max_added_per_pass :]
+    report.added, rest, report.backfilled = await _backfill(
+        session, domain_id, added, values.max_value_chars, deadline
+    )
+    report.pending = [*rest, *report.pending]
+    await _within(session, deadline)
+    report.orphans = max((await session.execute(_ORPHANS, {"domain": domain_id})).rowcount, 0)  # type: ignore[attr-defined]
+    report.selected = sorted(wanted - set(report.pending))
+    if not report.pending:
+        await _save_cursor(session, domain_id, head, marker, now)
+    return report
+
+
+async def _decide(
+    session: AsyncSession,
+    domain_id: str,
+    branch: str,
+    schema: Schema | None,
+    values: ValueIndexSettings,
+    current: Mapping[Pair, int],
+    *,
+    fresh: bool,
+) -> set[Pair]:
+    """The wanted selection: counted again unless `fresh` (then the current one), less the
+    Attributes some branch holds too many values of."""
     sizes = {
         (kind, attribute): int(n)
         for kind, attribute, n in (await session.execute(_SIZES, {"domain": domain_id})).all()
     }
     oversized = _oversized(sizes, schema, values)
-    fresh = (
-        cursor is not None
-        and cursor[0] == marker
-        and now - cursor[1] < timedelta(seconds=values.stats_interval_s)
-    )
-    if not force and fresh and not oversized:
-        report.skipped = True
-        report.selected = sorted(current)
-        return report
-    if fresh and not force:
-        wanted = set(current) - oversized
-    else:
-        wanted = (
-            set()
-            if schema is None
-            else await wanted_selection(session, domain_id, branch, schema, values, current)
-        )
-        wanted -= oversized
-    await _fence(session, domain_id, settings)
-    # Read again under the lock: another pass may have changed it while this one counted.
-    current = await selection(session, domain_id)
-    chars = values.max_value_chars
-    removed = sorted(pair for pair, held in current.items() if pair not in wanted)
+    if fresh:
+        return set(current) - oversized
+    if schema is None:
+        return set()
+    wanted = await wanted_selection(session, domain_id, branch, schema, values, current)
+    return wanted - oversized
+
+
+def _changes(
+    current: Mapping[Pair, int], wanted: set[Pair], chars: int
+) -> tuple[list[Pair], list[Pair]]:
+    """(pairs to drop, pairs to count: those whose max_chars changed, then the new ones)."""
+    removed = sorted(pair for pair in current if pair not in wanted)
     changed = sorted(pair for pair, held in current.items() if pair in wanted and held != chars)
-    missing = sorted(wanted - set(current))
-    added = [*changed, *missing][: values.max_added_per_pass]
-    report.pending = [*changed, *missing][values.max_added_per_pass :]
-    await _drop(session, domain_id, removed)
-    report.removed = removed
-    report.backfilled = await _backfill(session, domain_id, added, chars)
-    report.added = added
-    report.orphans = max((await session.execute(_ORPHANS, {"domain": domain_id})).rowcount, 0)  # type: ignore[attr-defined]
-    report.selected = sorted(wanted - set(report.pending))
-    if not report.pending:
-        await session.execute(
-            _SAVE_CURSOR,
-            {"domain": domain_id, "head": head or b"", "fingerprint": marker, "at": now},
-        )
-    return report
+    return removed, [*changed, *sorted(wanted - set(current))]
+
+
+async def _orphaned(session: AsyncSession, domain_id: str) -> bool:
+    return bool(await session.scalar(_HAS_ORPHANS, {"domain": domain_id}))
+
+
+async def _save_cursor(
+    session: AsyncSession, domain_id: str, head: bytes | None, marker: str, now: datetime
+) -> None:
+    await session.execute(
+        _SAVE_CURSOR, {"domain": domain_id, "head": head or b"", "fingerprint": marker, "at": now}
+    )
 
 
 def _by_kind(pairs: Sequence[Pair]) -> dict[str, list[str]]:
@@ -372,16 +430,29 @@ def _by_kind(pairs: Sequence[Pair]) -> dict[str, list[str]]:
     return grouped
 
 
-async def _fence(session: AsyncSession, domain_id: str, settings: StoreSettings) -> None:
-    """The pass's timeouts, then the Domain's value lock, exclusive (module doc)."""
-    await session.execute(
-        _TIMEOUTS,
-        {
-            "lock": f"{settings.commit.lock_timeout_ms}ms",
-            "statement": f"{settings.values.pass_statement_timeout_ms}ms",
-        },
-    )
+async def _fence(
+    session: AsyncSession, domain_id: str, settings: StoreSettings, deadline: float
+) -> None:
+    """The Domain's value lock, exclusive, waiting at most `store.commit.lock_timeout_ms`
+    (module doc)."""
+    await session.execute(_LOCK_TIMEOUT, {"lock": f"{settings.commit.lock_timeout_ms}ms"})
+    await _within(session, deadline)
     await session.execute(_FENCE, {"domain": domain_id})
+
+
+class PassBudgetExceededError(Exception):
+    """The pass used `store.values.pass_timeout_ms` before a step it had to take."""
+
+
+async def _within(session: AsyncSession, deadline: float) -> float:
+    """The time left before `deadline`, in seconds, set as the statement timeout of what
+    follows: writers of the Domain wait at most the whole pass budget, not a budget per
+    statement. Raises when nothing is left."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise PassBudgetExceededError("the value index pass used its time budget")
+    await session.execute(_STATEMENT_TIMEOUT, {"statement": f"{max(int(left * 1000), 1)}ms"})
+    return left
 
 
 async def _drop(session: AsyncSession, domain_id: str, pairs: Sequence[Pair]) -> None:
@@ -392,12 +463,25 @@ async def _drop(session: AsyncSession, domain_id: str, pairs: Sequence[Pair]) ->
 
 
 async def _backfill(
-    session: AsyncSession, domain_id: str, pairs: Sequence[Pair], chars: int
-) -> int:
+    session: AsyncSession,
+    domain_id: str,
+    pairs: Sequence[Pair],
+    chars: int,
+    deadline: float | None = None,
+) -> tuple[list[Pair], list[Pair], int]:
     """Select `pairs` and count their values on every branch: one scan per Kind. The caller
-    holds the fence."""
+    holds the fence. With `deadline`, Kinds are counted while budget is left; returns (pairs
+    done, pairs left, rows written). A scan that outlives the budget fails the pass (rolled
+    back, retried)."""
     written = 0
-    for kind, attributes in sorted(_by_kind(pairs).items()):
+    done: list[Pair] = []
+    grouped = sorted(_by_kind(pairs).items())
+    for index, (kind, attributes) in enumerate(grouped):
+        if deadline is not None and deadline - time.monotonic() <= 0:
+            left = [(k, a) for k, names in grouped[index:] for a in sorted(names)]
+            return done, left, written
+        if deadline is not None:
+            await _within(session, deadline)
         params: dict[str, Any] = {
             "domain": domain_id,
             "kind": kind,
@@ -408,7 +492,8 @@ async def _backfill(
         await session.execute(_ADD, params)
         result = await session.execute(_BACKFILL, params)
         written += max(result.rowcount or 0, 0)  # type: ignore[attr-defined]
-    return written
+        done += [(kind, a) for a in sorted(attributes)]
+    return done, [], written
 
 
 async def drop_ineligible(
@@ -418,10 +503,13 @@ async def drop_ineligible(
     is the default branch, drop at once the Attributes `schema` no longer lets the index hold
     (sensitive, vault, retyped, derived, `resolvable: false`, or gone) with their values, and
     queue a `value_index` pass for the rest (additions, thresholds, stragglers a concurrent
-    writer counted). Deletes only by key, so it adds no scan to the commit."""
+    writer counted). Takes the Domain's value lock shared first, like the triggers, so it waits
+    for a running pass and a later pass sees this schema; the deletes use the selection's key
+    and `ix_mat_values_attribute`."""
     found = (await session.execute(_DEFAULT_HEAD, {"domain": domain_id})).one_or_none()
     if found is None or found[0] != branch:
         return []
+    await session.execute(_SHARED_FENCE, {"domain": domain_id})
     held = await selection(session, domain_id)
     gone: list[Pair] = []
     for kind_id, attribute_id in sorted(held):
@@ -430,8 +518,13 @@ async def drop_ineligible(
         if attribute is None or eligible(attribute) is False:
             gone.append((kind_id, attribute_id))
     await _drop(session, domain_id, gone)
+    # Not deduplicated against a running pass: it decided on the schema before this one.
     await enqueue_job(
-        session, VALUE_INDEX_JOB, domain_id=domain_id, payload=value_index_payload(), unique=True
+        session,
+        VALUE_INDEX_JOB,
+        domain_id=domain_id,
+        payload=value_index_payload(),
+        unique_queued=True,
     )
     return gone
 
@@ -440,10 +533,12 @@ async def rebuild(
     session: AsyncSession, domain_id: str, *, settings: StoreSettings, now: datetime | None = None
 ) -> SelectionReport:
     """Decide the selection again and recount every value of the Domain from its rows: the
-    repair path for an index that drifted (or predates its selection)."""
+    repair path for an index that drifted (or predates its selection). The recount has a
+    `pass_timeout_ms` budget of its own after the selection pass."""
     report = await sync_selection(session, domain_id, settings=settings, force=True, now=now)
+    deadline = time.monotonic() + settings.values.pass_timeout_ms / 1000
+    await _fence(session, domain_id, settings, deadline)
     held = await selection(session, domain_id)
-    await _fence(session, domain_id, settings)
     for kind, attributes in sorted(_by_kind(sorted(held)).items()):
         await session.execute(
             _DROP_VALUES, {"domain": domain_id, "kind": kind, "attributes": attributes}
@@ -453,7 +548,7 @@ async def rebuild(
     for pair, chars in held.items():
         by_chars[chars].append(pair)
     for chars, pairs in sorted(by_chars.items()):
-        report.backfilled += await _backfill(session, domain_id, sorted(pairs), chars)
+        report.backfilled += (await _backfill(session, domain_id, sorted(pairs), chars))[2]
     return report
 
 
@@ -496,6 +591,11 @@ _SELECTED = (
     "AND s.attribute_id = v.attribute_id "
 )
 """Reads see values of selected Attributes only, whatever rows a race left behind."""
+_PAIRS = (
+    "(CAST(:pair_kinds AS text[]) IS NULL OR (v.kind_id, v.attribute_id) IN ("
+    "SELECT * FROM unnest(CAST(:pair_kinds AS text[]), CAST(:pair_attributes AS text[])))) "
+)
+"""Only the (Kind, Attribute) pairs the caller may read values of, before any limit."""
 _EXACT = text(
     "WITH t AS MATERIALIZED (SELECT DISTINCT x.term, lb_value_norm(x.term) AS norm "
     "FROM unnest(CAST(:terms AS text[])) AS x(term)) "
@@ -505,13 +605,15 @@ _EXACT = text(
     "FROM t JOIN mat_values v ON v.domain_id = :domain "
     "AND v.branch = ANY(CAST(:branches AS text[])) AND v.norm = t.norm AND v.records > 0 "
     + _SELECTED
-    + "WHERE (CAST(:kinds AS text[]) IS NULL OR v.kind_id = ANY(CAST(:kinds AS text[]))) "
-    "GROUP BY t.term, v.kind_id, v.attribute_id, v.value) AS h WHERE h.n <= :per_term "
+    + "WHERE "
+    + _PAIRS
+    + "GROUP BY t.term, v.kind_id, v.attribute_id, v.value) AS h WHERE h.n <= :per_term "
     "ORDER BY h.term, h.records DESC, h.value"
 )
 _SIMILAR_DEFINER = text(
     "SELECT term, kind_id, attribute_id, value, records, similarity FROM lb_values_similar("
-    ":domain, :branch, CAST(:kinds AS text[]), CAST(:terms AS text[]), "
+    ":domain, :branch, CAST(:pair_kinds AS text[]), CAST(:pair_attributes AS text[]), "
+    "CAST(:terms AS text[]), "
     "CAST(:threshold AS real), CAST(:limit AS integer))"
 )
 _SIMILARITY_THRESHOLD = text(
@@ -524,10 +626,16 @@ _SIMILAR_SQL = text(
     "FROM mat_values v "
     + _SELECTED
     + "WHERE v.domain_id = :domain AND v.branch = ANY(CAST(:branches AS text[])) "
-    "AND v.records > 0 AND v.norm % lb_value_norm(:term) "
-    "AND (CAST(:kinds AS text[]) IS NULL OR v.kind_id = ANY(CAST(:kinds AS text[]))) "
-    "GROUP BY v.kind_id, v.attribute_id, v.value ORDER BY 6 DESC, 5 DESC, v.value LIMIT :limit"
+    "AND v.records > 0 AND v.norm % lb_value_norm(:term) AND "
+    + _PAIRS
+    + "GROUP BY v.kind_id, v.attribute_id, v.value ORDER BY 6 DESC, 5 DESC, v.value LIMIT :limit"
 )
+
+
+def _pair_params(pairs: Sequence[Pair] | None) -> dict[str, list[str] | None]:
+    if pairs is None:
+        return {"pair_kinds": None, "pair_attributes": None}
+    return {"pair_kinds": [k for k, _ in pairs], "pair_attributes": [a for _, a in pairs]}
 
 
 def _hits(rows: Sequence[Any]) -> list[ValueHit]:
@@ -544,18 +652,18 @@ async def exact_values(
     layout: BranchLayout,
     terms: Sequence[str],
     *,
-    kind_ids: Sequence[str] | None = None,
+    pairs: Sequence[Pair] | None = None,
     per_term: int,
 ) -> list[ValueHit]:
-    """Values whose compared form equals that of a term, at most `per_term` per term (most
-    held first)."""
+    """Values whose compared form equals that of a term, of the `(kind, attribute)` `pairs`
+    (`None`: every one), at most `per_term` per term (most held first)."""
     if not terms:
         return []
     params = {
         "domain": layout.domain_id,
         "branches": _branches(layout),
         "terms": list(terms),
-        "kinds": None if kind_ids is None else list(kind_ids),
+        **_pair_params(pairs),
         "per_term": per_term,
     }
     return _hits((await session.execute(_EXACT, params)).all())
@@ -568,13 +676,14 @@ async def similar_values(
     *,
     threshold: float,
     per_term: int,
-    kind_ids: Sequence[str] | None = None,
+    pairs: Sequence[Pair] | None = None,
     runtime: StoreRuntime | None = None,
 ) -> list[ValueHit]:
-    """For each term, its `per_term` most similar values (trigram similarity of the compared
-    forms, at least `threshold`), best first."""
+    """For each term, its `per_term` most similar values of the `(kind, attribute)` `pairs`
+    (`None`: every one; trigram similarity of the compared forms, at least `threshold`), best
+    first."""
     settings = (runtime or default_runtime()).settings
-    kinds = None if kind_ids is None else list(kind_ids)
+    restriction = _pair_params(pairs)
     found: list[ValueHit] = []
     if settings.reads.use_definer_functions:
         per_term = min(per_term, settings.reads.definer_ceilings.limit)
@@ -583,7 +692,7 @@ async def similar_values(
             params = {
                 "domain": layout.domain_id,
                 "branch": layout.branch,
-                "kinds": kinds,
+                **restriction,
                 "terms": list(terms[start : start + MAX_TERMS]),
                 "threshold": threshold,
                 "limit": per_term,
@@ -597,7 +706,7 @@ async def similar_values(
         params = {
             "domain": layout.domain_id,
             "branches": _branches(layout),
-            "kinds": kinds,
+            **restriction,
             "term": term,
             "limit": per_term,
         }

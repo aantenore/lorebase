@@ -207,6 +207,7 @@ class MatValue(Base):
             postgresql_using="gin",
             postgresql_ops={"norm": "gin_trgm_ops"},
         ),
+        Index("ix_mat_values_attribute", "domain_id", "kind_id", "attribute_id"),
         Index("ix_mat_values_spent", "domain_id", "branch", postgresql_where=text("records <= 0")),
     )
 

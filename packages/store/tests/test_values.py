@@ -4,6 +4,7 @@ commits and overlays, lookups and rebuild."""
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -499,3 +500,83 @@ async def test_reads_ignore_values_of_attributes_no_longer_held(
     report = await sync(sessions, runtime.settings, force=True)
     assert report.orphans == 1
     await agree(sessions)
+
+
+def sensitive_color() -> Kind:
+    kind = product_kind()
+    color = kind.attributes[COLOR].model_copy(update={"sensitivity": (Sensitivity.CONFIDENTIAL,)})
+    return kind.model_copy(update={"attributes": {**kind.attributes, COLOR: color}})
+
+
+async def test_a_schema_change_landing_before_the_fence_is_read_again(
+    sessions: Sessions, runtime: StoreRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    # A value_index job is running: the one the schema commit queues must not merge into it.
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO jobs (type, domain_id, payload, status) "
+                "VALUES ('value_index', :d, '{}', 'running')"
+            ),
+            {"d": DOMAIN},
+        )
+    fence = values._fence
+
+    async def schema_commit_first(*args: Any, **kwargs: Any) -> None:
+        # The pass decided on the old schema (color held); this commit lands before the lock.
+        await run(sessions, runtime, clock, [], schema_changes=[SchemaUpsert(sensitive_color())])
+        await fence(*args, **kwargs)
+
+    monkeypatch.setattr(values, "_fence", schema_commit_first)
+    report = await sync(sessions, runtime.settings)
+    assert (PRODUCT, COLOR) not in report.selected
+    assert (PRODUCT, COLOR) not in report.added
+    async with sessions() as session:
+        held_pairs = await values.selection(session, DOMAIN)
+        left = await session.scalar(
+            text("SELECT count(*) FROM mat_values WHERE domain_id = :d AND attribute_id = :a"),
+            {"d": DOMAIN, "a": COLOR},
+        )
+        queued = await session.scalar(
+            text(
+                "SELECT count(*) FROM jobs WHERE type = 'value_index' AND domain_id = :d "
+                "AND status = 'queued'"
+            ),
+            {"d": DOMAIN},
+        )
+    assert (PRODUCT, COLOR) not in held_pairs
+    assert left == 0
+    assert queued == 1
+    await agree(sessions)
+
+
+async def test_a_pass_that_changes_nothing_takes_no_lock(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    await sync(sessions, runtime.settings)
+    async with sessions() as writer:
+        await writer.begin()
+        # A writer of the Domain holds the shared fence for its whole transaction.
+        await writer.execute(
+            text("SELECT pg_advisory_xact_lock_shared(lb_values_lock_key(:d))"), {"d": DOMAIN}
+        )
+        report = await asyncio.wait_for(sync(sessions, runtime.settings, force=True), 10)
+        await writer.rollback()
+    assert not report.skipped
+    assert report.added == []
+    assert report.removed == []
+
+
+async def test_the_backfill_stops_at_the_budget(sessions: Sessions, runtime: StoreRuntime) -> None:
+    clock = Clock()
+    await seeded(sessions, runtime, clock)
+    async with sessions() as session, session.begin():
+        done, left, written = await values._backfill(
+            session, DOMAIN, [(PRODUCT, COLOR), (PRODUCT, SIZE)], 64, time.monotonic() - 1
+        )
+    assert (done, written) == ([], 0)
+    assert left == [(PRODUCT, COLOR), (PRODUCT, SIZE)]

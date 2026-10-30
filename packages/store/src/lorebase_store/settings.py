@@ -216,11 +216,12 @@ class ValueIndexSettings(SectionModel):
         description="Attributes one pass adds (one scan of its Kind's rows per Kind, while "
         "the Domain's writers wait); the rest go to the next pass, queued at once.",
     )
-    pass_statement_timeout_ms: int = Field(
+    pass_timeout_ms: int = Field(
         default=120_000,
         ge=1,
-        description="statement_timeout of a pass; it bounds how long the Domain's writers wait "
-        "for a backfill.",
+        description="Time budget of a pass from the moment it takes the Domain's value lock: "
+        "the longest the Domain's writers wait for it. Kinds not counted within it are left to "
+        "the next pass, queued at once; one Kind whose scan alone exceeds it fails the pass.",
     )
 
 
