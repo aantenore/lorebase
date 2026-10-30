@@ -2882,7 +2882,7 @@ export interface components {
             sources?: components["schemas"]["SourceFreshness"][];
             /**
              * Unknown
-             * @description Resolution: phrases that matched nothing in this Domain (no Kind, Attribute or indexed value).
+             * @description Resolution: phrases that matched nothing the caller can read in this Domain (no Kind, Attribute or indexed value).
              */
             unknown?: string[];
             /**
