@@ -684,7 +684,9 @@ store:
     min_phrase_chars: 3          # shorter phrases are not recorded
     max_phrase_chars: 64         # longer ones neither (an alias is at most 128 characters)
     ignore_words: []             # filler words never recorded alone, e.g. [how, many, the]
-    max_per_domain: 10000        # phrases kept per Domain; new ones beyond are dropped
+    max_per_domain: 10000        # phrases kept per Domain; a new one evicts the least missed
+                                 # (no more missed than it) or is dropped
+    max_phrases_per_caller: 500  # phrases one caller alone may hold per Domain
     max_callers: 20              # distinct callers counted per phrase (digests, never names)
     prune_batch: 5000            # expired phrases deleted per statement
   # Records and missing values per Kind of the default branch head, behind the coverage block
@@ -693,6 +695,7 @@ store:
     enabled: true
     max_records_per_kind: 1000000  # larger Kinds are counted over a sample (marked approximate)
     statement_timeout_ms: 120000   # per Kind; a Kind that times out keeps its statistics
+    min_interval_s: 300.0        # a Kind counted more recently is not recounted (unseen Records are)
   writes:
     insert_batch_rows: 1000      # rows per multi-row INSERT
     copy_threshold_rows: 5000    # larger batches use COPY into a staging table; 0 disables COPY
@@ -839,7 +842,8 @@ schema:
     max_examples: 3              # evidence examples kept per suggestion
     max_samples: 20              # distinct sample values kept per suggestion
     max_labels: 5                # labels (as written) kept per suggestion
-    max_tracked: 2000            # suggestions kept per Domain; new ones beyond are dropped
+    max_tracked: 2000            # extraction suggestions kept per Domain; new ones beyond are dropped
+    max_vocabulary_tracked: 500  # pending vocabulary suggestions (resolution misses), counted apart
     name_similarity: 0.85        # least similarity of a name to an existing element's
     synonyms: [[supplier, vendor], [contract, agreement], [part, component, item],
                [plant, site, facility], [purchase_order, order], [customer, client],
@@ -920,6 +924,7 @@ read:
   coverage:                      # the coverage block of POST /query and /resolve (design 8.11)
     enabled: true                # default of requests that do not say `coverage`
     note_min_share: 0.01         # least share of Records missing an Attribute for a note
+    max_unseen_age_s: 3600.0     # older counts of Records unseen by Sources: approximate
 
 # Search (design 8.4). Keeper never computes embeddings: semantic and hybrid search take the
 # caller's query_vector. The text search configuration is store.materialize.text_search_config
@@ -995,6 +1000,7 @@ search:
       permission: data.read      # needed Domain-wide for a caller's misses to be kept
       record_below_score: null   # also keep phrases whose best candidate scores below this
       queue_size: 10000          # distinct phrases held in memory between writes
+      max_new_per_caller: 100    # new phrases one caller adds per Domain between writes
       flush_interval_s: 5.0      # longest wait in memory before a batch write
       write_timeout_s: 5.0
 
@@ -1366,9 +1372,9 @@ scribe:
   # changes the schema without an accepted Proposal.
   consolidation:
     min_misses: 3                # misses a phrase needs before it is considered
-    min_callers: 1               # distinct callers it needs (raise it against one agent's habit)
+    min_callers: 2               # distinct callers it needs (1 for a single-agent installation)
     max_phrases: 200             # phrases per pass, the most missed first
-    value_similarity: 0.3        # least trigram similarity to an indexed value (value alias)
+    value_similarity: 0.4        # least trigram similarity to an indexed value (value alias)
     name_similarity: 0.75        # least name similarity to a Kind or Attribute (alias)
     values_per_phrase: 3
     llm:                         # optional description proposals, task schema_consolidation;

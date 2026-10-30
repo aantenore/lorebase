@@ -1465,23 +1465,29 @@ and the pass that counts its statistics, measured by `tests/perf/coverage_bench.
 
 - The 100,000 Products of the resolution benchmark, a tenth of them without a color, loaded
   through the commit pipeline. The statistics pass (`lorebase_store.coverage.run_coverage`,
-  Records and missing values of the eight Attributes) took 255 ms.
+  Records and missing values of the eight Attributes in one REPEATABLE READ pass over the
+  rows in key order) took 440 ms. The Source read by `last_runs` has 600,000 runs (a third
+  failed, the newest a dry run).
 - Overhead: the Keeper application in process, a role subject to row-level security, response
   cache and rate limits off; the same filtered query (color and brand, ordered by price, 20
   Records) with `coverage: true` and `coverage: false`, alternating, 500 timed calls each after
   50 warm-up calls. Lookup: the two statements the block adds (`read_coverage` and
-  `last_runs` for one Source) timed alone in a read-only transaction as that role.
+  `last_runs` for one Source) timed alone in a read-only transaction as that role; and, for
+  contrast, the first shape of the `last_runs` statement (`ORDER BY started_at DESC NULLS
+  LAST`, which the index could not serve).
 
 | Measure | Target p95 | p50 ms | p95 ms | p99 ms |
 |---------|-----------:|-------:|-------:|-------:|
-| query, coverage off | | 31.15 | 49.71 | 62.50 |
-| query, coverage on | | 31.52 | 48.36 | 65.26 |
-| coverage statements | 5.00 | 1.74 | 4.02 | 8.63 |
+| query, coverage off | | 27.80 | 42.21 | 61.82 |
+| query, coverage on | | 28.13 | 41.90 | 67.82 |
+| coverage statements | 5.00 | 1.70 | 3.01 | 4.48 |
+| last run, first statement shape | | 102.83 | 131.44 | 154.38 |
 
-End to end the block adds 0.4 ms at p50; the p95 difference (-1.4 ms) is within the noise of
-the query itself. The statements are a primary key lookup of `mat_coverage` and an index
-probe of `source_runs` per Source, so they do not grow with the Records of the Kind. Run it
-with `uv run python tests/perf/coverage_bench.py [--records N] [--out FILE]`.
+End to end the block adds 0.3 ms at p50; the p95 difference (-0.3 ms) is within the noise of
+the query itself. The statements are a primary key lookup of `mat_coverage` and a probe of
+`ix_source_runs_last_succeeded` per Source, so they grow neither with the Records of the Kind
+nor with the run history; the first shape sorted every run of the Source (103 ms at 600,000). Run it
+with `uv run python tests/perf/coverage_bench.py [--records N] [--runs N] [--out FILE]`.
 
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 

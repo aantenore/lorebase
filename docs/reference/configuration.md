@@ -812,7 +812,8 @@ Phrases POST /resolve matched to nothing (design 8.10), kept for vocabulary sugg
 | `store.resolve_misses.min_phrase_chars` | `3` | shorter phrases are not recorded |
 | `store.resolve_misses.max_phrase_chars` | `64` | longer ones neither (an alias is at most 128 characters) |
 | `store.resolve_misses.ignore_words` | `[]` | filler words never recorded alone, e.g. [how, many, the] |
-| `store.resolve_misses.max_per_domain` | `10000` | phrases kept per Domain; new ones beyond are dropped |
+| `store.resolve_misses.max_per_domain` | `10000` | phrases kept per Domain; a new one evicts the least missed (no more missed than it) or is dropped |
+| `store.resolve_misses.max_phrases_per_caller` | `500` | phrases one caller alone may hold per Domain |
 | `store.resolve_misses.max_callers` | `20` | distinct callers counted per phrase (digests, never names) |
 | `store.resolve_misses.prune_batch` | `5000` | expired phrases deleted per statement |
 
@@ -825,6 +826,7 @@ Records and missing values per Kind of the default branch head, behind the cover
 | `store.coverage.enabled` | `true` |  |
 | `store.coverage.max_records_per_kind` | `1000000` | larger Kinds are counted over a sample (marked approximate) |
 | `store.coverage.statement_timeout_ms` | `120000` | per Kind; a Kind that times out keeps its statistics |
+| `store.coverage.min_interval_s` | `300.0` | a Kind counted more recently is not recounted (unseen Records are) |
 
 ### `store.writes`
 
@@ -1055,7 +1057,8 @@ Schema suggestions from extraction (docs/extraction.md)
 | `schema.suggestions.max_examples` | `3` | evidence examples kept per suggestion |
 | `schema.suggestions.max_samples` | `20` | distinct sample values kept per suggestion |
 | `schema.suggestions.max_labels` | `5` | labels (as written) kept per suggestion |
-| `schema.suggestions.max_tracked` | `2000` | suggestions kept per Domain; new ones beyond are dropped |
+| `schema.suggestions.max_tracked` | `2000` | extraction suggestions kept per Domain; new ones beyond are dropped |
+| `schema.suggestions.max_vocabulary_tracked` | `500` | pending vocabulary suggestions (resolution misses), counted apart |
 | `schema.suggestions.name_similarity` | `0.85` | least similarity of a name to an existing element's |
 | `schema.suggestions.synonyms` | `[[supplier, vendor], [contract, agreement], [part, component, item], [plant, site, facility], [purchase_order, order], [customer, client], [quantity, qty]]` | names meaning the same element (snake_case, singular) |
 | `schema.suggestions.merge_similarity` | `0.6` | least word overlap (Jaccard) for two Attribute suggestions of one Kind with samples of one value type to count as one |
@@ -1190,6 +1193,7 @@ The coverage block of POST /query and /resolve (design 8.11)
 |---------|---------|-------------|
 | `read.coverage.enabled` | `true` | default of requests that do not say `coverage` |
 | `read.coverage.note_min_share` | `0.01` | least share of Records missing an Attribute for a note |
+| `read.coverage.max_unseen_age_s` | `3600.0` | older counts of Records unseen by Sources: approximate |
 
 ## `search`
 
@@ -1285,6 +1289,7 @@ Recording of what matched nothing (store.resolve_misses)
 | `search.resolve.misses.permission` | `data.read` | needed Domain-wide for a caller's misses to be kept |
 | `search.resolve.misses.record_below_score` | `null` | also keep phrases whose best candidate scores below this |
 | `search.resolve.misses.queue_size` | `10000` | distinct phrases held in memory between writes |
+| `search.resolve.misses.max_new_per_caller` | `100` | new phrases one caller adds per Domain between writes |
 | `search.resolve.misses.flush_interval_s` | `5.0` | longest wait in memory before a batch write |
 | `search.resolve.misses.write_timeout_s` | `5.0` |  |
 
@@ -1832,9 +1837,9 @@ Consolidation of resolution misses into vocabulary suggestions (design 8.10), al
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `scribe.consolidation.min_misses` | `3` | misses a phrase needs before it is considered |
-| `scribe.consolidation.min_callers` | `1` | distinct callers it needs (raise it against one agent's habit) |
+| `scribe.consolidation.min_callers` | `2` | distinct callers it needs (1 for a single-agent installation) |
 | `scribe.consolidation.max_phrases` | `200` | phrases per pass, the most missed first |
-| `scribe.consolidation.value_similarity` | `0.3` | least trigram similarity to an indexed value (value alias) |
+| `scribe.consolidation.value_similarity` | `0.4` | least trigram similarity to an indexed value (value alias) |
 | `scribe.consolidation.name_similarity` | `0.75` | least name similarity to a Kind or Attribute (alias) |
 | `scribe.consolidation.values_per_phrase` | `3` |  |
 

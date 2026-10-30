@@ -185,10 +185,14 @@ shows the missed phrases with their misses, distinct callers and the similarity 
 them. They are listed and decided in the same place (web app **Review > Schema suggestions**,
 `lorebase schema suggestions`, `GET .../schema/suggestions`, which needs `document.read`):
 accepting opens a schema change Proposal on a new branch, reviewed and merged like any schema
-change, so the approval rules above apply. Rejected suggestions stay rejected however often
-the phrase is missed again. Suggestions for an Attribute the reviewer may not read values of
-are listed without their phrases and value; Attributes that are sensitive, kept in the vault,
-derived or `resolvable: false` never receive one.
+change, so the approval rules above apply. Rejected suggestions stay rejected while their
+phrases are missed; a vocabulary suggestion whose phrases all expired
+(`store.resolve_misses.retention_days`) is deleted, decided or not, so an expired rejected alias
+can come back if agents ask for it again. Suggestions for a Kind whose Records the reviewer
+may not read, or an Attribute whose values it may not read, are listed `withheld` (without
+alias, phrases and value) and cannot be accepted by that reviewer; Attributes that are
+sensitive, kept in the vault, derived or `resolvable: false` never receive one, and an alias
+that would name two things is refused at acceptance.
 
 ## A worked configuration
 
