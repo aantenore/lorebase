@@ -54,6 +54,7 @@ A reconciliation queue for contradictions between Sources, corrections that surv
 
 ### Fixed
 
+- Web app, Modeler: in live mode, saving the schema dropped the lenses, the `stewards` of the Domain and of Kinds, and any member or section of the document the editor does not model. The editor now carries them through untouched and writes them back as they were.
 - Semantic search without iterative scans (pgvector before 0.8, or `search.semantic.iterative_scan: off`) over-fetched less than configured: an HNSW scan ends after `hnsw.ef_search` rows (40), so `search.candidates * search.semantic.overfetch_factor` nearest rows never came back, and a filter keeping 1% of the Records left about 0.2 results of 20. The read transaction now raises `hnsw.ef_search` to the over-fetch count, up to pgvector's limit of 1000: 7.8 results of 20 on 100,000 vectors, flagged `semantic_truncated` ([performance](docs/performance.md#filtered-semantic-search)).
 
 ### Not done yet

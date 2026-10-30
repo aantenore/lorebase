@@ -197,6 +197,8 @@ export interface Attribute {
   vault?: boolean;
   /** Values carry a validity period on their provenance (reconciliation, design 10.6). */
   valid_time?: boolean;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface TraitImplementation {
@@ -228,6 +230,10 @@ export interface Kind {
   /** Presentation hint for Explorer and Canvas. */
   color: string | null;
   operations_builtin: { create: boolean; update: boolean; delete: boolean };
+  /** Role names that steward the Kind; absent when none. */
+  stewards?: string[];
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface Relation {
@@ -250,6 +256,8 @@ export interface Relation {
   foreign_key_attribute?: ElementId | null;
   /** Keeper: omitted means `active`. */
   status?: ElementStatus;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface TraitAttribute {
@@ -260,6 +268,8 @@ export interface TraitAttribute {
   /** Keeper: the document keeps these two when they are set. */
   display_name?: string;
   description?: string;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface Trait {
@@ -270,6 +280,8 @@ export interface Trait {
   attributes: TraitAttribute[];
   /** Keeper: omitted means `active`. */
   status?: ElementStatus;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 /**
@@ -283,6 +295,10 @@ export interface Lens {
   description: string;
   kinds: string[];
   traits: string[];
+  /** Relations by api name; absent when the Lens names none. */
+  relations?: string[];
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface OperationParameter {
@@ -317,6 +333,8 @@ export interface Operation {
   status: ElementStatus;
   /** Set for built-in Operations provided per Kind or Relation. */
   builtin: boolean;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export type DerivationVariant = 'expression' | 'aggregate' | 'path';
@@ -337,6 +355,8 @@ export interface Derivation {
    * `source_attribute`, `filter` for an aggregate, or `steps` for a path.
    */
   definition: Record<string, unknown>;
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 /** Source types Keeper accepts, in the order the Source model lists them. */
@@ -425,6 +445,10 @@ export interface SchemaDomainInfo {
   settings?: Record<string, unknown>;
   /** Sample questions offered as ready-made prompts; absent when the Domain declares none. */
   examples?: DomainExample[];
+  /** Role names that steward the Domain; absent when none. */
+  stewards?: string[];
+  /** Keys the view does not model, kept verbatim so a save never drops them. */
+  extra?: Record<string, unknown>;
 }
 
 export interface Schema {
@@ -441,6 +465,8 @@ export interface Schema {
   sources: Source[];
   /** Read presets; absent or empty when the schema declares none. */
   lenses?: Lens[];
+  /** Sections of the schema document the view does not model, kept verbatim. */
+  extra?: Record<string, unknown>;
   search: SearchCapabilities;
 }
 
