@@ -222,7 +222,17 @@ as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
   Backfills use `ON CONFLICT DO UPDATE` after deleting the pair's rows, and reads join
   `mat_value_attributes`, so rows a race leaves for an Attribute no longer held are never
   served and the next pass removes them. `mat_value_cursors` remembers the fingerprint and time
-  of the last decision. `lb_values_similar` is a security
+  of the last decision. The fence relies on READ COMMITTED writers (each trigger statement takes
+  a new snapshot after its lock wait); a `default_transaction_isolation` of `repeatable read` or
+  `serializable` for Lorebase's roles would break it. A pass takes the exclusive lock only when
+  it changes something, re-reads the default branch's schema hash and the selection under it,
+  and spends at most `store.values.pass_timeout_ms` holding it (each statement gets the time
+  left; Kinds not reached become `pending`). A schema commit or merge on the default branch
+  drops newly ineligible Attributes after taking the lock shared, deleting through the
+  selection's key and `ix_mat_values_attribute (domain_id, kind_id, attribute_id)`, and queues
+  a pass that is not merged into a running one. Lookups pass the (Kind, Attribute) pairs the
+  caller may read into the queries (and `lb_values_similar`), so their limits apply after that
+  filter. `lb_values_similar` is a security
   definer read function with the checks and grants of revision 0008 (bounded `p_limit`, at
   most 64 terms, Domain in scope, fixed `search_path`). Row-level security as for the other
   Domain tables; `mat_values` rows go with their ref.
