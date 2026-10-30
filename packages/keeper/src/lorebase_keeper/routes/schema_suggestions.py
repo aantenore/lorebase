@@ -126,8 +126,8 @@ class SuggestionOut(BaseModel):
         description="Observations, over every document; misses for a vocabulary suggestion."
     )
     documents: int = Field(
-        description="Documents it was observed in; distinct missed phrases for a vocabulary "
-        "suggestion."
+        description="Documents it was observed in; 0 for a vocabulary suggestion, which comes "
+        "from resolution misses rather than documents."
     )
     confidence: float = Field(description="Mean confidence of the observations.")
     status: StatusName

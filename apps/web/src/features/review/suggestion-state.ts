@@ -52,6 +52,10 @@ export function toSuggestionFilter(state: SuggestionFilterState): SuggestionFilt
 export const refLabel = (ref: string): string =>
   ref.startsWith('+') ? reviewMessages.suggestions.newRef(ref.slice(1)) : ref;
 
+/** Documents a suggestion was observed in; empty when none, as for a vocabulary suggestion. */
+export const documentsLabel = (suggestion: SchemaSuggestion): string =>
+  suggestion.documents > 0 ? String(suggestion.documents) : '';
+
 /** The Kind that owns an Attribute, the ends of a Relation, `Kind.attribute` of an alias; empty for a Kind. */
 export function ownerLabel(suggestion: SchemaSuggestion): string {
   const owner = suggestion.kind === null ? null : refLabel(suggestion.kind);

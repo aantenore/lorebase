@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from lorebase_core.infer.suggestions import Observation, SuggestionOptions, SuggestionType
-from lorebase_store.repositories.suggestions import combine, consolidate, fold
+from lorebase_store.repositories.suggestions import (
+    SuggestionRow,
+    combine,
+    consolidate,
+    fold,
+    is_vocabulary_share,
+)
 
 OPTIONS = SuggestionOptions(max_examples=2, max_samples=3)
 
@@ -176,3 +184,44 @@ def test_combine_inherits_the_target_and_orders_examples_by_document() -> None:
     assert values["confidence"] == 0.0
     roomy = combine(kept, [row("b", "doc_b", None)], SuggestionOptions(max_examples=5))
     assert [e["document_id"] for e in roomy["examples"]] == ["doc_a"] * 3 + ["doc_b"] * 2
+
+
+def test_documents_count_only_document_shares() -> None:
+    assert is_vocabulary_share("miss:main:paused")
+    assert is_vocabulary_share("llm:main:atr_1")
+    assert not is_vocabulary_share("doc_a")
+    shares = {
+        "doc_a": {"n": 1, "c": 0.6},
+        "doc_b": {"n": 2, "c": 1.2},
+        "miss:main:paused": {"n": 4, "c": 2.4},
+        "llm:main:atr_1": {"n": 1, "c": 0.6},
+    }
+
+    def row(observations: dict[str, Any]) -> SuggestionRow:
+        return SuggestionRow(
+            id="sug_1",
+            fingerprint="f",
+            suggestion_type="value_alias",
+            name="paused",
+            kind_ref=None,
+            target_ref=None,
+            labels=[],
+            support=0,
+            confidence=0.6,
+            observations=observations,
+            examples=[],
+            samples=[],
+            sources=[],
+            payload={},
+            status="pending",
+            decided_by=None,
+            decided_at=None,
+            proposal_id=None,
+            branch=None,
+            last_job_id=None,
+            created_at=None,
+            updated_at=None,
+        )
+
+    assert row(shares).documents == 2
+    assert row({k: v for k, v in shares.items() if ":" in k}).documents == 0

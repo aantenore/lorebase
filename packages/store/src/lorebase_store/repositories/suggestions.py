@@ -59,6 +59,7 @@ STATUSES = (PENDING, ACCEPTED, REJECTED)
 MAX_SOURCES = 10
 MAX_MERGE_PASSES = 5
 DEADLOCK = "40P01"
+VOCABULARY_SHARES = ("miss", "llm")
 T = TypeVar("T")
 
 
@@ -89,7 +90,9 @@ class SuggestionRow:
 
     @property
     def documents(self) -> int:
-        return len(self.observations)
+        """Distinct documents among the shares; vocabulary shares (`miss:`, `llm:`) come from
+        no document."""
+        return sum(1 for key in self.observations if not is_vocabulary_share(key))
 
 
 _FIELDS = tuple(f.name for f in fields(SuggestionRow))
@@ -245,11 +248,17 @@ class SweepOutcome:
     deleted: int = 0
 
 
+def is_vocabulary_share(key: str) -> bool:
+    """A share recorded by the consolidation of resolution misses or descriptions, not by a
+    document."""
+    return key.partition(":")[0] in VOCABULARY_SHARES
+
+
 def share_branch(key: str) -> str | None:
     """The branch of a vocabulary share key (`miss:<branch>:<phrase>`,
     `llm:<branch>:<attribute>`); None for other keys."""
     kind, _, rest = key.partition(":")
-    if kind not in ("miss", "llm") or ":" not in rest:
+    if kind not in VOCABULARY_SHARES or ":" not in rest:
         return None
     return rest.partition(":")[0]
 

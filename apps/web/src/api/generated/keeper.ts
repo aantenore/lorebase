@@ -6716,7 +6716,7 @@ export interface components {
             support: number;
             /**
              * Documents
-             * @description Documents it was observed in; distinct missed phrases for a vocabulary suggestion.
+             * @description Documents it was observed in; 0 for a vocabulary suggestion, which comes from resolution misses rather than documents.
              */
             documents: number;
             /**

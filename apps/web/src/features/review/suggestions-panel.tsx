@@ -22,6 +22,7 @@ import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
 import {
   DEFAULT_SUGGESTION_FILTER,
   isDecidable,
+  documentsLabel,
   ownerLabel,
   STATUS_TONE,
   toDecideInput,
@@ -435,7 +436,7 @@ export function SuggestionsPanel({ domain }: { domain: string }) {
                       </TD>
                       <TD>{ownerLabel(row)}</TD>
                       <TD>{row.support}</TD>
-                      <TD>{row.documents}</TD>
+                      <TD>{documentsLabel(row)}</TD>
                       <TD>{percent(row.confidence)}</TD>
                       <TD>
                         {row.type_guess === null

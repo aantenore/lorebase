@@ -1,6 +1,7 @@
 import type { SchemaSuggestion } from '@/api/suggestion-types';
 import {
   DEFAULT_SUGGESTION_FILTER,
+  documentsLabel,
   isDecidable,
   ownerLabel,
   refLabel,
@@ -51,6 +52,11 @@ describe('suggestion labels', () => {
   it('marks a Kind another suggestion proposes', () => {
     expect(refLabel('+Notice')).toBe('Notice (new)');
     expect(refLabel('Part')).toBe('Part');
+  });
+
+  it('counts documents, and leaves the cell empty for a vocabulary suggestion', () => {
+    expect(documentsLabel(suggestion({ documents: 2 }))).toBe('2');
+    expect(documentsLabel(suggestion({ type: 'value_alias', documents: 0 }))).toBe('');
   });
 
   it('names the owner of an Attribute and the ends of a Relation', () => {
