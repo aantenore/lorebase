@@ -56,6 +56,8 @@ The schema of the Branch as a graph: Kinds as nodes, Relations as edges, with th
 
 ## Modeler
 
+What each field of the schema means, with a complete example, is in the [modeling guide](modeling.md).
+
 ### Schema overview
 
 ![Modeler, overview](images/modeler-list.png)
