@@ -21,6 +21,8 @@ SchemaSection = Literal[
     "kinds", "relations", "traits", "operations", "derivations", "sources", "lenses"
 ]
 SearchMode = Literal["lexical", "semantic", "hybrid"]
+ResolveTarget = Literal["kind", "attribute", "value"]
+ResolveLevel = Literal["exact", "synonym", "trigram", "embedding"]
 BranchMode = Literal["copy", "overlay"]
 MaterializationStatus = Literal["pending", "running", "done", "failed"]
 MaterializationPhase = Literal[
@@ -620,6 +622,35 @@ class SearchResult(Served):
     more Records match the filters: narrow the Kinds or the filter."""
 
 
+class ResolveCandidate(Model):
+    """A schema element or indexed value some words of the text may stand for."""
+
+    target: ResolveTarget
+    kind: str
+    attribute: str | None = None
+    type: str | None = None
+    values: list[str] | None = None
+    predicate: dict[str, Any] | None = None
+    """Ready-to-use `where` fragment for the Kind (value candidates)."""
+    score: float
+    level: ResolveLevel
+    matched: str
+    records: int | None = None
+
+
+class ResolveSkipped(Model):
+    """A matching level that did not run, and why."""
+
+    level: str
+    reason: str
+
+
+class ResolveResult(Served):
+    candidates: list[ResolveCandidate]
+    unmatched: list[str] = Field(default_factory=list)
+    skipped: list[ResolveSkipped] = Field(default_factory=list)
+
+
 class QueryRequest(RequestModel):
     """A query of the JSON DSL and where to run it. Predicates are plain JSON objects."""
 
@@ -702,6 +733,18 @@ class SearchRequest(RequestModel):
     query_vector: list[float] | None = None
     limit: int | None = Field(default=None, ge=1)
     tuning: SearchTuning | None = None
+
+
+class ResolveRequest(RequestModel):
+    """Ground the words of a text in the schema and the indexed values."""
+
+    branch: str | None = None
+    at: str | None = None
+    text: str = Field(min_length=1, max_length=500)
+    kinds: list[str] | None = None
+    levels: list[ResolveLevel] | None = None
+    query_vector: list[float] | None = None
+    limit: int | None = Field(default=None, ge=1)
 
 
 # Revisions, log and diff ------------------------------------------------------------------

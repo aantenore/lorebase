@@ -860,6 +860,10 @@ class Records(_Resource):
         body = request if isinstance(request, m.SearchRequest) else m.SearchRequest(**request)
         return await self._c.send(ep.search(domain, body))
 
+    async def resolve(self, domain: str, request: m.ResolveRequest | JsonObject) -> m.ResolveResult:
+        body = request if isinstance(request, m.ResolveRequest) else m.ResolveRequest(**request)
+        return await self._c.send(ep.resolve(domain, body))
+
 
 def _query_request(query: m.QueryRequest | JsonObject) -> m.QueryRequest:
     return query if isinstance(query, m.QueryRequest) else m.QueryRequest(**query)

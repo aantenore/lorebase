@@ -1727,3 +1727,59 @@ async def test_async_reconciliation(http: respx.MockRouter, sleeps: Sleeps) -> N
     assert decided.claim_id == "c1"
     assert json.loads(resolution.calls.last.request.content)["claim_id"] == "c1"
     assert queued.branch == "main"
+
+
+RESOLVED = {
+    "revision": "aa",
+    "served_from": "tree",
+    "candidates": [
+        {
+            "target": "value",
+            "kind": "Product",
+            "attribute": "color",
+            "type": "text",
+            "values": ["Rosso", "red"],
+            "predicate": {"color": {"in": ["Rosso", "red"]}},
+            "score": 0.9,
+            "level": "synonym",
+            "matched": "red",
+            "records": 4,
+        }
+    ],
+    "unmatched": ["of"],
+    "skipped": [{"level": "embedding", "reason": "no query vector"}],
+}
+
+
+def test_resolve_posts_the_words_and_parses_the_candidates(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    route = http.post("/domains/supply/resolve").respond(200, json=RESOLVED)
+    with make(sleeps) as client:
+        result = client.records.resolve(
+            "supply", {"text": "red shoes", "kinds": ["Product"], "levels": ["exact"], "limit": 5}
+        )
+    assert json.loads(route.calls.last.request.content) == {
+        "text": "red shoes",
+        "kinds": ["Product"],
+        "levels": ["exact"],
+        "limit": 5,
+    }
+    assert result.candidates[0].values == ["Rosso", "red"]
+    assert result.candidates[0].predicate == {"color": {"in": ["Rosso", "red"]}}
+    assert result.unmatched == ["of"]
+    assert result.skipped[0].level == "embedding"
+    with pytest.raises(ValidationError):
+        m.ResolveRequest(text="")
+    with pytest.raises(ValidationError):
+        m.ResolveRequest(text="x", levels=["fuzzy"])  # type: ignore[list-item]
+
+
+async def test_async_resolve(http: respx.MockRouter, sleeps: Sleeps) -> None:
+    route = http.post("/domains/supply/resolve").respond(200, json=RESOLVED)
+    async with amake(sleeps) as client:
+        result = await client.records.resolve(
+            "supply", m.ResolveRequest(text="red shoes", query_vector=[0.5, 0.25])
+        )
+    assert json.loads(route.calls.last.request.content)["query_vector"] == [0.5, 0.25]
+    assert result.candidates[0].records == 4

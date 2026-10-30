@@ -612,6 +612,16 @@ def search(domain: str, body: m.SearchRequest) -> Call[m.SearchResult]:
     )
 
 
+def resolve(domain: str, body: m.ResolveRequest) -> Call[m.ResolveResult]:
+    return Call(
+        "POST",
+        f"{_domain(domain)}/resolve",
+        parse_model(m.ResolveResult),
+        body=body.payload(),
+        safe=True,
+    )
+
+
 # Revisions, log and diff ------------------------------------------------------------------
 
 
