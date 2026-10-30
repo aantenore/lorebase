@@ -13,24 +13,45 @@ the base, ours and theirs values), so reading them follows the read rules of
 Listings keep the Proposals the caller may read in this sense. Writes follow the same scope:
 creating a Proposal needs read access to its target branch, and resolving a Conflict (or
 receiving the attempt of a merge) is limited to the Conflicts the caller may read.
+
+Within that scope, the values of a Conflict are shown as reads show them
+(`ConflictVisibility`): masked by the caller's clearance on the target branch's schema, without
+the Attributes the caller's projection leaves out, and with vault references resolved
+(`disclosed`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Any
+
+from pydantic import BaseModel
 
 from lorebase_core.model import Schema
 from lorebase_core.tree import PARTITION_SCHEMA, kind_partition, relation_partition
 from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.context import StoreAccess
 from lorebase_keeper.errors import FORBIDDEN, NOT_FOUND, ProblemError
+from lorebase_keeper.reading.sensitivity import (
+    Disclosure,
+    Masking,
+    conflict_hidden,
+    default_schema,
+    masking_for,
+)
 from lorebase_keeper.reading.visibility import projection
 from lorebase_keeper.services.reads import ReadGuard
+from lorebase_keeper.settings import SensitivitySettings
+from lorebase_store.commit.schema import load_compiled
 from lorebase_store.repositories import (
     EVERY_PARTITION,
     ConflictRow,
+    MaterializedRepository,
     PartitionFilter,
     ProposalRow,
+    scope_to_domain,
 )
 
 
@@ -156,3 +177,88 @@ def unknown_conflict(fingerprint: str, attempt_id: str) -> ProblemError:
         f"Conflict {fingerprint} is not part of the current merge attempt.",
         extensions={"conflict": fingerprint, "attempt": attempt_id},
     )
+
+
+# Conflict values ----------------------------------------------------------------------------
+
+
+_CONFLICT_SIDES = ("base", "ours", "theirs")
+
+
+@dataclass(frozen=True)
+class ConflictVisibility:
+    """What the caller may see of Conflict values: the target branch's schema (None when it
+    is not materialized) and the caller's masking."""
+
+    schema: Schema | None
+    masking: Masking
+    left_out: frozenset[str] = frozenset()
+    """Ids the caller's projection of the schema leaves out (Kinds invisible to it, design
+    13.3): Conflicts and automatic resolutions never show them."""
+
+    def hidden(self, payload: Mapping[str, Any]) -> bool:
+        return conflict_hidden(payload, self.schema, self.masking)
+
+    def names_left_out(self, value: Any) -> bool:
+        if not self.left_out:
+            return False
+        text = json.dumps(value, default=str)
+        return any(i in text for i in self.left_out)
+
+    def scrub(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`payload` without the values of Attributes left out, and without a message or
+        details naming something left out."""
+        if not self.left_out:
+            return payload
+        out = dict(payload)
+        for name in (*_CONFLICT_SIDES, "values"):
+            out[name] = _without(out.get(name), self.left_out)
+        if self.names_left_out([out.get("message"), out.get("details")]):
+            out["message"] = "The versions differ."
+            out["details"] = {}
+        return out
+
+
+def _without(value: Any, ids: frozenset[str]) -> Any:
+    """A value map (or an element body holding `values`) without the entries of `ids`."""
+    if not isinstance(value, dict):
+        return value
+    if isinstance(value.get("values"), dict):
+        return {**value, "values": _without(value["values"], ids)}
+    return {k: v for k, v in value.items() if k not in ids}
+
+
+async def conflict_visibility(
+    store: StoreAccess,
+    guard: ReadGuard,
+    domain_id: str,
+    target: str,
+    sensitivity: SensitivitySettings,
+    scope: ConflictScope | None = None,
+) -> ConflictVisibility:
+    """The caller's view of the Conflict values of a Proposal into `target`."""
+    writes = store.runtime.settings.writes
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        compiled = await MaterializedRepository(session, domain_id, target, writes=writes).schema()
+        reference = await default_schema(session, domain_id, store.runtime)
+    schema = None if compiled is None else load_compiled(compiled.compiled)
+    masking = await masking_for(
+        guard.authorizer, guard.principal, domain_id, reference, sensitivity
+    )
+    left_out: frozenset[str] = frozenset()
+    if schema is not None and scope is not None and scope.invisible and scope.kinds is not None:
+        left_out = projection(schema, scope.kinds).hidden
+    return ConflictVisibility(schema, masking if schema is None else masking.over(schema), left_out)
+
+
+async def disclosed(
+    store: StoreAccess, domain_id: str, seen: ConflictVisibility, model: BaseModel
+) -> bytes:
+    """The JSON body of `model` (values already masked by `seen`) with the vault references
+    left in it resolved as on every read (`Disclosure`)."""
+    schemas = () if seen.schema is None else (seen.schema,)
+    async with store.sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        disclosure = Disclosure(session, domain_id, schemas, seen.masking, store.runtime.vault)
+        return await disclosure.model(model)
