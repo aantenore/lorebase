@@ -1457,6 +1457,32 @@ the probe read the primary key in order, a plain `EXISTS` cost 2-3 ms per statem
 over 500) because of the other Domain's 100,000 selection rows. Run it with
 `uv run python tests/perf/resolve_bench.py [--records N] [--out FILE]`.
 
+## Coverage
+
+The `coverage` block of `POST /query` ([design 8.11](design.md#811-coverage-signals-knowing-what-the-data-does-not-hold))
+and the pass that counts its statistics, measured by `tests/perf/coverage_bench.py` on
+2026-10-30, same machine and Postgres as [Resolution](#resolution).
+
+- The 100,000 Products of the resolution benchmark, a tenth of them without a color, loaded
+  through the commit pipeline. The statistics pass (`lorebase_store.coverage.run_coverage`,
+  Records and missing values of the eight Attributes) took 255 ms.
+- Overhead: the Keeper application in process, a role subject to row-level security, response
+  cache and rate limits off; the same filtered query (color and brand, ordered by price, 20
+  Records) with `coverage: true` and `coverage: false`, alternating, 500 timed calls each after
+  50 warm-up calls. Lookup: the two statements the block adds (`read_coverage` and
+  `last_runs` for one Source) timed alone in a read-only transaction as that role.
+
+| Measure | Target p95 | p50 ms | p95 ms | p99 ms |
+|---------|-----------:|-------:|-------:|-------:|
+| query, coverage off | | 31.15 | 49.71 | 62.50 |
+| query, coverage on | | 31.52 | 48.36 | 65.26 |
+| coverage statements | 5.00 | 1.74 | 4.02 | 8.63 |
+
+End to end the block adds 0.4 ms at p50; the p95 difference (-1.4 ms) is within the noise of
+the query itself. The statements are a primary key lookup of `mat_coverage` and an index
+probe of `source_runs` per Source, so they do not grow with the Records of the Kind. Run it
+with `uv run python tests/perf/coverage_bench.py [--records N] [--out FILE]`.
+
 ## Web app: Canvas (5,000 nodes, 10,000 edges)
 
 Measured by `pnpm perf:canvas` in `apps/web` on the generated graph of the mock API (`VITE_MOCK_PERF_NODES=5000`, `VITE_MOCK_PERF_EDGES=10000`, `VITE_CANVAS_MAX_NODES=5000`): a production build served by `vite preview`, opened in headless Chromium with a software WebGL (SwiftShader), 1440x900, median of 3 runs, 2026-10-22, same machine as above. Time to first render is navigation start to the second animation frame after the canvas exists. The pan is 80 mouse moves with the button down; frame time is the gap between animation frames while it runs. Software WebGL makes every frame slower than on a GPU, so read the numbers as a comparison between the two rows, not as what a laptop shows.

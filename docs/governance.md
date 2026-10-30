@@ -20,6 +20,7 @@ configuration.
 | Merge policies (who wins a Conflict) | Domain setting `merge_policy` | text merge on, nothing else |
 | Open contradictions at merge | `keeper.reconciliation.merge_check`, `scribe.reconciliation.merge_check`, Domain setting `reconciliation_check` | `warn` |
 | Automatic merges of agent writes | `keeper.agent_writes`, Domain setting `agent_writes` | off |
+| Vocabulary learned from resolution misses | `store.resolve_misses`, `scribe.consolidation` | off: proposals only, always reviewed |
 
 Installation settings are in the configuration file ([reference](reference/configuration.md));
 give Keeper and Scribe the same file, since both evaluate the approval rules and the extraction
@@ -170,6 +171,24 @@ superseded and stale values, probable duplicates), and nothing changes until a p
 Proposal lists its open contradictions, under `block` they stop its merge with 409
 `reconciliation-open`, automatic merges included. Candidates are routed to the same stewards
 as Proposals. Operator settings: [operations](operations.md#reconciliation-queue).
+
+## Schema suggestions
+
+Schema suggestions are proposals a person accepts or rejects; none reaches the schema on its
+own. Extraction proposes new Kinds, Attributes and Relations found in documents
+([extraction](extraction.md#schema-suggestions)). With `store.resolve_misses.enabled`, Scribe
+also proposes vocabulary from the words agents asked `lorebase_resolve` for that matched
+nothing ([design 8.10](design.md#810-consolidation-from-use-vocabulary-learned-from-resolution-misses)):
+an alias of a stored value (`value_alias`), of an Attribute or a Kind, and, with
+`scribe.consolidation.llm.enabled`, a description of an Attribute agents often missed. Each
+shows the missed phrases with their misses, distinct callers and the similarity that linked
+them. They are listed and decided in the same place (web app **Review > Schema suggestions**,
+`lorebase schema suggestions`, `GET .../schema/suggestions`, which needs `document.read`):
+accepting opens a schema change Proposal on a new branch, reviewed and merged like any schema
+change, so the approval rules above apply. Rejected suggestions stay rejected however often
+the phrase is missed again. Suggestions for an Attribute the reviewer may not read values of
+are listed without their phrases and value; Attributes that are sensitive, kept in the vault,
+derived or `resolvable: false` never receive one.
 
 ## A worked configuration
 

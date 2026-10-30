@@ -27,6 +27,8 @@ Three properties hold on every read an agent makes:
    a traversal, a search (design 8 and 11.1). When the task is phrased in someone's words,
    resolve them first (`POST /resolve`), then write the query from the predicates it returns,
    with `"aggregate": {"group_by": ...}` for counts ([below](#resolve-words-before-querying)).
+   Read the `coverage` block of the answer before concluding that nothing matches
+   ([below](#read-coverage-before-concluding-none)).
 3. **Ask why** with `GET .../explain` before acting on a surprising value, and with `history`
    and `lineage` when the sequence of changes or the evidence of one value matters
    ([section 3](#history-and-lineage)).
@@ -288,6 +290,35 @@ nearest Records. Candidates never name a Kind or Attribute the caller may not re
 sensitive Attributes are never indexed. Which Attributes have their values indexed is decided
 per Domain (enums always, short strings with few distinct values, `resolvable: true|false` in
 the schema to force it; [operations](operations.md#value-index)).
+
+Words nothing matched are listed in `unmatched` and, as phrases, in `coverage.unknown` ("term
+unknown in this Domain"). Where the operator turned it on, they are also kept for a while:
+Scribe turns the frequent ones into alias or description suggestions that a person reviews
+([governance](governance.md#schema-suggestions), design 8.10), so the vocabulary follows the
+words agents use. Nothing changes the schema until a person accepts. Send `"record_misses":
+false` when the text must not be kept (it is never kept for time travel reads).
+
+### Read coverage before concluding "none"
+
+`POST /query` and `POST /resolve` answer with a `coverage` block (design 8.11) unless the
+request says `"coverage": false`:
+
+```json
+{"coverage": {
+  "kinds": [{"kind": "Product", "records": 400, "as_of": "3f2a...", "approximate": false}],
+  "attributes": [{"kind": "Product", "attribute": "color", "missing": 0.25,
+                  "missing_records": 100, "used_in": ["where", "select"]}],
+  "sources": [{"kind": "Product", "source": "erp_products", "last_synced_at": "2026-10-29T03:00:00Z",
+               "stale_after": "P1D", "stale": true, "unseen_records": 12}],
+  "notes": ["color missing on 25% of Product: a filter on color excludes them",
+            "Product from Source erp_products: last synchronized 2026-10-29T03:00:00+00:00, older than stale_after P1D"]}}
+```
+
+An empty answer to a filter on `color` then means "none of the Products with a color", not
+"none at all": say so, or ask for the missing data. `approximate` marks statistics counted at an
+older head (Scribe recounts every few minutes); `omitted` explains a block without statistics
+(they describe the default branch head only, not other branches or `at`). Attributes you may
+not read values of are never described.
 
 ## 3. Explain a Record
 
