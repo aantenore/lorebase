@@ -1230,7 +1230,50 @@ Each level can be turned off (`search.resolve.levels`) or left out per request (
 - A pass blocks writers of its own Domain only; a schema change that makes an Attribute ineligible removes its values in the same commit.
 - Levels 1-2 at 100,000 Records: p95 under 20 ms.
 
-**Non-goals.** Interpreting questions, choosing between candidates, aggregates, synonyms learned from data or from a model, stemming beyond the configured suffix pairs.
+**Non-goals.** Interpreting questions, choosing between candidates, aggregates, synonyms learned from data or from a model and applied without review (8.10 proposes them; a person accepts them), stemming beyond the configured suffix pairs.
+
+### 8.10 Consolidation from use: vocabulary learned from resolution misses
+
+When the words agents ask `lorebase_resolve` for match nothing, Lorebase proposes vocabulary for a person to accept: an alias of a value, an Attribute or a Kind, or a description of an Attribute. It never changes its schema on its own: an accepted proposal is a schema change set on a branch and a Proposal into the default branch, like every schema suggestion (9.2 step 10). **[Architect call AC-40]**
+
+**Recording** (`lorebase_store.resolve_misses`, revision 0046). A resolution's unknown phrases are the runs of consecutive words no candidate covers (split into runs of at most `search.resolve.max_phrase_words`); with `search.resolve.misses.record_below_score` the phrases whose best candidate scores below it count too. Keeper hands them to an in-memory recorder without waiting; a background task adds them up per Domain, branch and phrase and writes the totals every `flush_interval_s` into `resolve_misses(domain_id, branch, phrase, misses, callers, first_seen, last_seen)`. `callers` holds at most `store.resolve_misses.max_callers` digests of principal ids (blake2b of Domain and principal), so it counts distinct callers and names nobody. A phrase is recorded only when recording is on (`store.resolve_misses.enabled`, off by default), the read is at a branch head (no `at`), the request did not opt out (`record_misses: false`), the caller holds `search.resolve.misses.permission` (default `data.read`) through a grant not narrowed to a Kind or a branch, the phrase is `min_phrase_chars` to `max_phrase_chars` long and not one of `ignore_words`. A Domain keeps at most `max_per_domain` phrases; known phrases keep counting. A full queue or a failed batch drops misses (`lorebase.resolve.misses.dropped`); nothing is retried, as for the agent trace.
+
+**Privacy.** Phrases are free text typed by callers and may name a person. They stay in the database: kept at most `retention_days` (30) after they were last seen, deleted with their Domain (foreign key) or at once by `lorebase-scribe misses purge DOMAIN`, and shown only as the evidence of suggestions, which need `document.read` to list; a suggestion of an Attribute the reviewer may not read values of is listed without them (`withheld`). Erasure by value (13.5) does not search them: retention bounds them, as it bounds trace steps.
+
+**Consolidation** (Scribe job `vocabulary_consolidation`, every `scribe.scheduler.consolidation_interval_s` while recording is on, or `lorebase-scribe consolidate DOMAIN`). A pass deletes expired phrases, reads those of the default branch missed at least `scribe.consolidation.min_misses` times by `min_callers` callers (at most `max_phrases`) and links each to the element it nearly matched: an indexed value at least `value_similarity` similar (trigram, below the resolution threshold: the near misses resolution does not return), else a Kind or an Attribute whose name is at least `name_similarity` similar (the name comparison of schema suggestions). It drops a phrase equal to an indexed value or to a name or alias of the schema (a collision), and a link whose target already holds it (`existing_match`). Attributes whose values are sensitive (effective tags), kept in the vault, derived or `resolvable: false` are never targets; the value index never holds their values. Links are folded into `schema_suggestions` by the existing repository: one suggestion per alias and target (`fingerprint`), its share keyed by phrase and weighed by the phrase's misses, so a later pass replaces what the previous one counted; rejected and accepted suggestions stay decided.
+
+**Model step** (optional, `scribe.consolidation.llm.enabled`, off). For the Attributes agents missed most (`llm.min_misses`, at most `max_attributes` per pass and `max_tokens_per_pass`), the chat model routed as task `schema_consolidation` proposes a description. It sees the Kind and Attribute names, types and descriptions and the missed phrases, never a value; the answer must quote the phrases it accounts for, verbatim from the list, or it is discarded.
+
+**Review.** Vocabulary suggestions are listed with the others (`GET .../schema/suggestions`, types `kind_alias`, `attribute_alias`, `value_alias`, `attribute_description`): `name` is the alias, `attribute` the Attribute changed, `value` the stored value an alias stands for, `description` the proposed text, the examples the missed phrases with misses, callers and similarity. Accepting one changes the existing element in the change set (`suggestion_patch`: alias appended, `value_aliases` entry, description replaced); accepting one whose Attribute became sensitive, vault, derived or not resolvable meanwhile is refused (422).
+
+**Follow-ups.** Linking a miss to the query an agent ran next in the same session ([agent trace](agent-trace.md)) is not done: the trace is opt-in, off by default and keeps filter values only on fields that are not sensitive, so it cannot be relied on; near misses are the only evidence.
+
+**Acceptance (AC-40).**
+- With recording off nothing is stored; with it on, only the head reads of permitted callers that did not opt out are, within the length bounds and the Domain cap, and phrases older than the retention period are deleted by the next pass.
+- A pass proposes a value alias for a phrase near an indexed value, an Attribute or Kind alias for a phrase near a name; never for a sensitive, vault, derived or non-resolvable Attribute, never a phrase that is already a value, name or alias; repeated passes do not inflate support.
+- Accepting a vocabulary suggestion yields a schema change set that validates and a Proposal; the schema changes only when that Proposal merges.
+- The model step sends no values and keeps only proposals that cite missed phrases.
+
+**Non-goals.** Applying aliases without review, learning from Record values, ranking candidates by past use.
+
+### 8.11 Coverage signals: knowing what the data does not hold
+
+A query that returns nothing may mean that nothing matches or that the data is missing: a filter on `color` excludes every Product without a color. `POST /query` and `POST /resolve` answer with a `coverage` block that tells the two apart, unless the request says `coverage: false` (default `read.coverage.enabled`). **[Architect call AC-41]**
+
+**Content.** For each Attribute of the target Kinds used in `where` (not through Relation predicates), `select` or `order_by`, or named by a resolution candidate: the share and number of the Kind's Records without a value (absent, null, empty string, empty list), with where it was used. For each Kind read: its Records, the Revision the statistics were counted at, and `approximate` when the head moved since or the Kind was sampled. For each Source feeding a Kind: when its last successful run finished (dry runs aside), its `stale_after`, `stale` when that run is older (or there was none), and, for incremental Sources with `stale_after`, the Records no run has seen for that long (`source_unseen`, 9.1). For a resolution, the unknown phrases. `notes` says each signal in one line ("color missing on 25% of Product: a filter on color excludes them"); notes about missing values need `read.coverage.note_min_share`.
+
+**Statistics** (`lorebase_store.coverage`, `mat_coverage`, revision 0046). Scribe counts, per Kind of the default branch head, the live Records, the missing values of each stored Attribute and the unseen Records per Source (job `coverage`, every `scribe.scheduler.coverage_interval_s`, CLI `lorebase-scribe coverage DOMAIN`), one statement per Kind under `store.coverage.statement_timeout_ms`; a Domain whose head did not move costs one read. A Kind of more than `max_records_per_kind` Records is counted over that many rows and its counts scaled (`approximate`). Reads never scan Records for the block: one primary key lookup of `mat_coverage` and one index probe of `source_runs` per Source. Chosen over live counts (a scan per query) and over trigger-kept counters (a write cost on every commit for a hint).
+
+**Permissions.** Only Kinds in the read point's scope and Attributes whose values the caller may read (`Masking.hidden`): a masked Attribute is not described, as in resolution. Per-Kind counts are safe for the reason of 8.9 (no read restricts rows within a Kind). Statistics describe the default branch head only: on another branch or at another Revision the block keeps the unknown phrases and says why the rest is omitted, since a grant narrowed to one branch must not learn the default branch's counts.
+
+**Performance** (docs/performance.md#coverage): at 100,000 Records the two statements take p50 1.7 ms, p95 4.0 ms as a role under row-level security; end to end a filtered query takes p50 +0.4 ms with the block; the statistics pass takes about 0.3 s.
+
+**Acceptance (AC-41).**
+- A query on an Attribute that some Records miss reports the share, the count and a note; `coverage: false` leaves the block out.
+- No Attribute masked for the caller and no Kind outside its scope appears in the block; other branches and Revisions get no statistics.
+- Statistics older than the head are marked approximate; the block adds no scan of Records (p95 under 5 ms at 100,000 Records for its statements).
+
+**Non-goals.** Exact live counts per request, coverage of Attributes reached through Relations, coverage for context packs and search (their answers already list what they hold).
 
 ---
 
@@ -2089,7 +2132,7 @@ Acceptance:
 
 ### Next: knowledge that stays correct
 
-Scope: corrections that stick (per-Source last-written state, local-edit Conflicts with a preserved base, `local_edits`, the extraction `local_edit` hold; 9.1, AC-34); document versions and lifecycle (`source_key`, versions, the evidence check of a new version, retirement and purge; 9.2, AC-35); ingestion modes (`extraction.mode`, prefix rules, the tier cap of `direct`; 9.2, AC-36); stewards (assignees, `assigned` filters, `required_approvals_from_stewards`; 10.7, AC-37); read presets (Traits as search targets and context seeds, lenses, filtered vector search; 8.8, AC-38); resolution of words to schema and values (value index, aliases, `POST /resolve`, `lorebase_resolve`; 8.9, AC-39). Follow-up, implemented: `last_seen_run` and `stale_after` for incremental Sources (`source_unseen` candidates, migration `0043`).
+Scope: corrections that stick (per-Source last-written state, local-edit Conflicts with a preserved base, `local_edits`, the extraction `local_edit` hold; 9.1, AC-34); document versions and lifecycle (`source_key`, versions, the evidence check of a new version, retirement and purge; 9.2, AC-35); ingestion modes (`extraction.mode`, prefix rules, the tier cap of `direct`; 9.2, AC-36); stewards (assignees, `assigned` filters, `required_approvals_from_stewards`; 10.7, AC-37); read presets (Traits as search targets and context seeds, lenses, filtered vector search; 8.8, AC-38); resolution of words to schema and values (value index, aliases, `POST /resolve`, `lorebase_resolve`; 8.9, AC-39); consolidation of resolution misses into vocabulary suggestions (8.10, AC-40); coverage signals on queries and resolutions (8.11, AC-41). Follow-up, implemented: `last_seen_run` and `stale_after` for incremental Sources (`source_unseen` candidates, migration `0043`).
 
 Acceptance:
 - A person's correction on the target survives any number of Source runs whose upstream value did not change; an upstream change to that value opens a `DV1` whose base is the Source's previous value, and a snapshot run never deletes a Record holding someone else's values without a `DV2`. Both are audited as `source.local_edit_conflict`.
@@ -2099,6 +2142,7 @@ Acceptance:
 - `assigned=me` lists exactly the Proposals and candidates whose assignees include the caller, and never one touching a Kind the caller cannot read.
 - A Trait or lens target never returns a Kind the caller cannot read; a filtered semantic search returns `limit` hits whenever that many readable Records match within the scan bound, and says `semantic_truncated` otherwise.
 - Resolution returns only Kinds, Attributes and values the caller can read, with no model and no query run (acceptance in 8.9).
+- Words agents could not resolve become vocabulary suggestions only through review (acceptance in 8.10); queries and resolutions say how complete their answer can be without scanning Records (acceptance in 8.11).
 
 ---
 
@@ -2174,10 +2218,12 @@ Acceptance:
 | AC-37 | Stewards are RBAC roles named in the schema; assignees are computed, never stored | No new principal model; follows grants and invisibility | Assignment needs per-person routing that roles cannot express |
 | AC-38 | Traits and lenses are read presets resolved against the caller's projection; filtered vector search keeps filters before the limit and uses iterative scans or over-fetch so it does not shorten silently | Presets never widen grants; results stay complete and leak-free | Exact vector search is needed by default |
 | AC-39 | Resolution returns ranked candidates (Kinds, Attributes, values with predicates) and never interprets a question; values come from a trigger-kept per-branch index of selected short Attributes, aliases from the versioned schema | Agents ground their words in real names and values without a model in the read path; the index follows every write path and stays small | Questions need interpretation Lorebase must own, or row-level filters within a Kind appear (counts then go live) |
+| AC-40 | Words agents could not resolve are recorded only where an operator turns it on, bounded and expiring, and become alias or description suggestions through near misses; a person accepts each as a schema change | The vocabulary follows how agents ask without a model in the read path or a schema that changes itself | Agents' phrases must never be stored, or aliases must apply without review |
+| AC-41 | Queries and resolutions report missing values, Source freshness and unknown words from per-Kind statistics of the default branch head, marked approximate when the head moved | Tells "no result" from "missing data" at the cost of two lookups | Exact live coverage per request is required |
 
 ### Implementation status
 
-Every architect call above, up to AC-39 (resolution of words to schema and values, 8.9), has code on `main`, except the ones that are policies with nothing to build (AC-04, AC-14, AC-21). The [roadmap](roadmap.md) tracks, milestone by milestone, what is merged and covered by tests and what is still open; the [CHANGELOG](../CHANGELOG.md) has the details of each change. Two places where the code goes beyond a call as first written:
+Every architect call above, up to AC-41 (coverage signals, 8.11), has code on `main`, except the ones that are policies with nothing to build (AC-04, AC-14, AC-21). The [roadmap](roadmap.md) tracks, milestone by milestone, what is merged and covered by tests and what is still open; the [CHANGELOG](../CHANGELOG.md) has the details of each change. Two places where the code goes beyond a call as first written:
 
 - AC-16: overlay branches (planned for M5) are implemented, with copy on write instead of a recomputed tree diff (6.11).
 - AC-23: the backend image has a second build target, `backend-ml` (image `lorebase-ml`), with the embedding libraries and a model baked in, used by Guide and Scribe; Keeper, Herald and the migrations stay on the smaller image.

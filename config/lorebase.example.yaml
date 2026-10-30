@@ -675,6 +675,24 @@ store:
     stats_interval_s: 3600.0     # distinct values counted again this often (schema change: at once)
     max_added_per_pass: 20       # Attributes one pass adds; the rest go to the next pass
     pass_timeout_ms: 120000      # budget of a pass once it holds the Domain's lock (writers wait)
+  # Phrases POST /resolve matched to nothing (design 8.10), kept for vocabulary suggestions.
+  # They are free text typed by callers: off by default, pruned after retention_days, deleted
+  # with their Domain (`lorebase-scribe misses purge DOMAIN` deletes them at once).
+  resolve_misses:
+    enabled: false               # Keeper records, Scribe prunes and consolidates
+    retention_days: 30.0         # a phrase not seen for this long is deleted
+    min_phrase_chars: 3          # shorter phrases are not recorded
+    max_phrase_chars: 64         # longer ones neither (an alias is at most 128 characters)
+    ignore_words: []             # filler words never recorded alone, e.g. [how, many, the]
+    max_per_domain: 10000        # phrases kept per Domain; new ones beyond are dropped
+    max_callers: 20              # distinct callers counted per phrase (digests, never names)
+    prune_batch: 5000            # expired phrases deleted per statement
+  # Records and missing values per Kind of the default branch head, behind the coverage block
+  # of queries and resolutions (design 8.11); counted by Scribe, looked up by reads.
+  coverage:
+    enabled: true
+    max_records_per_kind: 1000000  # larger Kinds are counted over a sample (marked approximate)
+    statement_timeout_ms: 120000   # per Kind; a Kind that times out keeps its statistics
   writes:
     insert_batch_rows: 1000      # rows per multi-row INSERT
     copy_threshold_rows: 5000    # larger batches use COPY into a staging table; 0 disables COPY
@@ -899,6 +917,9 @@ read:
     duplicate_keys_per_group: 5
     orphan_examples: 5           # orphan Links and Records with a gap listed per Relation
     statement_timeout_ms: 15000  # for the scans, instead of read.statement_timeout_ms; 0 disables
+  coverage:                      # the coverage block of POST /query and /resolve (design 8.11)
+    enabled: true                # default of requests that do not say `coverage`
+    note_min_share: 0.01         # least share of Records missing an Attribute for a note
 
 # Search (design 8.4). Keeper never computes embeddings: semantic and hybrid search take the
 # caller's query_vector. The text search configuration is store.materialize.text_search_config
@@ -970,6 +991,12 @@ search:
     embedding_records: 10        # nearest Records read by the embedding level
     levels: {exact: true, synonym: true, trigram: true, embedding: true}
     scores: {exact: 1.0, synonym: 0.95, trigram: 0.85, embedding: 0.7, description: 0.6}
+    misses:                      # recording of what matched nothing (store.resolve_misses)
+      permission: data.read      # needed Domain-wide for a caller's misses to be kept
+      record_below_score: null   # also keep phrases whose best candidate scores below this
+      queue_size: 10000          # distinct phrases held in memory between writes
+      flush_interval_s: 5.0      # longest wait in memory before a batch write
+      write_timeout_s: 5.0
 
 # Agent-facing reads (docs/agents.md). Context packs are also bounded by read.traverse;
 # nothing here calls a model.
@@ -1198,6 +1225,9 @@ scribe:
     source_schedules: true       # queue Source synchronizations from each Source's `schedule`
     embeddings_interval_s: 60.0  # embedding pass of every Domain; 0 disables
     value_index_interval_s: 300.0  # value index pass of every Domain (store.values); 0 disables
+    coverage_interval_s: 300.0   # coverage statistics of every Domain (store.coverage); 0 disables
+    consolidation_interval_s: 3600.0   # misses -> vocabulary suggestions, while
+                                 # store.resolve_misses.enabled; 0 disables
     audit_verify_interval_s: 86400.0   # verification of every audit hash chain; 0 disables
     domain_batch: 100            # Domains read per query
   sources:                       # Source synchronization (design 9.1)
@@ -1331,6 +1361,23 @@ scribe:
       attempts: 2                # attempts per call, the first included
       backoff_s: 2.0             # pause before the first retry; doubles each time
       backoff_max_s: 60.0        # longest pause
+  # Consolidation of resolution misses into vocabulary suggestions (design 8.10), also run by
+  # `lorebase-scribe consolidate DOMAIN`. Suggestions are reviewed like any other; nothing
+  # changes the schema without an accepted Proposal.
+  consolidation:
+    min_misses: 3                # misses a phrase needs before it is considered
+    min_callers: 1               # distinct callers it needs (raise it against one agent's habit)
+    max_phrases: 200             # phrases per pass, the most missed first
+    value_similarity: 0.3        # least trigram similarity to an indexed value (value alias)
+    name_similarity: 0.75        # least name similarity to a Kind or Attribute (alias)
+    values_per_phrase: 3
+    llm:                         # optional description proposals, task schema_consolidation;
+      enabled: false             # the model sees names and missed phrases, never values
+      min_misses: 10
+      max_attributes: 5
+      max_phrases: 20
+      max_description_chars: 500
+      max_tokens_per_pass: 20000
   audit_checkpoints:             # signed heads of the audit chains published outside the
                                  # database; `python -m lorebase_keeper audit verify
                                  # --checkpoints` then detects entries cut from a chain's end

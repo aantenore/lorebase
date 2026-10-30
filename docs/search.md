@@ -13,6 +13,9 @@ predicates from names, schema aliases and the value index (exact, then similar s
 values of the nearest Records only with a `query_vector` and when nothing else matched), and it
 runs no query ([design 8.9](design.md#89-resolution-words-to-schema-and-values),
 [agents](agents.md#resolve-words-before-querying)). Search then finds Records by their text.
+Its `coverage` block lists the phrases unknown in the Domain; where recording is on, frequent
+ones become alias suggestions for review
+([design 8.10](design.md#810-consolidation-from-use-vocabulary-learned-from-resolution-misses)).
 
 ## Traits, lenses and filtered vector search
 

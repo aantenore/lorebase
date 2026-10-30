@@ -186,8 +186,8 @@ example `Supplier/S-1001`.
 | `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `traits?`, `lens?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
 | `lorebase_schema` | `kinds?`, `detail?: summary or full` | Kinds with attribute types (`!` = required), key, title, built-in Operations; Relations; custom Operations with parameters and review policy | `GET .../schema` |
 | `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation | `GET .../kinds/{kind}/records/{key}` |
-| `lorebase_resolve` | `text`, `kinds?`, `levels?`, `query_vector?`, `limit?`, `at?` | ranked candidates the words may stand for: Kinds, Attributes (with type) and stored values with a ready-to-use `where` predicate and Record count, each with its level (`exact`, `synonym`, `trigram`, `embedding`) and the words matched; `unmatched` words; skipped levels | `POST .../resolve` |
-| `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate (`"aggregate": {"group_by": attr}` counts Records per value), `next_cursor` | `POST .../query` |
+| `lorebase_resolve` | `text`, `kinds?`, `levels?`, `query_vector?`, `limit?`, `at?` | ranked candidates the words may stand for: Kinds, Attributes (with type) and stored values with a ready-to-use `where` predicate and Record count, each with its level (`exact`, `synonym`, `trigram`, `embedding`) and the words matched; `unmatched` words; skipped levels; `coverage:` lines (phrases unknown in the Domain, Records missing the Attributes found) | `POST .../resolve` |
+| `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate (`"aggregate": {"group_by": attr}` counts Records per value), `next_cursor`, `coverage:` lines (missing values of the Attributes used, Source freshness; `"coverage": false` in the query leaves them out) | `POST .../query` |
 | `lorebase_search` | `query?`, `kinds?`, `traits?`, `lens?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated_candidates` when every term was so common that only a sample of the matches was ranked, `truncated` when the vector list stopped short of its size while more Records match the filters | `POST .../search` |
 | `lorebase_neighborhood` | `seeds: [ref]`, `depth`, `relations?`, `max_nodes?`, `max_edges?`, `values?` | nodes and edges, `truncated` when Keeper caps were reached; without `values` (the default) Keeper returns Record headers and Link endpoints only | `POST .../neighborhood` (`values: false` unless `values`) |
 | `lorebase_explain` | `ref`, `attributes?` | how the Record was created; per attribute: value, origin type, actor, time and Revision of its last change; without `attributes`, its Links and the Proposals that changed it | `GET .../records/{key}/explain` |
@@ -297,7 +297,10 @@ Failures come back as tool errors: `[code] message`, an optional list of issues,
    `lorebase_search` to find Records by words, `lorebase_neighborhood` for more links,
    `lorebase_explain` (or `lorebase_history` and `lorebase_lineage`) before trusting a value,
    `lorebase_changes` and `lorebase_diff` to catch up with what changed since a Revision seen
-   earlier.
+   earlier. `lorebase_query` and `lorebase_resolve` end with `coverage:` lines, one per signal
+   ("color missing on 25% of Product: a filter on color excludes them", a stale Source, a phrase
+   unknown in the Domain): read them before answering "none" (design 8.11). Words that matched
+   nothing may be kept for vocabulary suggestions a person reviews (design 8.10).
 3. **Writes through Operations.** Call `lorebase_execute` with `dry_run` (the default), check
    edits and violations, then commit with `dry_run: false` and `expected_head` set to the head
    the dry run reported. Operations with a review policy, and protected branches, need a

@@ -87,6 +87,21 @@ The schema flag that forces an Attribute into the Value index (`resolvable: true
 
 Example: `Supplier.city` has too many distinct values for the automatic selection; `resolvable: true` makes "suppliers in Turin" resolve anyway.
 
+### Resolution miss
+A phrase `lorebase_resolve` matched to nothing (no Kind, Attribute or indexed value), kept per Domain and branch with its count when an operator turns recording on, and deleted after a retention period ([design 8.10](design.md#810-consolidation-from-use-vocabulary-learned-from-resolution-misses)).
+
+Example: agents keep asking for "paused suppliers"; "paused" is a miss until someone accepts it as a Value alias of `Supplier.status = on_hold`.
+
+### Vocabulary suggestion
+A schema suggestion that changes an element that exists: an Alias of a Kind or an Attribute, a Value alias, or an Attribute description, proposed by Scribe from frequent Resolution misses and accepted or rejected by a person like any schema suggestion ([governance](governance.md#schema-suggestions)).
+
+Example: the suggestion `value_alias paused -> Supplier.status = on_hold` shows the phrase missed 14 times by 3 agents; accepting it opens a schema change Proposal.
+
+### Coverage
+The block of a query or resolution answer that says how complete it can be: the share of Records missing each Attribute used, the freshness of the Sources feeding the Kind, and the words unknown in the Domain, read from statistics of the default branch head ([design 8.11](design.md#811-coverage-signals-knowing-what-the-data-does-not-hold)).
+
+Example: a query for red Products returns 3 rows and the note "color missing on 25% of Product: a filter on color excludes them".
+
 ### Vault
 Encrypted storage, outside history, for the values of `pii` Attributes declared `vault: true`. Record objects hold a token instead of the value, so `lorebase admin erase` removes a person's data while every Revision keeps its hash; erased values read as `[erased]` for cleared callers ([design 13.5](design.md#135-personal-data-and-erasure)).
 

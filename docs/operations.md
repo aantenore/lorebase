@@ -308,6 +308,46 @@ Watch `mat_values` with the other materialized tables: it holds one row per bran
 value, so it stays small unless thresholds are raised. Settings: `store.values` (selection) and
 `search.resolve` (matching levels, thresholds, plural rules, scores, limits).
 
+## Resolution misses and vocabulary suggestions
+
+The phrases `POST /resolve` matched to nothing can be kept to propose vocabulary
+([design 8.10](design.md#810-consolidation-from-use-vocabulary-learned-from-resolution-misses)).
+Off by default: set `store.resolve_misses.enabled: true` for Keeper and Scribe alike.
+
+- **What is kept.** Per Domain, branch and phrase (compared form): misses, first and last seen,
+  and up to `max_callers` (20) digests of the principals who asked, never their ids. Only head
+  reads, only callers holding `search.resolve.misses.permission` (default `data.read`) through a
+  grant not narrowed to a Kind or a branch, only phrases of `min_phrase_chars` (3) to
+  `max_phrase_chars` (64) characters that are not in `ignore_words`, at most `max_per_domain`
+  (10,000) phrases per Domain. Requests opt out with `"record_misses": false`. Keeper writes off
+  the request path every `search.resolve.misses.flush_interval_s` (5 s); a full queue
+  (`queue_size`) or a failed write drops misses, counted in `lorebase.resolve.misses.dropped`
+  (`lorebase.resolve.misses.recorded` counts what was written).
+- **Privacy.** Phrases are free text and may name a person. They are deleted `retention_days`
+  (30) after they were last seen by the next consolidation pass, with their Domain, and at once
+  by `lorebase-scribe misses purge DOMAIN`. Erasure by value does not search them; keep the
+  retention short where callers type personal data, or leave recording off.
+- **Consolidation.** Scribe queues a `vocabulary_consolidation` pass per Domain every
+  `scribe.scheduler.consolidation_interval_s` (3600 s) while recording is on; run one now with
+  `lorebase-scribe consolidate DOMAIN` (it prints what it pruned, linked and proposed). Tune
+  `scribe.consolidation` (`min_misses`, `min_callers`, `value_similarity`, `name_similarity`);
+  `scribe.consolidation.llm.enabled` adds description proposals through the chat model of task
+  `inference.llm.tasks.schema_consolidation` (names and phrases only, never values).
+
+## Coverage statistics
+
+The `coverage` block of queries and resolutions
+([design 8.11](design.md#811-coverage-signals-knowing-what-the-data-does-not-hold)) reads
+`mat_coverage`, counted per Kind of the default branch head by a Scribe `coverage` pass every
+`scribe.scheduler.coverage_interval_s` (300 s; a Domain whose head did not move costs one read).
+Run one now with `lorebase-scribe coverage DOMAIN [--force]`. Each Kind is one statement under
+`store.coverage.statement_timeout_ms` (120 s; a Kind that times out keeps its previous
+statistics); Kinds of more than `max_records_per_kind` (1,000,000) Records are counted over a
+sample and reported approximate. 100,000 Records take about 0.3 s
+([performance](performance.md#coverage)). After the upgrade (migration `0046`) the table is
+empty: queries say `statistics not counted yet` until the first pass. `read.coverage.enabled:
+false` makes the block opt-in per request; `store.coverage.enabled: false` stops the counts.
+
 ## Approval rules and automatic merges
 
 `scribe.sources.auto_merge_protected` and `scribe.extraction.direct_merge_protected` (both on by

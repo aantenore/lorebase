@@ -801,6 +801,31 @@ Value index of POST /resolve (design 8.9): distinct short values per branch, kep
 | `store.values.max_added_per_pass` | `20` | Attributes one pass adds; the rest go to the next pass |
 | `store.values.pass_timeout_ms` | `120000` | budget of a pass once it holds the Domain's lock (writers wait) |
 
+### `store.resolve_misses`
+
+Phrases POST /resolve matched to nothing (design 8.10), kept for vocabulary suggestions. They are free text typed by callers: off by default, pruned after retention_days, deleted with their Domain (`lorebase-scribe misses purge DOMAIN` deletes them at once).
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.resolve_misses.enabled` | `false` | Keeper records, Scribe prunes and consolidates |
+| `store.resolve_misses.retention_days` | `30.0` | a phrase not seen for this long is deleted |
+| `store.resolve_misses.min_phrase_chars` | `3` | shorter phrases are not recorded |
+| `store.resolve_misses.max_phrase_chars` | `64` | longer ones neither (an alias is at most 128 characters) |
+| `store.resolve_misses.ignore_words` | `[]` | filler words never recorded alone, e.g. [how, many, the] |
+| `store.resolve_misses.max_per_domain` | `10000` | phrases kept per Domain; new ones beyond are dropped |
+| `store.resolve_misses.max_callers` | `20` | distinct callers counted per phrase (digests, never names) |
+| `store.resolve_misses.prune_batch` | `5000` | expired phrases deleted per statement |
+
+### `store.coverage`
+
+Records and missing values per Kind of the default branch head, behind the coverage block of queries and resolutions (design 8.11); counted by Scribe, looked up by reads.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `store.coverage.enabled` | `true` |  |
+| `store.coverage.max_records_per_kind` | `1000000` | larger Kinds are counted over a sample (marked approximate) |
+| `store.coverage.statement_timeout_ms` | `120000` | per Kind; a Kind that times out keeps its statistics |
+
 ### `store.writes`
 
 | Setting | Default | Description |
@@ -1157,6 +1182,15 @@ GET .../health and .../kinds/{kind}/health (docs/agents.md)
 | `read.health.orphan_examples` | `5` | orphan Links and Records with a gap listed per Relation |
 | `read.health.statement_timeout_ms` | `15000` | for the scans, instead of read.statement_timeout_ms; 0 disables |
 
+### `read.coverage`
+
+The coverage block of POST /query and /resolve (design 8.11)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `read.coverage.enabled` | `true` | default of requests that do not say `coverage` |
+| `read.coverage.note_min_share` | `0.01` | least share of Records missing an Attribute for a note |
+
 ## `search`
 
 Search (design 8.4). Keeper never computes embeddings: semantic and hybrid search take the caller's query_vector. The text search configuration is store.materialize.text_search_config and the vector dimension store.embeddings.dims.
@@ -1241,6 +1275,18 @@ POST /resolve (design 8.9): words of a text to candidate Kinds, Attributes and i
 | `search.resolve.embedding_records` | `10` | nearest Records read by the embedding level |
 | `search.resolve.levels` | `{exact: true, synonym: true, trigram: true, embedding: true}` |  |
 | `search.resolve.scores` | `{exact: 1.0, synonym: 0.95, trigram: 0.85, embedding: 0.7, description: 0.6}` |  |
+
+#### `search.resolve.misses`
+
+Recording of what matched nothing (store.resolve_misses)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `search.resolve.misses.permission` | `data.read` | needed Domain-wide for a caller's misses to be kept |
+| `search.resolve.misses.record_below_score` | `null` | also keep phrases whose best candidate scores below this |
+| `search.resolve.misses.queue_size` | `10000` | distinct phrases held in memory between writes |
+| `search.resolve.misses.flush_interval_s` | `5.0` | longest wait in memory before a batch write |
+| `search.resolve.misses.write_timeout_s` | `5.0` |  |
 
 ## `agents`
 
@@ -1557,6 +1603,8 @@ One process at a time is leader (Postgres advisory lock)
 | `scribe.scheduler.source_schedules` | `true` | queue Source synchronizations from each Source's `schedule` |
 | `scribe.scheduler.embeddings_interval_s` | `60.0` | embedding pass of every Domain; 0 disables |
 | `scribe.scheduler.value_index_interval_s` | `300.0` | value index pass of every Domain (store.values); 0 disables |
+| `scribe.scheduler.coverage_interval_s` | `300.0` | coverage statistics of every Domain (store.coverage); 0 disables |
+| `scribe.scheduler.consolidation_interval_s` | `3600.0` | misses -&gt; vocabulary suggestions, while store.resolve_misses.enabled; 0 disables |
 | `scribe.scheduler.audit_verify_interval_s` | `86400.0` | verification of every audit hash chain; 0 disables |
 | `scribe.scheduler.domain_batch` | `100` | Domains read per query |
 
@@ -1776,6 +1824,32 @@ Retries of a failed call, after the provider's own retries
 | `scribe.embeddings.retry.attempts` | `2` | attempts per call, the first included |
 | `scribe.embeddings.retry.backoff_s` | `2.0` | pause before the first retry; doubles each time |
 | `scribe.embeddings.retry.backoff_max_s` | `60.0` | longest pause |
+
+### `scribe.consolidation`
+
+Consolidation of resolution misses into vocabulary suggestions (design 8.10), also run by `lorebase-scribe consolidate DOMAIN`. Suggestions are reviewed like any other; nothing changes the schema without an accepted Proposal.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.consolidation.min_misses` | `3` | misses a phrase needs before it is considered |
+| `scribe.consolidation.min_callers` | `1` | distinct callers it needs (raise it against one agent's habit) |
+| `scribe.consolidation.max_phrases` | `200` | phrases per pass, the most missed first |
+| `scribe.consolidation.value_similarity` | `0.3` | least trigram similarity to an indexed value (value alias) |
+| `scribe.consolidation.name_similarity` | `0.75` | least name similarity to a Kind or Attribute (alias) |
+| `scribe.consolidation.values_per_phrase` | `3` |  |
+
+#### `scribe.consolidation.llm`
+
+Optional description proposals, task schema_consolidation;
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `scribe.consolidation.llm.enabled` | `false` | the model sees names and missed phrases, never values |
+| `scribe.consolidation.llm.min_misses` | `10` |  |
+| `scribe.consolidation.llm.max_attributes` | `5` |  |
+| `scribe.consolidation.llm.max_phrases` | `20` |  |
+| `scribe.consolidation.llm.max_description_chars` | `500` |  |
+| `scribe.consolidation.llm.max_tokens_per_pass` | `20000` |  |
 
 ### `scribe.audit_checkpoints`
 
