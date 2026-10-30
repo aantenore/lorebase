@@ -812,6 +812,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/domains/{domain_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve words to schema elements and values
+         * @description Ground the words of a text in the schema and the indexed values (design 8.9): ranked
+         *     candidate Kinds, Attributes and values, each with the words it matched and, for values,
+         *     a ready-to-use predicate. No query is run and nothing is interpreted beyond matching.
+         */
+        post: operations["resolve_words_api_v1_domains__domain_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/domains/{domain_id}/derivations:preview": {
         parameters: {
             query?: never;
@@ -5741,10 +5763,136 @@ export interface components {
              */
             matched: boolean;
         };
+        /**
+         * ResolveCandidate
+         * @description A schema element or indexed value some words of the text may stand for.
+         */
+        ResolveCandidate: {
+            /**
+             * Target
+             * @description What matched: a Kind, an Attribute (by name), or values of an Attribute.
+             * @enum {string}
+             */
+            target: "kind" | "attribute" | "value";
+            /**
+             * Kind
+             * @description Kind api name.
+             */
+            kind: string;
+            /**
+             * Attribute
+             * @description Attribute api name (attribute and value candidates).
+             */
+            attribute?: string | null;
+            /**
+             * Type
+             * @description Attribute type, e.g. decimal(12,2).
+             */
+            type?: string | null;
+            /**
+             * Values
+             * @description Stored values the words stand for (value candidates).
+             */
+            values?: string[] | null;
+            /**
+             * Predicate
+             * @description Ready-to-use where fragment of lorebase_query / POST /query for the Kind (value candidates).
+             */
+            predicate?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Score
+             * @description Confidence, 0 to 1; higher first.
+             */
+            score: number;
+            /**
+             * Level
+             * @description How it matched: exact name or value, alias, similar spelling, or values of the Records nearest to the query vector.
+             * @enum {string}
+             */
+            level: "exact" | "synonym" | "trigram" | "embedding";
+            /**
+             * Matched
+             * @description The words of the text that matched.
+             */
+            matched: string;
+            /**
+             * Records
+             * @description Records holding the values on the branch read (value candidates).
+             */
+            records?: number | null;
+        };
         /** ResolveManyIn */
         ResolveManyIn: {
             /** Resolutions */
             resolutions: components["schemas"]["FingerprintedResolutionIn"][];
+        };
+        /**
+         * ResolveRequest
+         * @description Words to ground in the schema and the indexed values (design 8.9).
+         */
+        ResolveRequest: {
+            /** Branch */
+            branch?: string | null;
+            /**
+             * At
+             * @description Revision id or tag to read at (time travel): key-ordered listings read the tree, other reads a snapshot of the Revision.
+             */
+            at?: string | null;
+            /**
+             * Text
+             * @description Words to resolve, e.g. a user's question; split into phrases of one to a few words.
+             */
+            text: string;
+            /**
+             * Kinds
+             * @description Kind api names to look in; default: every Kind you may read.
+             */
+            kinds?: string[] | null;
+            /**
+             * Levels
+             * @description Matching levels to use (exact, synonym, trigram, embedding); default: those the server enables.
+             */
+            levels?: ("exact" | "synonym" | "trigram" | "embedding")[] | null;
+            /**
+             * Query Vector
+             * @description Embedding of `text` (configured model and dimension): enables the embedding level when nothing else matched.
+             */
+            query_vector?: number[] | null;
+            /**
+             * Limit
+             * @description Candidates returned.
+             */
+            limit?: number | null;
+        };
+        /** ResolveResponse */
+        ResolveResponse: {
+            /**
+             * Revision
+             * @description Revision the response was served from (hex).
+             */
+            revision: string;
+            served_from: components["schemas"]["ServedFrom"];
+            /** Candidates */
+            candidates: components["schemas"]["ResolveCandidate"][];
+            /**
+             * Unmatched
+             * @description Words no candidate covers (often filler words).
+             */
+            unmatched?: string[];
+            /**
+             * Skipped
+             * @description Levels that did not run, and why.
+             */
+            skipped?: components["schemas"]["ResolveSkipped"][];
+        };
+        /** ResolveSkipped */
+        ResolveSkipped: {
+            /** Level */
+            level: string;
+            /** Reason */
+            reason: string;
         };
         /** RetirementIn */
         RetirementIn: {
@@ -9975,6 +10123,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description The caller lacks data.read for the branch or Revision read. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Domain, branch, Revision, Kind or Record not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Invalid request or query. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationProblem"];
+                };
+            };
+            /** @description Problem details (RFC 9457), media type application/problem+json. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resolve_words_api_v1_domains__domain_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                domain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveResponse"];
                 };
             };
             /** @description The caller lacks data.read for the branch or Revision read. */

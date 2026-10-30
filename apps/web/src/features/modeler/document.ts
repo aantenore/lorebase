@@ -49,6 +49,12 @@ export interface AttributeDocument {
   authority?: string;
   vault?: boolean;
   valid_time?: boolean;
+  /** Words that also name the Attribute when a text is resolved to the schema. */
+  aliases?: string[];
+  /** Stored value to the words that also stand for it. */
+  value_aliases?: Record<string, string[]>;
+  /** Opt in or out of value resolution; unset leaves it to the server. */
+  resolvable?: boolean;
 }
 
 export interface TraitImplementationDocument {
@@ -62,6 +68,8 @@ export interface KindDocument {
   id?: string;
   display_name?: string;
   description?: string;
+  /** Words that also name the Kind when a text is resolved to the schema. */
+  aliases?: string[];
   /** Attribute api names. */
   primary_key?: string[];
   title_attribute?: string;
