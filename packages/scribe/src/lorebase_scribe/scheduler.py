@@ -18,6 +18,8 @@ Each tick of the leader:
   with its `dry_run` mode;
 - queues an `embeddings` pass per Domain every `embeddings_interval_s` (an identical queued
   pass is reused);
+- queues a `value_index` pass per Domain every `value_index_interval_s` (reused like the
+  embedding pass; a Domain whose default branch did not move costs one read);
 - queues a `reconcile_sweep` of each Domain's default branch every
   `scribe.reconciliation.sweep_interval_s` when it is above 0 (reused like the embedding pass);
 - queues a `source_sync` job for each Source whose `schedule` fired, read from the schema of
@@ -55,12 +57,14 @@ from lorebase_store.jobs import (
     GC_JOB,
     RECONCILE_SWEEP_JOB,
     SOURCE_SYNC_JOB,
+    VALUE_INDEX_JOB,
     embeddings_payload,
     enqueue_job,
     queue_depth,
     reconcile_sweep_payload,
     requeue_stale,
     source_sync_payload,
+    value_index_payload,
 )
 from lorebase_store.repositories import DomainRepository, MaterializedRepository, scope_to_domain
 from lorebase_store.settings import JobSettings, WriteSettings
@@ -235,6 +239,7 @@ class Scheduler:
         gc = parse_cron(self._settings.gc_schedule) if self._settings.gc_schedule else None
         embed = self._interval_due(EMBEDDINGS_JOB, self._settings.embeddings_interval_s, now)
         sweep = self._interval_due(RECONCILE_SWEEP_JOB, self._reconcile_interval_s, now)
+        values = self._interval_due(VALUE_INDEX_JOB, self._settings.value_index_interval_s, now)
         self._gc_queued = 0
         queued: list[int] = []
         after: str | None = None
@@ -267,6 +272,16 @@ class Scheduler:
                             EMBEDDINGS_JOB,
                             domain_id=domain.id,
                             payload=embeddings_payload(),
+                            unique=True,
+                        )
+                    )
+                if values:
+                    queued.append(
+                        await enqueue_job(
+                            session,
+                            VALUE_INDEX_JOB,
+                            domain_id=domain.id,
+                            payload=value_index_payload(),
                             unique=True,
                         )
                     )

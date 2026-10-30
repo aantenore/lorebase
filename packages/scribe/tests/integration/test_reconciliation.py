@@ -468,6 +468,7 @@ async def test_sweep_job_continues_and_is_scheduled(
             webhook_interval_s=0,
             gc_schedule=None,
             embeddings_interval_s=0,
+            value_index_interval_s=0,
             audit_verify_interval_s=0,
             source_schedules=False,
         ),

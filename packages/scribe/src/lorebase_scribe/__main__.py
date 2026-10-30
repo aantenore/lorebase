@@ -7,6 +7,9 @@ lorebase-scribe sync DOMAIN SOURCE [--dry-run]
 lorebase-scribe embeddings DOMAIN [--branch B]... [--reindex] [--prune]
                                      compute missing embeddings now (backfill) and print
                                      the report
+lorebase-scribe value-index DOMAIN [--rebuild]
+                                     bring the value index selection in line with the default
+                                     branch now, or recount every value (rebuild)
 lorebase-scribe modes clear          forget the structured output modes remembered per chat
                                      endpoint
 """
@@ -26,6 +29,7 @@ from lorebase_platform.telemetry import setup_telemetry
 from lorebase_scribe.service import open_scribe
 from lorebase_scribe.sources import SourceSync
 from lorebase_store.endpoint_modes import clear_modes
+from lorebase_store.values import run_value_index
 
 SERVICE_NAME = "scribe"
 
@@ -60,6 +64,15 @@ def _parser() -> argparse.ArgumentParser:
         "--prune",
         action="store_true",
         help="After a complete pass, delete the vectors of every other model.",
+    )
+    value_index = commands.add_parser(
+        "value-index", help="Bring the value index of a Domain up to date now."
+    )
+    value_index.add_argument("domain")
+    value_index.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Recount every value from the Records (repair, or an install upgraded in place).",
     )
     modes = commands.add_parser("modes", help="Structured output modes of the chat endpoints.")
     modes.add_argument("action", choices=["clear"], help="Forget every remembered mode.")
@@ -122,6 +135,15 @@ async def _embeddings(
         return {"passes": reports, "complete": report.complete}
 
 
+async def _value_index(settings: Settings, domain: str, rebuild: bool) -> dict[str, object]:
+    async with open_scribe(settings) as scribe:
+        context = scribe.context
+        report = await run_value_index(
+            context.sessions, domain, settings=context.runtime.settings, rebuild_all=rebuild
+        )
+        return report.as_dict()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Load settings, configure logging and telemetry, then run the command."""
     args = _parser().parse_args(argv)
@@ -143,6 +165,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if result["complete"] else 1
         elif args.command == "modes":
             sys.stdout.write(json.dumps(asyncio.run(_modes_clear(settings))) + "\n")
+        elif args.command == "value-index":
+            report = asyncio.run(_value_index(settings, args.domain, args.rebuild))
+            sys.stdout.write(json.dumps(report, default=str) + "\n")
         elif args.command == "sync":
             report = asyncio.run(_sync(settings, args.domain, args.source, args.dry_run))
             sys.stdout.write(json.dumps(report, default=str) + "\n")

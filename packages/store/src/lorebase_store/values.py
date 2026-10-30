@@ -37,13 +37,14 @@ from typing import Any
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.types import Text
 
 from lorebase_core.model import Attribute, Kind, Schema
 from lorebase_core.types import AttributeType
 from lorebase_store.embeddings import branch_schema, branch_schema_hash
 from lorebase_store.layout import BranchLayout, escape_colons
+from lorebase_store.repositories.scope import scope_to_domain
 from lorebase_store.runtime import StoreRuntime, default_runtime
 from lorebase_store.settings import StoreSettings, ValueIndexSettings
 from lorebase_store.telemetry import record_definer_call
@@ -337,6 +338,22 @@ async def rebuild(
     return report
 
 
+async def run_value_index(
+    sessions: async_sessionmaker[AsyncSession],
+    domain_id: str,
+    *,
+    settings: StoreSettings,
+    rebuild_all: bool = False,
+) -> SelectionReport:
+    """One pass over a Domain in its own transaction, in the Domain's row-level security
+    scope: `sync_selection`, or `rebuild` with `rebuild_all`."""
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, domain_id)
+        if rebuild_all:
+            return await rebuild(session, domain_id, settings=settings)
+        return await sync_selection(session, domain_id, settings=settings)
+
+
 # Reads ------------------------------------------------------------------------------------
 
 
@@ -445,6 +462,37 @@ async def similar_values(
         }
         found.extend(_hits((await session.execute(_SIMILAR_SQL, params)).all()))
     return found
+
+
+_INDEXED_COUNTS = text(
+    "SELECT value, records FROM mat_values WHERE domain_id = :domain AND branch = :branch "
+    "AND kind_id = :kind AND attribute_id = :attribute AND value = ANY(CAST(:wanted AS text[]))"
+)
+
+
+async def indexed_counts(
+    session: AsyncSession,
+    layout: BranchLayout,
+    kind_id: str,
+    attribute_id: str,
+    values: Sequence[str],
+) -> dict[str, int]:
+    """How many rows of a full branch hold each of `values` in a held Attribute, from the
+    index (0 for a value it does not hold); an overlay needs `live_counts`."""
+    if layout.overlay:
+        raise ValueError("an overlay's index holds its own rows only: use live_counts")
+    rows = await session.execute(
+        _INDEXED_COUNTS,
+        {
+            "domain": layout.domain_id,
+            "branch": layout.branch,
+            "kind": kind_id,
+            "attribute": attribute_id,
+            "wanted": list(values),
+        },
+    )
+    counts = {str(v): int(n) for v, n in rows.all()}
+    return {v: counts.get(v, 0) for v in values}
 
 
 async def live_counts(

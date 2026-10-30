@@ -16,6 +16,7 @@
 | `vault.rotate` | `{"after": [domain id, token]}` optional | `lorebase_store.vault.rotate` |
 | `reconcile_sweep` | `{"branch", "resume"}` optional, Domain set | `ReconcileSweep.run` |
 | `document_version_check` | `{"document", "mode", "resume"}`, Domain set | `DocumentVersionCheck` |
+| `value_index` | `{"rebuild": bool}` optional, Domain set | `values.run_value_index` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -53,6 +54,10 @@ A `document_version_check` job (design 9.2) that found more than
 `scribe.extraction.versions.max_values_per_job` values to look at queues its continuation (same
 document and mode plus `resume`) and succeeds. Keeper queues one when a document is retired;
 an `extraction` job queues one for each new version of a key it read, once it finished.
+
+A `value_index` job (design 8.9) brings the Domain's value index selection in line with its
+default branch (nothing to do while that branch and the settings are unchanged), or recounts
+every value with `rebuild`.
 
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
@@ -108,6 +113,7 @@ from lorebase_store.jobs import (
     RECONCILE_SWEEP_JOB,
     SENSITIVITY_REFRESH_JOB,
     SOURCE_SYNC_JOB,
+    VALUE_INDEX_JOB,
     VAULT_ROTATE_JOB,
     JobRow,
     document_version_check_payload,
@@ -123,6 +129,7 @@ from lorebase_store.materialize import (
 )
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.storage import constraints_only
+from lorebase_store.values import run_value_index
 from lorebase_store.vault import rotate
 from lorebase_store.webhooks import WebhookSettings, deliver_pending
 
@@ -148,6 +155,7 @@ JOB_TYPES = (
     VAULT_ROTATE_JOB,
     RECONCILE_SWEEP_JOB,
     DOCUMENT_VERSION_CHECK_JOB,
+    VALUE_INDEX_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -512,6 +520,15 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
                 )
         return result
 
+    async def value_index(job: JobRow) -> Mapping[str, Any]:
+        report = await run_value_index(
+            context.sessions,
+            _domain(job),
+            settings=context.runtime.settings,
+            rebuild_all=bool(job.payload.get("rebuild", False)),
+        )
+        return report.as_dict()
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -528,6 +545,7 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         VAULT_ROTATE_JOB: vault_rotate,
         RECONCILE_SWEEP_JOB: reconcile_sweep,
         DOCUMENT_VERSION_CHECK_JOB: document_version_check,
+        VALUE_INDEX_JOB: value_index,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

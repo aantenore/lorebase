@@ -99,6 +99,13 @@ class SchedulerSettings(SectionModel):
         description="Queue an embedding pass of every Domain this often; on a branch whose "
         "head did not move a pass reads its schema and one key. 0 disables it.",
     )
+    value_index_interval_s: float = Field(
+        default=300.0,
+        ge=0,
+        description="Queue a value index pass of every Domain this often (store.values): the "
+        "Attributes it holds follow the default branch's schema and distinct values; a Domain "
+        "whose default branch did not move costs one read. 0 disables it.",
+    )
     audit_verify_interval_s: float = Field(
         default=86400.0,
         ge=0,
