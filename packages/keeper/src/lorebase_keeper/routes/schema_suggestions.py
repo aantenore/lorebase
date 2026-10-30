@@ -23,7 +23,9 @@ Vocabulary suggestions (`kind_alias`, `attribute_alias`, `value_alias`,
 `lorebase_resolve` matched to nothing: `name` is the alias, `attribute` the Attribute changed,
 `value` the stored value an alias stands for, `description` the proposed description, and the
 examples are the missed phrases with their counts. They are listed and decided like the others;
-one whose Attribute the caller may not read values of is listed `withheld`.
+one whose Kind the caller may not read Records of (`data.read` for that Kind) or whose
+Attribute it may not read values of is listed `withheld`: without the alias (`name` is
+`(withheld)`), phrases, value and description, and it cannot be accepted by that caller.
 
 `:merge` folds the pending Attribute suggestions stored before variants were merged on arrival
 into the best supported one of each set (`schema.suggestions.merge_similarity`); it is safe to
@@ -81,6 +83,8 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 }
 
 Read = Annotated[Access, Depends(require(Permission.DOCUMENT_READ))]
+WITHHELD = "(withheld)"
+"""The name of a vocabulary suggestion listed to a caller who may not see its phrases."""
 
 
 class TypeGuessOut(BaseModel):
@@ -193,16 +197,17 @@ def _out(view: service.SuggestionView) -> SuggestionOut:
     guess = view.guess
     value = row.payload.get("value")
     description = row.payload.get("description")
+    vocabulary_withheld = view.withheld and view.vocabulary
     return SuggestionOut(
         id=row.id,
         type=row.suggestion_type,
-        name=row.name,
+        name=WITHHELD if vocabulary_withheld else row.name,
         kind=view.kind,
         target=view.target,
         attribute=view.attribute,
         value=value if isinstance(value, str) and not view.withheld else None,
         description=description if isinstance(description, str) and not view.withheld else None,
-        labels=[] if view.withheld and view.attribute is not None else list(row.labels),
+        labels=[] if vocabulary_withheld else list(row.labels),
         support=row.support,
         documents=row.documents,
         confidence=row.confidence,
@@ -236,12 +241,20 @@ def _out(view: service.SuggestionView) -> SuggestionOut:
 
 async def _masking(
     store: StoreDep, auth: AuthRuntime, principal: Principal, domain_id: str, settings: Any
-) -> Masking:
+) -> tuple[Masking, frozenset[str]]:
+    """The caller's masking, and the ids of the Kinds whose Records it may read (`data.read`
+    for the Kind): vocabulary suggestions of other Kinds are withheld."""
     async with store.sessions() as session, session.begin():
         await require_domain(session, domain_id)
         reference = await default_schema(session, domain_id, store.runtime)
     masking = await masking_for(auth.authorizer, principal, domain_id, reference, settings)
-    return masking if reference is None else masking.over(reference)
+    readable: set[str] = set()
+    for kind in [] if reference is None else reference.kinds.values():
+        if await auth.authorizer.allows(
+            principal, Permission.DATA_READ, domain_id, AccessContext(kind=kind.api_name)
+        ):
+            readable.add(kind.id)
+    return (masking if reference is None else masking.over(reference)), frozenset(readable)
 
 
 @router.get(SUGGESTIONS, summary="List schema suggestions", responses=_ERRORS)
@@ -261,11 +274,14 @@ async def list_suggestions(
 ) -> Page[SuggestionOut]:
     """Kinds, Attributes and Relations extraction found outside the schema, with support,
     examples, samples and, for Attributes, the type their samples suggest."""
-    masking = await _masking(store, auth, access.principal, domain_id, keeper.reads.sensitivity)
+    masking, readable = await _masking(
+        store, auth, access.principal, domain_id, keeper.reads.sensitivity
+    )
     found = await service.page(
         store,
         domain_id,
         masking,
+        readable=readable,
         statuses=status or [],
         types=type_ or [],
         all_support=all_,
@@ -301,7 +317,7 @@ async def decide_suggestions(
             await authorize(request, auth, principal, permission, domain_id, context)
     else:
         await authorize(request, auth, principal, Permission.SCHEMA_WRITE, domain_id)
-    masking = await _masking(store, auth, principal, domain_id, keeper.reads.sensitivity)
+    masking, readable = await _masking(store, auth, principal, domain_id, keeper.reads.sensitivity)
     try:
         outcome = await service.decide(
             store,
@@ -312,6 +328,7 @@ async def decide_suggestions(
             branches=keeper.branches,
             proposals=keeper.proposals,
             masking=masking,
+            readable=readable,
         )
     except CommitError as error:
         raise commit_problem(

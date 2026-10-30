@@ -160,9 +160,10 @@ class ResolveMissSettings(SectionModel):
     `lorebase_store.resolve_misses`).
 
     The phrases are free text typed by callers (a name searched for may be personal data):
-    off by default, kept at most `retention_days` after they were last seen, deleted with
-    their Domain, and never recorded for callers without `keeper.resolve_misses.permission`
-    or for requests that opt out. Only digests of the callers are kept, to count them.
+    off by default, kept at most `retention_days` after they were last seen (and so are the
+    vocabulary suggestions quoting them), deleted with their Domain, and never recorded for
+    callers without `search.resolve.misses.permission` or for requests that opt out. Only
+    unkeyed digests of the callers are kept, to count them.
     """
 
     enabled: bool = Field(
@@ -174,7 +175,8 @@ class ResolveMissSettings(SectionModel):
         default=30.0,
         gt=0,
         description="A phrase not seen for this long is deleted by the next consolidation "
-        "pass (and so are its counts).",
+        "pass, with its counts and its share of vocabulary suggestions (a suggestion left "
+        "without phrases is deleted, decided or not).",
     )
     min_phrase_chars: int = Field(
         default=3, ge=1, description="Shorter phrases are not recorded (filler words)."
@@ -193,14 +195,21 @@ class ResolveMissSettings(SectionModel):
     max_per_domain: int = Field(
         default=10_000,
         ge=1,
-        description="Phrases kept per Domain; new ones beyond are dropped until pruning "
-        "makes room (known phrases keep counting).",
+        description="Phrases kept per Domain. A new phrase beyond evicts the least missed "
+        "(then least recently seen) phrase missed no more often than it; otherwise it is "
+        "dropped. Known phrases keep counting.",
+    )
+    max_phrases_per_caller: int = Field(
+        default=500,
+        ge=1,
+        description="Phrases one caller alone (the only digest of a phrase) may hold per "
+        "Domain; its further new phrases are dropped, so one caller cannot fill the Domain.",
     )
     max_callers: int = Field(
         default=20,
         ge=1,
         le=1000,
-        description="Distinct callers counted per phrase (by keyed digest, never by name); the "
+        description="Distinct callers counted per phrase (by digest, never by name); the "
         "count stops at this bound.",
     )
     prune_batch: int = Field(
@@ -222,8 +231,15 @@ class CoverageSettings(SectionModel):
     max_records_per_kind: int = Field(
         default=1_000_000,
         ge=1,
-        description="Kinds with more Records are counted over this many of them (in key "
-        "order) and their statistics marked sampled.",
+        description="Kinds with more Records are counted over the first this many of them "
+        "in key order, their missing counts scaled to the Kind and marked sampled.",
+    )
+    min_interval_s: float = Field(
+        default=300.0,
+        ge=0,
+        description="A Kind counted less than this long ago is not recounted although the "
+        "head moved (reads mark its statistics approximate meanwhile); Records unseen by "
+        "Sources are recounted by every pass.",
     )
     statement_timeout_ms: int = Field(
         default=120_000,

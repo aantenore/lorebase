@@ -389,3 +389,25 @@ def test_vocabulary_patch_refuses_sensitive_attributes(schema: Schema) -> None:
         )
     assert error.value.suggestion == "s9"
     assert "sensitive" in str(error.value)
+
+
+def test_vocabulary_patch_refuses_aliases_that_would_be_ambiguous(schema: Schema) -> None:
+    supplier = kind(schema, "Supplier")
+    status = attribute(schema, "Supplier", "status")
+    tier = attribute(schema, "Supplier", "tier")
+    same_alias = [
+        Suggestion("s1", SuggestionType.ATTRIBUTE_ALIAS, "standing", kind=supplier, target=status),
+        Suggestion("s2", SuggestionType.ATTRIBUTE_ALIAS, "standing", kind=supplier, target=tier),
+    ]
+    with pytest.raises(SuggestionError) as twice:
+        suggestion_patch(schema, same_alias, OPTIONS)
+    assert twice.value.suggestion == "s2"
+    assert "Attribute Supplier.status" in str(twice.value)
+    names_an_attribute = Suggestion("s3", SuggestionType.KIND_ALIAS, "legal name", kind=supplier)
+    with pytest.raises(SuggestionError, match=r"Attribute Supplier\.legal_name"):
+        suggestion_patch(schema, [names_an_attribute], OPTIONS)
+    names_a_value = Suggestion(
+        "s4", SuggestionType.ATTRIBUTE_ALIAS, "terminated", kind=supplier, target=tier
+    )
+    with pytest.raises(SuggestionError, match=r"a value of Supplier\.status"):
+        suggestion_patch(schema, [names_a_value], OPTIONS)

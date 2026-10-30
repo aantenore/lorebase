@@ -560,16 +560,16 @@ class ConsolidationSettings(SectionModel):
         default=3, ge=1, description="Misses a phrase needs before it is considered."
     )
     min_callers: int = Field(
-        default=1,
+        default=2,
         ge=1,
-        description="Distinct callers a phrase needs before it is considered (raise it so "
-        "that one agent's habit is not proposed).",
+        description="Distinct callers a phrase needs before it is considered, so that one "
+        "agent's habit (or noise) is not proposed; 1 for a single-agent installation.",
     )
     max_phrases: int = Field(
         default=200, ge=1, description="Phrases considered per pass, the most missed first."
     )
     value_similarity: float = Field(
-        default=0.3,
+        default=0.4,
         gt=0,
         le=1,
         description="Least trigram similarity between a phrase and an indexed value for the "

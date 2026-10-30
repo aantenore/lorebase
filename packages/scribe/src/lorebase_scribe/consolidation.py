@@ -6,7 +6,10 @@ other (`keeper.services.schema_suggestions`).
 A pass over one Domain:
 
 1. deletes the misses not seen for `store.resolve_misses.retention_days` (also when recording
-   is off, so phrases never outlive the retention period);
+   is off, so phrases never outlive the retention period), and removes their shares from the
+   vocabulary suggestions quoting them; a suggestion left without phrases is deleted, decided
+   or not, so no phrase outlives the retention period there either. A pending suggestion also
+   loses the share of a phrase this pass links elsewhere, or no longer links (step 3);
 2. reads the phrases of the default branch missed at least `scribe.consolidation.min_misses`
    times by at least `min_callers` callers (`max_phrases`, the most missed first);
 3. links each phrase to the element it nearly matched, the near misses resolution itself
@@ -23,9 +26,15 @@ A pass over one Domain:
    misses, so a later pass replaces what this one counted. Decided suggestions stay decided;
 6. optionally (`scribe.consolidation.llm.enabled`, off by default) asks the chat model of
    task `schema_consolidation` for a description of the Attributes agents missed most. The
-   model sees the Kind and Attribute names, types and descriptions and the missed phrases,
-   never a value; an answer must quote the phrases it accounts for, verbatim from the list,
-   or it is discarded.
+   model sees the Kind and Attribute names, types and descriptions and the phrases linked to
+   the Attribute's name (never those linked to a value, near-copies of stored values); an
+   answer must quote the phrases it accounts for, verbatim from the list, or it is discarded.
+   Phrases are free text and may hold personal data: route the task to a model the data may
+   reach.
+
+Steps 1 to 3 run in one short transaction, the model calls outside any transaction, and step 5
+in a second short one; both transactions take the Domain's miss lock, so concurrent passes
+(scheduled and by hand) and Keeper's writers of one Domain take turns.
 
 Misses are what callers typed; nothing here copies them anywhere but into the suggestions
 reviewers read (`document.read`), and suggestions of an Attribute a reviewer may not read
@@ -39,6 +48,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from sqlalchemy import text
@@ -63,7 +73,14 @@ from lorebase_store import values as value_index
 from lorebase_store.embeddings import branch_schema
 from lorebase_store.layout import BranchLayout
 from lorebase_store.repositories import SchemaSuggestionRepository, scope_to_domain
-from lorebase_store.resolve_misses import MissRow, frequent_misses, prune_misses
+from lorebase_store.repositories.suggestions import PENDING, share_branch, share_phrase
+from lorebase_store.resolve_misses import (
+    MissRow,
+    frequent_misses,
+    live_misses,
+    lock_domain,
+    prune_misses,
+)
 from lorebase_store.runtime import StoreRuntime
 
 log = logging.getLogger("lorebase.scribe.consolidation")
@@ -117,6 +134,10 @@ class ConsolidationReport:
     created: int = 0
     updated: int = 0
     described: int = 0
+    swept: int = 0
+    """Suggestions that lost the shares of pruned or re-linked phrases."""
+    removed: int = 0
+    """Suggestions deleted because no phrase was left to support them."""
     discarded: dict[str, int] = field(default_factory=dict)
 
     def discard(self, reason: str, count: int = 1) -> None:
@@ -132,6 +153,8 @@ class ConsolidationReport:
             "created": self.created,
             "updated": self.updated,
             "described": self.described,
+            "swept": self.swept,
+            "removed": self.removed,
             "discarded": dict(self.discarded),
         }
 
@@ -189,10 +212,36 @@ def best(links: Sequence[Link]) -> Link | None:
     return ranked[0] if ranked else None
 
 
+def miss_key(branch: str, phrase: str) -> str:
+    """The share key of a missed phrase in a vocabulary suggestion."""
+    return f"miss:{branch}:{phrase}"
+
+
+def _keep_share(
+    row: Mapping[str, Any],
+    key: str,
+    *,
+    live: set[tuple[str, str]],
+    considered: set[str],
+    linked: Mapping[str, str],
+) -> bool:
+    """Whether a vocabulary suggestion keeps the share `key`: a phrase's share goes once the
+    phrase is pruned, and leaves a pending suggestion whose target is no longer the one this
+    pass links the phrase to (the phrase was considered and linked elsewhere, or not at all)."""
+    if not key.startswith("miss:"):
+        return True
+    branch, phrase = share_branch(key), share_phrase(key)
+    if branch is None or phrase is None or (branch, phrase) not in live:
+        return False
+    if row.get("status") == PENDING and key in considered:
+        return linked.get(key) == row.get("fingerprint")
+    return True
+
+
 def observation(link: Link, branch: str) -> Observation:
     """The suggestion observation of a link: its share keyed by phrase, weighed by misses."""
     miss = link.miss
-    key = f"miss:{branch}:{miss.phrase}"
+    key = miss_key(branch, miss.phrase)
     return Observation(
         type=link.type,
         label=miss.phrase,
@@ -234,53 +283,73 @@ class ConsolidationPass:
         self._chat = chat
 
     async def run(self, domain_id: str, *, job_id: str = "manual") -> ConsolidationReport:
+        """Prune, sweep and link in one short transaction, call the model (if on) outside
+        any transaction, then record in a second short one; both take the Domain's miss lock
+        (`lock_domain`), so passes and Keeper's writers of one Domain take turns."""
         report = ConsolidationReport(domain_id)
         misses = self._runtime.settings.resolve_misses
         options = self._runtime.schema.suggestions
         now = self._clock()
         async with self._sessions() as session, session.begin():
             await scope_to_domain(session, domain_id)
+            await lock_domain(session, domain_id)
             report.pruned = await prune_misses(
                 session,
                 domain_id,
                 now - timedelta(days=misses.retention_days),
                 batch=misses.prune_batch,
             )
-            if not misses.enabled:
-                report.skipped = "store.resolve_misses is off"
-                return report
             branch = (
                 await session.execute(_DEFAULT_BRANCH, {"domain": domain_id})
             ).scalar_one_or_none()
             schema = None if branch is None else await branch_schema(session, domain_id, branch)
-            if branch is None or schema is None:
-                report.skipped = "not materialized"
-                return report
-            rows = await frequent_misses(
-                session,
-                domain_id,
-                branch,
-                min_misses=self._settings.min_misses,
-                min_callers=self._settings.min_callers,
-                limit=self._settings.max_phrases,
-            )
-            report.phrases = len(rows)
-            links = await self._links(
-                session, BranchLayout(domain_id, branch), schema, rows, report
-            )
-            observations = [observation(link, branch) for link in links]
-            observations += await self._describe(schema, links, branch, report)
-            if observations:
-                outcome = await SchemaSuggestionRepository(session, domain_id).record(
-                    observations,
-                    job_id=job_id,
-                    options=options,
-                    now=now,
-                    new_id=lambda: f"{SUGGESTION_PREFIX}_{new_ulid()}",
+            rows: list[MissRow] = []
+            links: list[Link] = []
+            if misses.enabled and branch is not None and schema is not None:
+                rows = await frequent_misses(
+                    session,
+                    domain_id,
+                    branch,
+                    min_misses=self._settings.min_misses,
+                    min_callers=self._settings.min_callers,
+                    limit=self._settings.max_phrases,
                 )
-                report.created, report.updated = outcome.created, outcome.updated
-                if outcome.dropped:
-                    report.discard("untracked", outcome.dropped)
+                report.phrases = len(rows)
+                layout = BranchLayout(domain_id, branch)
+                links = await self._links(session, layout, schema, rows, report)
+            observations = [observation(link, branch or "") for link in links]
+            live = await live_misses(session, domain_id)
+            considered = {miss_key(branch or "", row.phrase) for row in rows}
+            linked = {o.document_id: o.fingerprint for o in observations}
+            swept = await SchemaSuggestionRepository(session, domain_id).sweep_vocabulary(
+                partial(_keep_share, live=live, considered=considered, linked=linked),
+                lambda branch_, phrase: (branch_, phrase) in live,
+                options,
+                now,
+            )
+            report.swept, report.removed = swept.changed, swept.deleted
+        if not misses.enabled:
+            report.skipped = "store.resolve_misses is off"
+            return report
+        if branch is None or schema is None:
+            report.skipped = "not materialized"
+            return report
+        observations += await self._describe(schema, links, branch, report)
+        if not observations:
+            return report
+        async with self._sessions() as session, session.begin():
+            await scope_to_domain(session, domain_id)
+            await lock_domain(session, domain_id)
+            outcome = await SchemaSuggestionRepository(session, domain_id).record(
+                observations,
+                job_id=job_id,
+                options=options,
+                now=now,
+                new_id=lambda: f"{SUGGESTION_PREFIX}_{new_ulid()}",
+            )
+        report.created, report.updated = outcome.created, outcome.updated
+        if outcome.dropped:
+            report.discard("untracked", outcome.dropped)
         return report
 
     async def _links(
@@ -364,7 +433,9 @@ class ConsolidationPass:
             return []
         by_attribute: dict[tuple[str, str], list[MissRow]] = defaultdict(list)
         for link in links:
-            if link.attribute_id is not None:
+            # Only phrases standing for the Attribute itself: those linked to a value are
+            # near-copies of stored values and never reach the model.
+            if link.type is SuggestionType.ATTRIBUTE_ALIAS and link.attribute_id is not None:
                 by_attribute[(link.kind_id, link.attribute_id)].append(link.miss)
         ranked = sorted(
             (

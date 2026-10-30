@@ -3,6 +3,7 @@ aggregation of the recorder before its batch write."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -91,3 +92,43 @@ async def test_recorder_aggregates_then_writes_one_batch(
     assert by_phrase["colour"].misses == 3
     assert by_phrase["colour"].callers == ("c1", "c2")  # bounded by max_callers
     assert by_phrase["teal"].first_seen == now
+
+
+async def test_recorder_bounds_new_phrases_per_caller_and_finishes_a_write_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written: list[MissSighting] = []
+    started = asyncio.Event()
+
+    async def record(_: Any, batch: Sequence[MissSighting], *, settings: Any) -> int:
+        started.set()
+        await asyncio.sleep(0.05)  # a slow write, in flight when the recorder closes
+        written.extend(batch)
+        return len(batch)
+
+    class Sessions:
+        def __call__(self) -> Sessions:
+            return self
+
+        async def __aenter__(self) -> Sessions:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        def begin(self) -> Sessions:
+            return self
+
+    monkeypatch.setattr(module, "record_misses", record)
+    recorder = MissRecorder(
+        Sessions(),  # type: ignore[arg-type]
+        ResolveMissSettings(enabled=True),
+        ResolveMissRecording(max_new_per_caller=2, flush_interval_s=0.01),
+    )
+    assert recorder.offer("shop", "main", ["aa1", "aa2", "aa3"], "spammer") == 2
+    assert recorder.offer("shop", "main", ["aa1"], "spammer") == 1  # known phrases count
+    assert recorder.offer("other", "main", ["bb1"], "spammer") == 1  # per Domain
+    await asyncio.wait_for(started.wait(), 1)
+    await recorder.aclose()
+    assert sorted(s.phrase for s in written) == ["aa1", "aa2", "bb1"]
+    assert {s.phrase: s.misses for s in written}["aa1"] == 2

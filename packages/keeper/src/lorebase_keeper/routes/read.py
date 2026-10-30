@@ -535,6 +535,11 @@ async def resolve_words(
     return await _sent(session, runtime, point, body, resolution.response)
 
 
+COMPLETE = frozenset({"other levels matched", "no query_vector", "disabled"})
+"""Why a level may not have run in a resolution whose misses are recorded: it had nothing left
+to do, needs a vector the caller did not send, or is off."""
+
+
 async def _record_misses(
     runtime: ReadRuntime,
     access: ReadGuard,
@@ -543,10 +548,15 @@ async def _record_misses(
     resolution: resolve.Resolution,
 ) -> None:
     """Hand the missed phrases of a head read to the recorder: only when recording is on,
-    the request did not opt out and the caller holds `search.resolve.misses.permission`
-    Domain-wide."""
+    the request did not opt out, searched every Kind with every enabled level (a phrase
+    missed in a narrowed search may exist elsewhere), and the caller holds
+    `search.resolve.misses.permission` Domain-wide."""
     recorder = runtime.misses
     if recorder is None or not body.record_misses or body.at is not None:
+        return
+    if body.levels is not None or body.kinds is not None:
+        return
+    if any(s.reason not in COMPLETE for s in resolution.response.skipped):
         return
     phrases = missed_phrases(resolution.unknown, resolution.weak, recorder.store)
     if not phrases:
