@@ -94,6 +94,7 @@ async def _sync(settings: Settings, domain: str, source: str, dry_run: bool) -> 
             context.settings.sources,
             principal=context.settings.worker.principal,
             connectors=context.connectors,
+            approval_rules=context.approval_rules,
         )
         return (await sync.run(domain, source, dry_run=dry_run)).as_dict()
 

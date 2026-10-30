@@ -20,6 +20,7 @@ from lorebase_scribe.scheduler import Scheduler
 from lorebase_scribe.settings import ScribeSettings, scribe_settings
 from lorebase_scribe.sources.connectors import ConnectorFactory, default_connector
 from lorebase_scribe.worker import Worker
+from lorebase_store.approval_rules import approval_rule_settings
 from lorebase_store.db import create_engine
 from lorebase_store.embeddings import SchemaCache
 from lorebase_store.endpoint_modes import StoreModeMemory
@@ -118,6 +119,7 @@ async def open_scribe(
                 inference=inference,
                 embedding_models=embedding_models,
                 embedding_templates=embedding_templates,
+                approval_rules=approval_rule_settings(settings),
             )
             worker = Worker(
                 sessions,

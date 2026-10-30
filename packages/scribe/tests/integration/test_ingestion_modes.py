@@ -20,6 +20,7 @@ from lorebase_inference import InferenceSettings
 from lorebase_scribe.extraction.parsing import MARKDOWN
 from lorebase_scribe.extraction.pipeline import ExtractionReport, ExtractionRun
 from lorebase_scribe.extraction.settings import ExtractionSettings
+from lorebase_store.approval_rules import ApprovalRuleSettings
 from lorebase_store.blobs import PostgresBlobStore
 from lorebase_store.models.enums import ItemDecision, ProposalStatus
 from lorebase_store.repositories import (
@@ -39,6 +40,9 @@ from .test_extraction import CONTRACT, REVIEW, THRESHOLD, extract
 
 pytestmark = pytest.mark.integration
 
+NO_APPROVALS = ApprovalRuleSettings(required_approvals=0)
+"""Rules under which a direct merge reaches the protected `main` (the seed protects it)."""
+
 
 @pytest.fixture
 async def schema(
@@ -53,6 +57,7 @@ def run_with(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
+    approval_rules: ApprovalRuleSettings | None = None,
     **settings: Any,
 ) -> ExtractionRun:
     return ExtractionRun(
@@ -62,6 +67,7 @@ def run_with(
         InferenceSettings(),
         principal="svc_scribe",
         clock=clock,
+        approval_rules=approval_rules,
     )
 
 
@@ -74,6 +80,17 @@ async def set_extraction(
         domain = await domains.get(DOMAIN)
         assert domain is not None
         await domains.update(DOMAIN, settings={**domain.settings, "extraction": extraction})
+
+
+async def update_domain(
+    sessions: async_sessionmaker[AsyncSession], settings: dict[str, Any]
+) -> None:
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        domains = DomainRepository(session)
+        domain = await domains.get(DOMAIN)
+        assert domain is not None
+        await domains.update(DOMAIN, settings={**domain.settings, **settings})
 
 
 async def protect_main(sessions: async_sessionmaker[AsyncSession], protected: bool) -> None:
@@ -174,7 +191,8 @@ async def test_direct_merges_a_tier_0_job_with_nothing_pending(
     # A threshold low enough that the contract's items are all accepted at once; loosening the
     # threshold is allowed here by the installation.
     await set_extraction(sessions, {"mode": "direct", "auto_accept_threshold": 0.0})
-    run = run_with(sessions, runtime, clock, domain_may_loosen=("mode", "auto_accept_threshold"))
+    loosen = ("mode", "auto_accept_threshold")
+    run = run_with(sessions, runtime, clock, NO_APPROVALS, domain_may_loosen=loosen)
     report = await extract(run, sessions, CONTRACT)
     assert report.pending == 0
     assert report.accepted > 0
@@ -224,6 +242,65 @@ async def test_direct_into_a_protected_branch_needs_the_installation(
     report = await extract(run, sessions, CONTRACT)
     assert report.direct_blocked == "protected"
     assert await proposal_status(sessions, report) is ProposalStatus.OPEN
+
+
+@pytest.mark.parametrize(
+    ("rules", "domain_settings", "held_by"),
+    [
+        (ApprovalRuleSettings(), {}, ["required_approvals"]),
+        (
+            ApprovalRuleSettings(required_approvals=0, required_approvals_from_stewards=1),
+            {},
+            ["required_approvals_from_stewards"],
+        ),
+        (
+            ApprovalRuleSettings(required_approvals=0, required_roles=["data_steward"]),
+            {},
+            ["required_roles"],
+        ),
+        (NO_APPROVALS, {"required_roles": ["data_steward"]}, ["required_roles"]),
+    ],
+    ids=["approvals", "stewards", "roles", "domain-override"],
+)
+async def test_direct_waits_for_the_approvals_a_protected_target_requires(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+    rules: ApprovalRuleSettings,
+    domain_settings: dict[str, Any],
+    held_by: list[str],
+) -> None:
+    await protect_main(sessions, True)
+    await set_extraction(sessions, {"mode": "direct", "auto_accept_threshold": 0.0})
+    if domain_settings:
+        await update_domain(sessions, domain_settings)
+    loosen = ("mode", "auto_accept_threshold")
+    run = run_with(sessions, runtime, clock, rules, domain_may_loosen=loosen)
+    report = await extract(run, sessions, CONTRACT)
+    assert (report.direct_blocked, report.blocking_rules, report.direct_merged) == (
+        "approvals",
+        held_by,
+        False,
+    )
+    assert report.as_dict()["blocking_rules"] == held_by
+    assert await proposal_status(sessions, report) is ProposalStatus.OPEN
+    assert await merge_audits(sessions) == []
+
+
+async def test_direct_into_a_protected_target_without_approval_rules_merges(
+    sessions: async_sessionmaker[AsyncSession],
+    runtime: StoreRuntime,
+    clock: Clock,
+    schema: Schema,
+) -> None:
+    await protect_main(sessions, True)
+    await set_extraction(sessions, {"mode": "direct", "auto_accept_threshold": 0.0})
+    loosen = ("mode", "auto_accept_threshold")
+    run = run_with(sessions, runtime, clock, NO_APPROVALS, domain_may_loosen=loosen)
+    report = await extract(run, sessions, CONTRACT)
+    assert (report.direct_blocked, report.direct_merged) == (None, True)
+    assert await proposal_status(sessions, report) is ProposalStatus.MERGED
 
 
 async def test_loosening_is_ignored_unless_the_installation_allows_it(

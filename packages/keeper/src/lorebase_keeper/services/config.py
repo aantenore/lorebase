@@ -14,6 +14,7 @@ from lorebase_core.infer import InferenceOptions
 from lorebase_core.model import SECRET_REFERENCE_PREFIX, DomainSlug
 from lorebase_core.tree import DEFAULT_LEAF_SIZE
 from lorebase_platform.settings import SectionModel
+from lorebase_store.approval_rules import ApprovalRuleSettings
 from lorebase_store.models.enums import PrincipalType
 
 #: How an uploaded file is read for schema inference.
@@ -151,31 +152,15 @@ class OperationSettings(SectionModel):
         return self
 
 
-class ProposalSettings(SectionModel):
+class ProposalSettings(ApprovalRuleSettings):
     """Proposals, reviews and merges (design 6.10, 10.3).
 
-    A Domain overrides `required_approvals`, `required_approvals_from_stewards` and
-    `required_roles` with its settings of the same names; its `merge_policy` setting holds the
-    merge policy options of new Proposals.
+    The approval rules (`required_approvals`, `required_approvals_from_stewards`,
+    `required_roles`) are `lorebase_store.approval_rules.ApprovalRuleSettings`, shared with the
+    automatic merges of Scribe; a Domain overrides each with its setting of the same name. Its
+    `merge_policy` setting holds the merge policy options of new Proposals.
     """
 
-    required_approvals: int = Field(
-        default=1,
-        ge=0,
-        description="Approvals a Proposal needs before it merges into a protected branch.",
-    )
-    required_approvals_from_stewards: int = Field(
-        default=0,
-        ge=0,
-        description="Of those, approvals that must come from the Proposal's assignees (design "
-        "10.7); the Proposal needs the larger of the two in all. 0 turns the rule off.",
-    )
-    required_roles: list[str] = Field(
-        default_factory=list,
-        description="RBAC roles that must each have approved a Proposal before it merges into "
-        "a protected branch: one counted approval from a principal holding the role who may "
-        "review the Proposal. Does not raise the approvals count; empty turns the rule off.",
-    )
     allow_self_approval: bool = Field(
         default=False,
         description="Whether authors may approve their own Proposals into protected branches; "

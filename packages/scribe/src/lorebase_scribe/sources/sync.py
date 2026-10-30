@@ -88,6 +88,11 @@ from lorebase_scribe.sources.mapping import (
     SourceDefinitionError,
 )
 from lorebase_scribe.telemetry import SOURCE_CHANGES, SOURCE_ROWS, tracer
+from lorebase_store.approval_rules import (
+    HELD_BY_APPROVALS,
+    ApprovalRuleSettings,
+    effective_rules,
+)
 from lorebase_store.auth import AuditRepository, NewAuditEntry
 from lorebase_store.commit import Change, ValidationFailedError, commit
 from lorebase_store.commit.schema import load_compiled
@@ -230,6 +235,10 @@ class SyncReport:
     proposal_id: str | None = None
     proposal_status: str | None = None
     merge_status: str | None = None
+    #: Why an automatic merge was not performed: `approvals` (the protected target's approval
+    #: rules, named in `blocking_rules`, require a person).
+    merge_blocked: str | None = None
+    blocking_rules: list[str] = field(default_factory=list)
     conflicts: int = 0
     errors: list[dict[str, JsonValue]] = field(default_factory=list)
     watermark: dict[str, JsonValue] | None = None
@@ -258,6 +267,8 @@ class SyncReport:
             "proposal": self.proposal_id,
             "proposal_status": self.proposal_status,
             "merge_status": self.merge_status,
+            "merge_blocked": self.merge_blocked,
+            "blocking_rules": list(self.blocking_rules),
             "conflicts": self.conflicts,
             "errors": list(self.errors),
             "watermark": self.watermark,
@@ -370,10 +381,12 @@ class SourceSync:
         clock: Clock = utc_now,
         reconciliation: ReconcileOptions | None = None,
         semantic: SemanticStage | None = None,
+        approval_rules: ApprovalRuleSettings | None = None,
     ) -> None:
         self._sessions = sessions
         self._reconciliation = reconciliation
         self._semantic = semantic
+        self._approval_rules = approval_rules or ApprovalRuleSettings()
         self._runtime = runtime
         self._settings = settings
         self._principal = principal
@@ -899,7 +912,7 @@ class SourceSync:
                 await self._resolve_local_edits(
                     session, domain.id, proposal, policy, delta, source, rules
                 )
-            result = await self._merge(session, domain.id, proposal, policy, mode, report)
+            result = await self._merge(session, domain, proposal, policy, mode, report)
             report.merge_status = result.attempt.status.value
             if result.computation is not None:
                 report.conflicts = result.computation.open_count
@@ -1062,13 +1075,13 @@ class SourceSync:
     async def _merge(
         self,
         session: AsyncSession,
-        domain_id: str,
+        domain: DomainRow,
         proposal: ProposalRow,
         policy: MergePolicy,
         mode: SourcePolicy,
         report: SyncReport,
     ) -> AttemptResult:
-        service = MergeService(session, domain_id, runtime=self._runtime, clock=self._clock)
+        service = MergeService(session, domain.id, runtime=self._runtime, clock=self._clock)
         request = MergeRequest(
             proposal=proposal,
             actor=self._principal,
@@ -1081,9 +1094,17 @@ class SourceSync:
             else self._reconciliation.merge_check,
         )
         automatic = mode in (SourcePolicy.AUTO_WHEN_CLEAN, SourcePolicy.AUTO_WITH_AUTHORITY)
-        if automatic and not self._settings.auto_merge_protected:
-            target = await RefRepository(session, domain_id).require(report.target)
-            automatic = not target.protected
+        if automatic:
+            target = await RefRepository(session, domain.id).require(report.target)
+            if target.protected and not self._settings.auto_merge_protected:
+                automatic = False
+            elif target.protected:
+                # No person reviewed it: the target's approval rules hold it for review.
+                rules = effective_rules(domain.settings, self._approval_rules).requiring
+                if rules:
+                    report.merge_blocked = HELD_BY_APPROVALS
+                    report.blocking_rules = list(rules)
+                    automatic = False
         if automatic:
             return await service.merge(request)
         return await service.recompute(request)

@@ -368,11 +368,15 @@ sets ([design 9.2](design.md#92-unstructured-extraction), AC-36). `extraction.mo
   never reaches a branch without a person.
 - **Direct merge.** Scribe merges the Proposal through the normal merge only when no item is
   pending, the target accepts it (a protected target only with
-  `scribe.extraction.direct_merge_protected`, default true), the merge has no Conflict and the
-  `reconciliation` check does not block it. It is audited as `proposal.merge` with
-  `mode: direct`, the job id and the new head. Otherwise the Proposal waits for review and the
-  job's result says why in `direct_blocked`: `tier`, `pending_items`, `protected`,
-  `reconciliation` or `conflicts` (the first that applies).
+  `scribe.extraction.direct_merge_protected`, default true, and only when its approval rules,
+  `keeper.proposals.required_approvals`, `required_approvals_from_stewards` and
+  `required_roles` or the Domain settings of those names, require no approval), the merge has
+  no Conflict and the `reconciliation` check does not block it. It is audited as
+  `proposal.merge` with `mode: direct`, the job id and the new head. Otherwise the Proposal
+  waits for review and the job's result says why in `direct_blocked`: `tier`,
+  `pending_items`, `protected`, `approvals` (with the rules in `blocking_rules`),
+  `reconciliation` or `conflicts` (the first that applies). The default branch is protected
+  and `required_approvals` defaults to 1: direct merges into it need `required_approvals: 0`.
 - **Job result.** The `extraction` job records `mode` (after the cap), `mode_capped`,
   `direct_blocked`, `direct_merged`, `merged_revision` and the `ignored_settings` it met.
 

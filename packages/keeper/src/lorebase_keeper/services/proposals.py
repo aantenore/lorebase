@@ -56,6 +56,7 @@ from lorebase_keeper.services.proposal_reads import (
 from lorebase_keeper.services.reconciliation_settle import settle_merged
 from lorebase_keeper.services.schema import SchemaGuard, schema_at
 from lorebase_keeper.services.stewards import Stewards, proposal_subject
+from lorebase_store.approval_rules import effective_rules
 from lorebase_store.merging import (
     AttemptResult,
     MergeRequest,
@@ -94,12 +95,6 @@ PROPOSAL_PREFIX = "prp"
 REVIEW_PREFIX = "prr"
 POLICY_KEY = "merge_policy"
 """Key of the merge policy in a Domain's settings and in a Proposal's `policies`."""
-APPROVALS_KEY = "required_approvals"
-"""Domain setting overriding `keeper.proposals.required_approvals`."""
-STEWARD_APPROVALS_KEY = "required_approvals_from_stewards"
-"""Domain setting overriding `keeper.proposals.required_approvals_from_stewards`."""
-ROLES_KEY = "required_roles"
-"""Domain setting overriding `keeper.proposals.required_roles`."""
 
 PROPOSAL_NOT_OPEN = ProblemType("proposal-not-open", 409, "Proposal is not open")
 APPROVALS_REQUIRED = ProblemType("approvals-required", 409, "Approvals required")
@@ -262,24 +257,15 @@ def proposal_policy(proposal: ProposalRow) -> MergePolicy:
 
 
 def required_approvals(domain: DomainRow, settings: ProposalSettings) -> int:
-    value = (domain.settings or {}).get(APPROVALS_KEY)
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    return settings.required_approvals
+    return effective_rules(domain.settings, settings).approvals
 
 
 def required_from_stewards(domain: DomainRow, settings: ProposalSettings) -> int:
-    value = (domain.settings or {}).get(STEWARD_APPROVALS_KEY)
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    return settings.required_approvals_from_stewards
+    return effective_rules(domain.settings, settings).from_stewards
 
 
 def required_role_names(domain: DomainRow, settings: ProposalSettings) -> tuple[str, ...]:
-    value = (domain.settings or {}).get(ROLES_KEY)
-    if isinstance(value, list) and all(isinstance(r, str) and r for r in value):
-        return tuple(dict.fromkeys(value))
-    return tuple(dict.fromkeys(settings.required_roles))
+    return effective_rules(domain.settings, settings).roles
 
 
 async def role_approval(
