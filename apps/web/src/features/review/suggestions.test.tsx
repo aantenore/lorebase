@@ -90,6 +90,18 @@ describe('Review: schema suggestions', () => {
     expect(within(outcome).getByText('create kinds.Notice')).toBeInTheDocument();
   });
 
+  it('updates the existing Kind once for its accepted vocabulary', async () => {
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const table = await tableOf();
+    await user.click(within(table).getByLabelText('Select vendor'));
+    await user.click(within(table).getByLabelText('Select paused'));
+    await user.click(screen.getByRole('button', { name: 'Accept selected' }));
+    const outcome = await screen.findByRole('region', { name: 'Last decision' });
+    expect(within(outcome).getAllByText('update kinds.Supplier')).toHaveLength(1);
+    expect(within(outcome).queryByText(/^create /)).toBeNull();
+  });
+
   it('shows the findings when the change set is invalid', async () => {
     const user = userEvent.setup();
     renderApp(PATH);
