@@ -1,4 +1,4 @@
-"""`import`, `record`, `query` and `search`: loading and reading Records and Links."""
+"""`import`, `record`, `query`, `search` and `resolve`: loading and reading Records and Links."""
 
 from __future__ import annotations
 
@@ -756,3 +756,75 @@ def search_command(
     )
     if result.semantic_truncated:
         app.out.info("the vector list is short: the index scan stopped at its bound; narrow --kind")
+
+
+def resolve_command(
+    ctx: typer.Context,
+    text: Annotated[str, typer.Argument(help="Words to ground, e.g. a question.", metavar="TEXT")],
+    kind: Annotated[
+        list[str] | None, typer.Option("--kind", help="Only look in this Kind. Repeatable.")
+    ] = None,
+    level: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--level",
+            help="exact, synonym, trigram or embedding (default: those the server enables). "
+            "Repeatable.",
+        ),
+    ] = None,
+    vector_file: Annotated[
+        str | None,
+        typer.Option(
+            "--vector-file",
+            help="Embedding of TEXT, enabling the embedding level when nothing else matched: a "
+            "JSON array, or the output of `lorebase-inference embed`; `-` reads standard input.",
+        ),
+    ] = None,
+    domain: DomainOpt = None,
+    branch: BranchOpt = None,
+    at: AtOpt = None,
+    limit: LimitOpt = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Ground the words of a text in Kinds, Attributes and stored values (with `where` fragments
+    in --json); it never runs a query."""
+    app = app_of(ctx, json_out)
+    vector = None if vector_file is None else query_vector(vector_file)
+    request = m.ResolveRequest.model_validate(
+        {
+            "text": text,
+            "kinds": kind,
+            "levels": level,
+            "query_vector": vector,
+            "branch": app.branch(branch),
+            "at": at,
+            "limit": limit or app.settings.list_limit,
+        }
+    )
+    result = app.client().records.resolve(app.domain(domain), request)
+
+    def rows() -> list[dict[str, Any]]:
+        return [
+            {**c.model_dump(), "ref": ".".join(filter(None, [c.kind, c.attribute]))}
+            for c in result.candidates
+        ]
+
+    app.out.emit(
+        result,
+        lambda: app.out.table(
+            rows(),
+            [
+                Column("target", "target"),
+                Column("kind.attribute", "ref"),
+                Column("values", "values"),
+                Column("level", "level"),
+                Column("score", "score", lambda v: f"{v:.3f}"),
+                Column("records", "records"),
+                Column("matched", "matched"),
+            ],
+        ),
+    )
+    for skipped in result.skipped:
+        app.out.info(f"{skipped.level} skipped: {skipped.reason}")
+    if result.unmatched:
+        app.out.info("unmatched: " + ", ".join(result.unmatched))
