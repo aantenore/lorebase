@@ -740,7 +740,7 @@ class ResolveRequest(RequestModel):
 
     branch: str | None = None
     at: str | None = None
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1)
     kinds: list[str] | None = None
     levels: list[ResolveLevel] | None = None
     query_vector: list[float] | None = None

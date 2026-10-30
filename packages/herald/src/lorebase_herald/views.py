@@ -13,6 +13,7 @@ from typing import Any
 
 from lorebase_client import models as m
 from lorebase_herald.render import (
+    as_json,
     capped,
     more_line,
     ref,
@@ -522,7 +523,8 @@ def resolve_text(view: Mapping[str, Any], output: OutputSettings) -> str:
             tail += f", {candidate['records']} records"
         lines.append(f"{head} | {tail}")
         if candidate.get("predicate"):
-            lines.append(f"   where: {value_text(candidate['predicate'], output.max_value_chars)}")
+            # Whole, never cut at max_value_chars: it is meant to be copied into a query.
+            lines.append(f"   where: {as_json(candidate['predicate'])}")
     lines.extend(more_line(view.get("omitted", 0), "lower `limit` or name `kinds`"))
     if view.get("unmatched"):
         lines.append("unmatched: " + ", ".join(view["unmatched"]))

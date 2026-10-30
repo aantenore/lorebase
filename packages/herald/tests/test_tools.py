@@ -307,6 +307,36 @@ async def test_resolve_sends_the_words_and_lists_candidates_with_their_predicate
     assert bad.is_error
 
 
+async def test_resolve_never_cuts_a_predicate(connect: Connect, fake: FakeKeeper) -> None:
+    values = [f"value number {i:04d}" for i in range(40)]
+    predicate = {"attr": "category", "op": "in", "value": values}
+    fake.on(
+        "POST",
+        f"{API}/resolve",
+        {
+            "revision": REVISION,
+            "served_from": "materialized",
+            "candidates": [
+                {
+                    "target": "value",
+                    "kind": "Part",
+                    "attribute": "category",
+                    "values": values,
+                    "predicate": predicate,
+                    "score": 1.0,
+                    "level": "exact",
+                    "matched": "value",
+                    "records": 40,
+                }
+            ],
+        },
+    )
+    async with connect() as client:
+        out = text(await client.call_tool("lorebase_resolve", {"text": "value"}))
+    where = next(line for line in out.splitlines() if line.startswith("   where: "))
+    assert json.loads(where.removeprefix("   where: ")) == predicate
+
+
 async def test_search_lists_the_typo_corrections_keeper_applied(
     connect: Connect, fake: FakeKeeper
 ) -> None:
