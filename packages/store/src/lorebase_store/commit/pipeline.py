@@ -378,6 +378,10 @@ async def _commit(session: AsyncSession, request: _Request) -> CommitResult:
         await queue_after_tagging(
             session, domain_id, branch, old_schema, prepared.schema, runtime=request.runtime
         )
+        # Imported here: the value index reads compiled schemas through this package.
+        from lorebase_store.values import drop_ineligible
+
+        await drop_ineligible(session, domain_id, branch, prepared.schema)
     try:
         version = await refs.compare_and_swap(
             branch,

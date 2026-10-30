@@ -142,7 +142,15 @@ async def sessions(
         )
     assert created.mode.value == "overlay"
     async with factory() as session, session.begin():
-        # A value of the base, so that `lb_values_similar` has something to return.
+        # A held Attribute with a value on the base, so that `lb_values_similar` has
+        # something to return.
+        await session.execute(
+            text(
+                "INSERT INTO mat_value_attributes (domain_id, kind_id, attribute_id, max_chars) "
+                "VALUES (:domain, :kind, :attribute, 64)"
+            ),
+            {"domain": DOMAIN, "kind": SUPPLIER, "attribute": VAT},
+        )
         await session.execute(
             text(
                 "INSERT INTO mat_values (domain_id, branch, kind_id, attribute_id, value, norm, "

@@ -12,26 +12,37 @@ the distinct values instead, the way revision 0018 keeps the search lexicon.
 - `mat_values(domain_id, branch, kind_id, attribute_id, value, norm, records)`: per branch,
   each value of a selected Attribute (string scalars and the string elements of arrays) and the
   number of the branch's own live rows holding it. `norm` is `lb_value_norm(value)`: lower
-  case, accents stripped (NFD, combining marks dropped), blanks collapsed. A btree index on
+  case (final sigma folded), Latin combining marks dropped after NFD, every blank of
+  `BLANKS` collapsed to one space. A btree index on
   `(domain_id, branch, norm)` serves exact lookups, a trigram GIN index (btree_gin) similar
   ones. An overlay holds the values of its own rows, as for the lexicon; readers add its
   base's and count the candidates they return over the resolved rows.
 - Statement-level triggers on `mat_records` (`lb_values_maintain`, transition tables) keep
   `mat_values` in step with every write of the commit pipeline, copy-on-write, promotion,
   background copies and builds, snapshots and deletion, in the writing transaction, with the
-  lexicon's plan choice for small and large statements. Rows whose `values` did not change are
-  skipped; rows of a branch whose ref is gone (a cascade) leave nothing; spent values (count 0)
-  are deleted through a small partial index. A statement in a Domain without selected
-  Attributes costs one index probe.
+  lexicon's plan choice for small and large statements. A row is counted per selected
+  Attribute whose value changed (an UPDATE that keeps it, or touches other Attributes, adds
+  nothing); rows of a branch whose ref is gone (a cascade) leave nothing; spent values (count 0)
+  are deleted through a small partial index.
+- Fence: each statement first takes the transaction advisory lock of its Domains in shared
+  mode (`lb_values_lock_key`), then probes the selection of those Domains (one row of the
+  primary key, in its order): a Domain without selected Attributes stops there. A
+  selection pass that adds or drops Attributes takes the same lock exclusively, for its
+  Domain only: writers of that Domain wait at their next statement, writers of other Domains
+  never do, and no write falls between a backfill and the triggers seeing the new selection
+  (a writer that wrote before the pass took the lock is waited for; one that writes after it
+  reads the new selection). Every writer of `mat_records` goes through the triggers, so no
+  writer path needs a lock of its own.
 - `lb_values_similar(domain, branch, kinds, terms, threshold, limit)`: for each term, the
-  `limit` values of those Kinds (`NULL`: every Kind) on the branch (and its base, for an
-  overlay) whose `norm` is at least `threshold` similar to `lb_value_norm(term)`, best first.
+  `limit` values of selected Attributes of those Kinds (`NULL`: every Kind) on the branch (and
+  its base, for an overlay) whose `norm` is at least `threshold` similar to
+  `lb_value_norm(term)`, best first.
   Security definer with the options, checks and grants of revisions 0008 and 0018: trigram
   operators are not leakproof, so under row-level security a plain statement would filter the
   Domain's rows before the index could serve it.
-- `mat_value_cursors(domain_id, head, fingerprint, updated_at)`: what the last selection pass
-  of a Domain read (default branch head, schema and settings fingerprint), so an unchanged
-  Domain is skipped.
+- `mat_value_cursors(domain_id, head, fingerprint, updated_at)`: when the last selection pass
+  of a Domain decided (default branch head, schema and settings fingerprint), so a pass with
+  the same fingerprint within `store.values.stats_interval_s` only checks sizes.
 
 Revision ID: 0045
 Revises: 0044
@@ -74,16 +85,32 @@ SMALL_STATEMENT_ROWS = _lexicon.SMALL_STATEMENT_ROWS
 
 COMBINING_MARKS = f"[{chr(0x300)}-{chr(0x36F)}]"
 """Combining diacritical marks: what an accented letter leaves after NFD besides its base."""
+BLANKS = "".join(
+    chr(c)
+    for c in (
+        *range(0x09, 0x0E), *range(0x1C, 0x21), 0x85, 0xA0, 0x1680, *range(0x2000, 0x200B),
+        0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+    )
+)  # fmt: skip
+"""Every character Python's `str.split()` takes for white space; `lorebase_store.values` uses
+the same set, so both sides collapse the same blanks whatever the database locale."""
 
 VALUE_NORM = f"""
 CREATE FUNCTION lb_value_norm(p_value text) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE
 RETURN pg_catalog.btrim(pg_catalog.regexp_replace(pg_catalog.regexp_replace(
-    pg_catalog.normalize(pg_catalog.lower(p_value), 'NFD'), '{COMBINING_MARKS}', '', 'g'),
-    '\\s+', ' ', 'g'))
+    pg_catalog.normalize(pg_catalog.translate(pg_catalog.lower(p_value), '{chr(0x3C2)}',
+    '{chr(0x3C3)}'), 'NFD'), '{COMBINING_MARKS}', '', 'g'), '[{BLANKS}]+', ' ', 'g'), ' ')
 """
 """The compared form of a value or a word (`lorebase_store.values.normalize` mirrors it).
 Qualified names, no SET clause: inlined into the trigger and the read function."""
+
+LOCK_KEY = """
+CREATE FUNCTION lb_values_lock_key(p_domain text) RETURNS bigint
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+RETURN pg_catalog.hashtextextended('lorebase.values:' OPERATOR(pg_catalog.||) p_domain, 0)
+"""
+"""Key of the transaction advisory lock fencing a Domain's value index (module doc)."""
 
 VALUE_STRINGS = """
 CREATE FUNCTION lb_value_strings(p_value jsonb, p_max_chars integer) RETURNS SETOF text
@@ -117,9 +144,11 @@ _LIVE = _lexicon._LIVE
 _UNCHANGED = (
     " AND NOT EXISTS (SELECT 1 FROM {other} x WHERE x.domain_id = {row}.domain_id "
     "AND x.branch = {row}.branch AND x.kind_id = {row}.kind_id AND x.key = {row}.key "
-    'AND x.deleted = {row}.deleted AND x."values" = {row}."values")'
+    "AND x.deleted = {row}.deleted "
+    'AND x."values" -> s.attribute_id IS NOT DISTINCT FROM {row}."values" -> s.attribute_id)'
 )
-"""An UPDATE that keeps a row's values (titles, search vectors, lineage) changes no value."""
+"""An UPDATE that keeps the value of a selected Attribute (titles, search vectors, lineage,
+other Attributes) changes nothing for it."""
 
 
 def _rows(table: str, row: str, sign: int, *, live: bool, other: str | None) -> str:
@@ -178,9 +207,29 @@ DECLARE
     v_values text[];
     v_counts bigint[];
     v_rows bigint;
+    v_scope text[];
+    v_domain text;
+    v_held boolean;
 BEGIN
-    -- Most Domains index no value: one probe of the selection, and nothing else.
-    IF NOT EXISTS (SELECT 1 FROM mat_value_attributes) THEN
+    IF TG_OP = 'DELETE' THEN
+        SELECT array_agg(DISTINCT o.domain_id ORDER BY o.domain_id) INTO v_scope FROM lb_old o;
+    ELSE
+        SELECT array_agg(DISTINCT n.domain_id ORDER BY n.domain_id) INTO v_scope FROM lb_new n;
+    END IF;
+    IF v_scope IS NULL THEN
+        RETURN NULL;
+    END IF;
+    -- The fence first, then the selection (module doc). The probe reads the primary key in
+    -- its order, one row at most: a plain EXISTS lets the cached generic plan scan the whole
+    -- selection of other Domains when one Domain holds most of it.
+    FOREACH v_domain IN ARRAY v_scope LOOP
+        PERFORM pg_advisory_xact_lock_shared(lb_values_lock_key(v_domain));
+        IF v_held IS NULL THEN
+            SELECT true INTO v_held FROM mat_value_attributes s WHERE s.domain_id = v_domain
+            ORDER BY s.domain_id, s.kind_id, s.attribute_id LIMIT 1;
+        END IF;
+    END LOOP;
+    IF v_held IS NULL THEN
         RETURN NULL;
     END IF;
     IF TG_OP = 'INSERT' THEN
@@ -251,11 +300,15 @@ BEGIN
     -- Domain and branch are literals: index conditions of the trigram index.
     v_lookup := format(
         'SELECT v.kind_id, v.attribute_id, v.value, v.records, v.norm FROM mat_values v '
+        'JOIN mat_value_attributes s ON s.domain_id = v.domain_id AND s.kind_id = v.kind_id '
+        'AND s.attribute_id = v.attribute_id '
         'WHERE v.domain_id = %L AND v.branch = %L AND v.records > 0%s AND v.norm %% $1',
         p_domain, p_branch, v_kinds);
     IF v_base IS NOT NULL THEN
         v_lookup := v_lookup || ' UNION ALL ' || format(
             'SELECT v.kind_id, v.attribute_id, v.value, v.records, v.norm FROM mat_values v '
+            'JOIN mat_value_attributes s ON s.domain_id = v.domain_id '
+            'AND s.kind_id = v.kind_id AND s.attribute_id = v.attribute_id '
             'WHERE v.domain_id = %L AND v.branch = %L AND v.records > 0%s AND v.norm %% $1',
             p_domain, v_base, v_kinds);
     END IF;
@@ -276,7 +329,7 @@ $fn$
 MAX_TERMS = 64
 """Terms one call of `lb_values_similar` compares (`lorebase_store.values.MAX_TERMS`)."""
 SIMILAR = "lb_values_similar(text, text, text[], text[], real, integer)"
-HELPERS = ("lb_value_norm(text)", "lb_value_strings(jsonb, integer)")
+HELPERS = ("lb_value_norm(text)", "lb_value_strings(jsonb, integer)", "lb_values_lock_key(text)")
 
 
 def _domain_table(name: str, *columns: sa.Column[object], key: Sequence[str]) -> None:
@@ -370,6 +423,7 @@ def upgrade() -> None:
     search_path = _reads._search_path()
     op.execute(VALUE_NORM)
     op.execute(VALUE_STRINGS)
+    op.execute(LOCK_KEY)
     _tables()
     op.execute(VALUES_MAINTAIN.format(search_path=search_path))
     op.execute("REVOKE ALL ON FUNCTION lb_values_maintain() FROM PUBLIC")
