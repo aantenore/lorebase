@@ -284,9 +284,9 @@ class ExtractionSettings(SectionModel):
     )
     direct_merge_protected: bool = Field(
         default=True,
-        description="Whether a direct-mode job may merge its Proposal into a protected branch "
-        "whose approval rules (keeper.proposals, Domain overrides) require no approval; off, "
-        "such Proposals wait for their approvals.",
+        description="Whether a direct-mode job may merge its Proposal into a protected branch, "
+        "waiving the required_approvals count but not steward approvals or required roles "
+        "(keeper.proposals, Domain overrides); off, such Proposals wait for their approvals.",
     )
     new_record_kinds: tuple[str, ...] | None = Field(
         default=None,

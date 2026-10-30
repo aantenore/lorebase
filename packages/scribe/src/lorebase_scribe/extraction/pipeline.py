@@ -706,7 +706,7 @@ class ExtractionRun:
         """Merge the Proposal without a person when the job is in `direct` mode (design 9.2):
         only when every item came from tier 0, none is pending, the target may take it and the
         merge is clean and not held back by contradictions; into a protected target only when
-        its approval rules require no approval. Otherwise the reason is recorded
+        no steward or role rule names who must approve. Otherwise the reason is recorded
         and the Proposal waits for review."""
         if modes.tier_capped([item.tier for item in items]):
             # Text a model read never reaches a branch without a person (AC-19).
@@ -730,7 +730,7 @@ class ExtractionRun:
                 report.direct_blocked = modes.BLOCKED_PROTECTED
                 return
             if target.protected:
-                # No person reviewed it: the target's approval rules hold it for review.
+                # No person reviewed it: rules naming who must approve hold it for review.
                 rules = effective_rules(domain.settings, self._approval_rules).requiring
                 if rules:
                     report.direct_blocked = modes.BLOCKED_APPROVALS

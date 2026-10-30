@@ -40,9 +40,6 @@ from .test_extraction import CONTRACT, REVIEW, THRESHOLD, extract
 
 pytestmark = pytest.mark.integration
 
-NO_APPROVALS = ApprovalRuleSettings(required_approvals=0)
-"""Rules under which a direct merge reaches the protected `main` (the seed protects it)."""
-
 
 @pytest.fixture
 async def schema(
@@ -191,8 +188,7 @@ async def test_direct_merges_a_tier_0_job_with_nothing_pending(
     # A threshold low enough that the contract's items are all accepted at once; loosening the
     # threshold is allowed here by the installation.
     await set_extraction(sessions, {"mode": "direct", "auto_accept_threshold": 0.0})
-    loosen = ("mode", "auto_accept_threshold")
-    run = run_with(sessions, runtime, clock, NO_APPROVALS, domain_may_loosen=loosen)
+    run = run_with(sessions, runtime, clock, domain_may_loosen=("mode", "auto_accept_threshold"))
     report = await extract(run, sessions, CONTRACT)
     assert report.pending == 0
     assert report.accepted > 0
@@ -247,22 +243,17 @@ async def test_direct_into_a_protected_branch_needs_the_installation(
 @pytest.mark.parametrize(
     ("rules", "domain_settings", "held_by"),
     [
-        (ApprovalRuleSettings(), {}, ["required_approvals"]),
         (
-            ApprovalRuleSettings(required_approvals=0, required_approvals_from_stewards=1),
+            ApprovalRuleSettings(required_approvals_from_stewards=1),
             {},
             ["required_approvals_from_stewards"],
         ),
-        (
-            ApprovalRuleSettings(required_approvals=0, required_roles=["data_steward"]),
-            {},
-            ["required_roles"],
-        ),
-        (NO_APPROVALS, {"required_roles": ["data_steward"]}, ["required_roles"]),
+        (ApprovalRuleSettings(required_roles=["data_steward"]), {}, ["required_roles"]),
+        (ApprovalRuleSettings(), {"required_roles": ["data_steward"]}, ["required_roles"]),
     ],
-    ids=["approvals", "stewards", "roles", "domain-override"],
+    ids=["stewards", "roles", "domain-roles"],
 )
-async def test_direct_waits_for_the_approvals_a_protected_target_requires(
+async def test_direct_waits_for_the_approvers_a_protected_target_names(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
@@ -288,7 +279,7 @@ async def test_direct_waits_for_the_approvals_a_protected_target_requires(
     assert await merge_audits(sessions) == []
 
 
-async def test_direct_into_a_protected_target_without_approval_rules_merges(
+async def test_the_approvals_count_alone_does_not_hold_a_direct_merge(
     sessions: async_sessionmaker[AsyncSession],
     runtime: StoreRuntime,
     clock: Clock,
@@ -296,8 +287,9 @@ async def test_direct_into_a_protected_target_without_approval_rules_merges(
 ) -> None:
     await protect_main(sessions, True)
     await set_extraction(sessions, {"mode": "direct", "auto_accept_threshold": 0.0})
+    await update_domain(sessions, {"required_approvals": 3})
     loosen = ("mode", "auto_accept_threshold")
-    run = run_with(sessions, runtime, clock, NO_APPROVALS, domain_may_loosen=loosen)
+    run = run_with(sessions, runtime, clock, domain_may_loosen=loosen)
     report = await extract(run, sessions, CONTRACT)
     assert (report.direct_blocked, report.direct_merged) == (None, True)
     assert await proposal_status(sessions, report) is ProposalStatus.MERGED

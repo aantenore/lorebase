@@ -4,8 +4,10 @@ how many of them must come from its stewards, and which roles must each have app
 The operator sets them under `keeper.proposals`; a Domain overrides each with its setting of
 the same name. Keeper enforces them when a person merges (`lorebase_keeper.services.proposals`
 evaluates the reviews against them). Automatic merges (Scribe: Source sync, direct
-extraction) have no reviews to count, so they do not merge into a protected target whose
-rules require any approval (`ApprovalRules.requiring`): the Proposal stays open for review.
+extraction) into a protected target are the operator's trust in automation and waive the
+plain approvals count, but not the rules that name who must approve: with steward approvals
+or required roles in force (`ApprovalRules.requiring`) they are not performed and the
+Proposal stays open for review.
 """
 
 from __future__ import annotations
@@ -62,10 +64,11 @@ class ApprovalRules:
 
     @property
     def requiring(self) -> tuple[str, ...]:
-        """Names of the rules that require a person's approval; empty when none does."""
+        """Names of the rules that hold an automatic merge: those naming who must approve
+        (stewards, roles). The plain `required_approvals` count is not one: an operator who
+        lets automation merge into protected branches (`scribe.sources.auto_merge_protected`,
+        `scribe.extraction.direct_merge_protected`) waives it for those merges."""
         found = []
-        if self.approvals > 0:
-            found.append(APPROVALS_KEY)
         if self.from_stewards > 0:
             found.append(STEWARD_APPROVALS_KEY)
         if self.roles:

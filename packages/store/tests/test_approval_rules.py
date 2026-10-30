@@ -48,13 +48,13 @@ def test_a_domain_overrides_each_rule(own: dict[str, Any], expected: ApprovalRul
     ("rules", "requiring"),
     [
         (ApprovalRules(0, 0, ()), ()),
-        (ApprovalRules(1, 0, ()), (APPROVALS_KEY,)),
+        (ApprovalRules(3, 0, ()), ()),
         (ApprovalRules(0, 2, ()), (STEWARD_APPROVALS_KEY,)),
         (ApprovalRules(0, 0, ("r",)), (ROLES_KEY,)),
-        (ApprovalRules(1, 1, ("r",)), (APPROVALS_KEY, STEWARD_APPROVALS_KEY, ROLES_KEY)),
+        (ApprovalRules(1, 1, ("r",)), (STEWARD_APPROVALS_KEY, ROLES_KEY)),
     ],
 )
-def test_requiring_names_the_rules_that_need_a_person(
+def test_requiring_names_the_rules_that_hold_an_automatic_merge(
     rules: ApprovalRules, requiring: tuple[str, ...]
 ) -> None:
     assert rules.requiring == requiring
