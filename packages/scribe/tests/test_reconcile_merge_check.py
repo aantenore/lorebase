@@ -4,6 +4,7 @@ setting `reconciliation_check` applies only when it is stricter."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -16,7 +17,7 @@ from lorebase_core.reconcile import ReconcileOptions
 from lorebase_scribe.settings import SourceSettings
 from lorebase_scribe.sources import sync
 from lorebase_store.merging import MergeRequest, reconciliation_check_mode
-from lorebase_store.repositories import ProposalRow
+from lorebase_store.repositories import DomainRow, ProposalRow
 from lorebase_store.runtime import StoreRuntime
 
 
@@ -92,7 +93,7 @@ async def test_source_sync_merges_with_the_operator_mode(
     proposal = cast(ProposalRow, object())
     await runner._merge(
         cast(AsyncSession, None),
-        "supply",
+        cast(DomainRow, SimpleNamespace(id="supply")),
         proposal,
         MergePolicy(),
         SourcePolicy.PROPOSAL,
