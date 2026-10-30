@@ -156,6 +156,7 @@ The first `make up` builds the backend and web images (a few minutes); the rest 
 2. [Use a real model](quickstart.md#4-use-a-real-model): Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file.
 3. [Stop and clean up](quickstart.md#5-stop-and-clean-up), and [troubleshooting](quickstart.md#6-troubleshooting) for every failure seen on a fresh clone.
 4. [The REST API one call at a time](manual-setup.md#4-create-a-domain-and-apply-the-supply-schema), with curl and the CLI.
+5. [Model your own Domain](modeling.md): every field of the schema, with a complete example.
 
 Scale-out with replicas is in [deployment.md](deployment.md), and the Kubernetes install in [kubernetes.md](kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 

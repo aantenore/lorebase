@@ -111,6 +111,7 @@ nav:
       - FAQ: faq.md
       - Comparison: comparison.md
   - Guides:
+      - Modeling guide: modeling.md
       - Agents: agents.md
       - MCP server: mcp.md
       - Exploration assistant: guide.md

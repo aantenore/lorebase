@@ -525,6 +525,7 @@ The steps that used to follow here are on their own page, [Manual setup](manual-
 
 ## Next steps
 
+- Model your own Domain: the [modeling guide](modeling.md) explains every field of the schema with a complete example.
 - Decide who approves what and what may merge on its own: [governance and ingestion](governance.md).
 - Plug in an agent: [examples/agent](../examples/agent/README.md) reads the `supply` Domain through Herald and proposes changes as Proposals, with Ollama or a hosted model.
 
