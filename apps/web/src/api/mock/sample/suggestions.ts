@@ -21,7 +21,8 @@ function example(document: string, text: string, quote: string, chunk: number): 
   };
 }
 
-/** A pending vocabulary suggestion of the Supplier Kind, proposed from missed phrases. */
+/** A pending vocabulary suggestion of the Supplier Kind, proposed from missed phrases: it comes
+ * from no document. */
 function vocabulary(
   id: string,
   type: SchemaSuggestion['type'],
@@ -35,7 +36,7 @@ function vocabulary(
     name,
     kind: 'Supplier',
     labels: [name],
-    documents: 1,
+    documents: 0,
     confidence: 0.6,
     status: 'pending',
     sources: ['resolve_misses'],

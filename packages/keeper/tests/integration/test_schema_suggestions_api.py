@@ -280,7 +280,7 @@ async def test_vocabulary_suggestions_are_accepted_as_schema_changes(seeded: See
             "status",
             "on_hold",
         )
-        assert (alias["support"], alias["documents"]) == (4, 1)
+        assert (alias["support"], alias["documents"]) == (4, 0)
         assert alias["examples"][0]["phrase"] == "paused"
 
         refused = await http.post(

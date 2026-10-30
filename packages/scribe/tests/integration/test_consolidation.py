@@ -103,7 +103,7 @@ async def test_misses_become_vocabulary_suggestions(
     assert alias.kind_ref == supplier.id
     assert alias.target_ref == attribute_id(schema, "Supplier", "status")
     assert alias.payload == {"value": "terminated"}
-    assert (alias.support, alias.documents, alias.sources) == (4, 1, ["resolve_misses"])
+    assert (alias.support, alias.documents, alias.sources) == (4, 0, ["resolve_misses"])
     assert alias.examples[0]["phrase"] == "terminatd"
     assert alias.examples[0]["callers"] == 2
     plant = schema.kind_by_api_name("Plant")
