@@ -8,7 +8,7 @@ Lorebase is pre-alpha. [v0.2.3](https://github.com/aantenore/lorebase/releases/t
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a shared laptop (M5).
 2. API stability guarantees for `/api/v1`, which bind from 1.0 (M5).
-3. Knowledge that stays correct: corrections that stick (done), document versions (done), ingestion modes (done), stewards (done) and read presets ([below](#next-knowledge-that-stays-correct)), designed.
+3. Knowledge that stays correct: corrections that stick (done), document versions (done), ingestion modes (done), stewards (done), read presets (done) and resolution of words to schema and values (done) ([below](#next-knowledge-that-stays-correct)).
 
 Everything else on this page is merged and covered by tests. The ordered task list of M1 is in the [M1 plan](plan/m1.md).
 
@@ -125,6 +125,7 @@ Designed in [section 18 of the design](design.md#next-knowledge-that-stays-corre
 - [x] Ingestion modes ([design 9.2](design.md#92-unstructured-extraction), AC-36): `extraction.mode: review_all | doubts_only | direct` per Domain and per `source_key` prefix, tightening always allowed, loosening per `scribe.extraction.domain_may_loosen`; `direct` only for all-tier-0 jobs with nothing pending, audited `proposal.merge` with `mode: direct` ([extraction](extraction.md#ingestion-modes))
 - [x] Stewards ([design 10.7](design.md#107-stewards), AC-37): `stewards` on the Domain and per Kind, computed assignees, `assigned=me|any|none` on Proposal and reconciliation lists (REST, CLI `--mine`, web), protection rule `required_approvals_from_stewards` (migration `0042`, [operations](operations.md#ingestion-modes-and-stewards-after-the-upgrade))
 - [x] Traits as search targets and context-pack seeds (`traits`), and lenses (`lenses` in the schema; `lens` on context packs, search and MCP) ([design 8.8](design.md#88-read-presets-and-filtered-vector-search), AC-38)
+- [x] Resolution of words to schema and values ([design 8.9](design.md#89-resolution-words-to-schema-and-values), AC-39): value index of selected short Attributes per branch kept by triggers (`mat_values`, migration `0045`, Scribe `value_index`), `aliases`, `value_aliases` and `resolvable` in the schema, `POST /resolve`, `lorebase_resolve`, `lorebase resolve`
 - [x] Filtered vector search that keeps its limit: `hnsw.iterative_scan = relaxed_order` on pgvector 0.8 or later (`search.semantic.iterative_scan`, `max_scan_tuples`), over-fetch otherwise (`overfetch_factor`), `semantic_truncated` when the scan bound is reached ([design 8.8](design.md#88-read-presets-and-filtered-vector-search))
 
 ## Not on the roadmap

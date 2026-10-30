@@ -249,6 +249,11 @@ reserved name, choose another (e.g. `code`)"``; `kind` suggests `category`, `ref
 columns on its own.
 | authority | optional Source id that owns this Attribute's values (used by merge policies) |
 | valid_time | optional boolean, absent when off: values carry a validity period on their provenance, and reconciliation tells superseded values from contradictions (10.6); refused on derived Attributes |
+| aliases | optional list of other words for the Attribute (`price: [cost]`), absent when none; used by resolution (8.9) |
+| value_aliases | optional map from a stored value to other words for it (`Rosso: [red, rouge]`), absent when none; an enum's keys must be its values; only on string and enum Attributes (alone or in arrays), never sensitive ones (8.9) |
+| resolvable | optional boolean: `true` keeps the Attribute's values in the value index, `false` keeps them out; absent, type and distinct values decide (8.9); `true` is refused on other types and on sensitive Attributes |
+
+Kinds take `aliases` too. All of these are schema content: they change through change sets and Proposals and are versioned like any other field; absent, the canonical form (and hash) of a schema written before them is unchanged.
 
 **Type system.** `string`, `text` (long, full-text), `integer` (int64), `decimal` (precision, scale), `float` (float64), `boolean`, `date`, `timestamp` (UTC, microseconds), `duration`, `enum` (closed value list), `json` (opaque, not filterable beyond existence), `geo_point` (lat, lon), `uri`, and `array<T>` of any scalar type. No nested structs in v1; model them as Kinds. **[Architect call AC-05]**
 
@@ -939,6 +944,16 @@ create table mat_lexicon (             -- words of a branch's search vectors (re
 create index on mat_lexicon using gin (domain_id, branch, word gin_trgm_ops);
 -- kept by statement triggers on mat_records (8.7)
 
+create table mat_values (              -- values of selected Attributes per branch (revision 0045)
+  domain_id text, branch text, kind_id text, attribute_id text, value text,
+  norm text not null,                  -- lb_value_norm(value): lower case, no accents
+  records bigint not null,             -- rows of the branch holding the value
+  primary key (domain_id, branch, kind_id, attribute_id, value)
+);
+create index on mat_values (domain_id, branch, norm);
+create index on mat_values using gin (domain_id, branch, norm gin_trgm_ops);
+-- selection in mat_value_attributes (Domain-wide), kept by statement triggers on mat_records (8.9)
+
 create table mat_history (             -- per branch, per element change log
   domain_id text, branch text, partition text, element_key text,
   revision_id bytea, at timestamptz, old_hash bytea, new_hash bytea,
@@ -1178,6 +1193,42 @@ Three read features that agents and people reach for repeatedly: Traits as searc
 Hybrid search uses the same semantic list. Half-precision indexes (8.6) are unaffected. Performance budgets (8.7) gain a row for filtered semantic search measured with a selective `where`.
 
 **Non-goals.** Lenses as a permission or sharing mechanism; lenses with free text or model-built selections; query-time embedding of text (AC-17); exact (non-approximate) vector search as a default.
+
+### 8.9 Resolution: words to schema and values
+
+An agent asked "average price of red shoes" must learn, before it writes a query, that "shoes" is `Product.category = "Calzature"`, "red" `Product.color in ["Rosso", "red"]` and "price" the Attribute `Product.price` (`decimal(10,2)`). `POST /domains/{d}/resolve` (Herald `lorebase_resolve`, CLI `lorebase resolve`, clients `records.resolve`) grounds words that way and stops there: no interpretation of the question, no aggregates, no model, no query run. It returns ranked candidates; the agent composes `lorebase_query` itself. Nothing in it is specific to a Domain. **[Architect call AC-39]**
+
+**Request and response.** `{text, kinds?, levels?, query_vector?, limit?, branch?, at?}`. Each candidate: `target` (`kind`, `attribute` or `value`), `kind`, `attribute`, `type`, `values`, `predicate` (a ready-to-use `where` fragment: `eq`, `in`, or `contains` per value of an array Attribute), `score` (0 to 1), `level` (`exact`, `synonym`, `trigram`, `embedding`), `matched` (the words), `records` (Records holding the values on the branch read; null when the Attribute is not indexed). `unmatched` lists the words no candidate covers; `skipped` says why a level did not run. Bounded by `limit` and `search.resolve.results`.
+
+**Value index** (revision 0045, `lorebase_store.values`). `mat_values(domain_id, branch, kind_id, attribute_id, value, norm, records)` holds, per branch, each value of the selected Attributes (string scalars and the string elements of arrays, at most `store.values.max_value_chars`) and how many of the branch's own live rows hold it; `norm` is the compared form (lower case, accents stripped by NFD, blanks collapsed; `lb_value_norm`, mirrored by `values.normalize`). Btree on `(domain_id, branch, norm)` for exact lookups, trigram GIN (btree_gin) for similar ones.
+
+- *Upkeep.* Statement-level triggers on `mat_records` with transition tables, as the search lexicon (revision 0018): every write path (commit pipeline, copy-on-write, promotion, background copies and builds, snapshots, deletion and cascades) keeps the counts in the writing transaction, with no hook in the materializer. Rows whose `values` did not change are skipped; a Domain without selected Attributes costs one probe per statement. Chosen over a Scribe pass that recounts after each head move (eventual, and a full scan per change) and over deltas in `apply_changeset` (would miss copies, builds and promotions).
+- *Selection.* `mat_value_attributes` lists the indexed Attributes, Domain-wide (all branches), decided from the default branch's schema by a Scribe `value_index` pass (`scribe.scheduler.value_index_interval_s`, CLI `lorebase-scribe value-index DOMAIN`): enums and `resolvable: true` are held; `resolvable: false`, sensitive, vault, derived and non-string Attributes never; a plain string while its distinct values stay within `store.values.max_distinct` and, for Kinds of at least `ratio_min_records` Records, `max_distinct_ratio` of them (codes, names and free text fall out). A pass whose default branch head and fingerprint (schema hash, settings) are unchanged does nothing (`mat_value_cursors`). Adding an Attribute backfills it on every branch under a `SHARE` lock on `mat_records` (writes wait, reads do not; 2.5 s for five Attributes at 100,000 Records), so no write falls between the backfill and the triggers seeing the selection. `--rebuild` recounts everything (repair, installs upgraded in place).
+- *Branches and time.* Every materialized branch has its rows. An overlay holds the values of its own rows, like the lexicon: lookups add its base's (a superset), and the candidates kept are counted again over the resolved rows (containment probes of the GIN index on `values`), values no row holds dropped. `at` reads the Revision's snapshot, as search does (8.6): snapshot rows are written to `mat_records`, so the triggers index them; slower on first use, refused past the snapshot bounds like search.
+
+**Schema index.** Kind and Attribute api names (split into words: `unit_price` is "unit price"), display names, `aliases`, value aliases and description words (four letters or more), normalized like values, built once per schema object (compiled schemas and projections are cached, so once per schema version and visibility).
+
+**Matching.** The text is normalized and split into words (`max_words`); every run of 1 to `max_phrase_words` words is a phrase, longest first; words of a phrase that matched are not tried again in shorter ones. Each word is also tried in its forms under `search.resolve.plural_rules` (suffix pairs folded both ways, default `s` and `es`; empty turns it off; other languages add pairs such as `[e, a]`). Per phrase, levels in order, stopping at the first that matches:
+
+1. *exact*: a name or an indexed value equal to the phrase (btree);
+2. *synonym*: an alias of a Kind, an Attribute or a value, from the schema index. Levels 1 and 2 are one lookup: values a phrase reaches both ways are one candidate (`red` stored, `Rosso` aliased as red: `color in [Rosso, red]`), of the better level;
+3. *trigram*: for phrases 1-2 left, names (pg_trgm's similarity, computed in process) and indexed values (`lb_values_similar`, a security definer function: trigram operators are not leakproof, so under row-level security a plain statement would filter the Domain's rows first) at least `trigram_threshold` similar, and words of descriptions scaled by `scores.description`;
+4. *embedding*: only when 1-3 matched nothing, only with the caller's `query_vector` (Keeper embeds nothing, AC-17), and only where semantic search works (an embedding template and vectors): the indexed values held by the `embedding_records` Records nearest to the vector, each value a candidate scored by its closest Record. Without a vector or vectors it is skipped and `skipped` says so.
+
+Each level can be turned off (`search.resolve.levels`) or left out per request (`levels`); scores per level are settings (`search.resolve.scores`, trigram and embedding scaled by similarity).
+
+**Permissions.** Only Kinds the caller may read (the read point's projection and Kind scope; with invisible Kinds a hidden one in `kinds` answers like an unknown one) and only Attributes whose values it may read (`Masking.hidden`): an Attribute masked for the caller yields no candidate, not even its name. Values of sensitive and vault Attributes never enter the index. Precomputed counts are safe because no read restricts rows within a Kind: row-level security isolates Domains, grants narrow to Kinds and branches; a `lorebase_query` aggregate over the same Attribute would tell the caller the same counts. Were row-level filters within a Kind ever added, counts (and values seen only in hidden rows) must come from the live count path, the one overlays use. Tested: Kind-narrowed callers, callers without clearance, sensitive values.
+
+**Performance** (docs/performance.md#resolution): at 100,000 Records, through the Keeper application in process as a role under row-level security, levels 1-2 p50 7.1 ms, p95 11.5 ms; trigram p95 13.7 ms (target for levels 1-2: p95 under 20 ms). The triggers add about 90 µs per updated Record to a commit that changes indexed values.
+
+**Acceptance (AC-39).**
+- Words resolve to candidate Kinds, Attributes and values with level, score, matched words, predicate and count; precision and recall of the evaluation cases (`packages/keeper/tests/integration/resolve_shop.py`) stay at least 0.75 and 0.95 (1.00 and 1.00 when written).
+- No candidate names a Kind the caller may not read or an Attribute it may not read values of; sensitive values are never indexed.
+- Counts are those of the branch read, overlays included; time travel reads the snapshot.
+- The index follows every write path in the writing transaction and equals a recount (`--rebuild`).
+- Levels 1-2 at 100,000 Records: p95 under 20 ms.
+
+**Non-goals.** Interpreting questions, choosing between candidates, aggregates, synonyms learned from data or from a model, stemming beyond the configured suffix pairs.
 
 ---
 
@@ -2035,7 +2086,7 @@ Acceptance:
 
 ### Next: knowledge that stays correct
 
-Scope: corrections that stick (per-Source last-written state, local-edit Conflicts with a preserved base, `local_edits`, the extraction `local_edit` hold; 9.1, AC-34); document versions and lifecycle (`source_key`, versions, the evidence check of a new version, retirement and purge; 9.2, AC-35); ingestion modes (`extraction.mode`, prefix rules, the tier cap of `direct`; 9.2, AC-36); stewards (assignees, `assigned` filters, `required_approvals_from_stewards`; 10.7, AC-37); read presets (Traits as search targets and context seeds, lenses, filtered vector search; 8.8, AC-38). Follow-up, implemented: `last_seen_run` and `stale_after` for incremental Sources (`source_unseen` candidates, migration `0043`).
+Scope: corrections that stick (per-Source last-written state, local-edit Conflicts with a preserved base, `local_edits`, the extraction `local_edit` hold; 9.1, AC-34); document versions and lifecycle (`source_key`, versions, the evidence check of a new version, retirement and purge; 9.2, AC-35); ingestion modes (`extraction.mode`, prefix rules, the tier cap of `direct`; 9.2, AC-36); stewards (assignees, `assigned` filters, `required_approvals_from_stewards`; 10.7, AC-37); read presets (Traits as search targets and context seeds, lenses, filtered vector search; 8.8, AC-38); resolution of words to schema and values (value index, aliases, `POST /resolve`, `lorebase_resolve`; 8.9, AC-39). Follow-up, implemented: `last_seen_run` and `stale_after` for incremental Sources (`source_unseen` candidates, migration `0043`).
 
 Acceptance:
 - A person's correction on the target survives any number of Source runs whose upstream value did not change; an upstream change to that value opens a `DV1` whose base is the Source's previous value, and a snapshot run never deletes a Record holding someone else's values without a `DV2`. Both are audited as `source.local_edit_conflict`.
@@ -2118,6 +2169,7 @@ Acceptance:
 | AC-36 | Ingestion modes `review_all`, `doubts_only` (default, today's rule), `direct`; `direct` only per Domain, only for jobs whose items are all tier 0 | Lets deterministic feeds flow without weakening AC-19 | Never for tier 1 or 2 output |
 | AC-37 | Stewards are RBAC roles named in the schema; assignees are computed, never stored | No new principal model; follows grants and invisibility | Assignment needs per-person routing that roles cannot express |
 | AC-38 | Traits and lenses are read presets resolved against the caller's projection; filtered vector search keeps filters before the limit and uses iterative scans or over-fetch so it does not shorten silently | Presets never widen grants; results stay complete and leak-free | Exact vector search is needed by default |
+| AC-39 | Resolution returns ranked candidates (Kinds, Attributes, values with predicates) and never interprets a question; values come from a trigger-kept per-branch index of selected short Attributes, aliases from the versioned schema | Agents ground their words in real names and values without a model in the read path; the index follows every write path and stays small | Questions need interpretation Lorebase must own, or row-level filters within a Kind appear (counts then go live) |
 
 ### Implementation status
 

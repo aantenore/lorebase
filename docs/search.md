@@ -5,6 +5,15 @@ of a branch (or a snapshot of a Revision). How each mode works is in
 [design 8.4](design.md#84-search); the budgets and measurements are in
 [performance](performance.md). This page covers the choice of ranking for lexical search.
 
+## Resolving words before searching
+
+To learn which Kinds, Attributes and stored values the words of a question stand for, use
+`POST /domains/{d}/resolve` instead of search: it returns ranked candidates with ready-to-use
+predicates from names, schema aliases and the value index (exact, then similar spelling; the
+values of the nearest Records only with a `query_vector` and when nothing else matched), and it
+runs no query ([design 8.9](design.md#89-resolution-words-to-schema-and-values),
+[agents](agents.md#resolve-words-before-querying)). Search then finds Records by their text.
+
 ## Traits, lenses and filtered vector search
 
 Beside `kinds`, `POST /search` takes `traits` and `lens` ([design 8.8](design.md#88-read-presets-and-filtered-vector-search)):
