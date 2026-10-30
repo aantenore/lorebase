@@ -12,6 +12,14 @@ type S = components['schemas'];
 const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
 
 function exampleOf(raw: Record<string, unknown>): SuggestionExample | null {
+  if (typeof raw['phrase'] === 'string') {
+    return {
+      phrase: raw['phrase'],
+      misses: num(raw['misses']),
+      callers: num(raw['callers']),
+      similarity: num(raw['similarity']),
+    };
+  }
   const start = num(raw['start']);
   const end = num(raw['end']);
   if (start === null || end === null) return null;

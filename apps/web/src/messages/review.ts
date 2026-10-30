@@ -303,7 +303,8 @@ export const review = {
   },
 
   suggestions: {
-    description: 'Kinds, Attributes and Relations found in Documents.',
+    description:
+      'Kinds, Attributes and Relations found in Documents, and aliases proposed from words agents could not resolve.',
     docs: 'extraction/#schema-suggestions',
     filterLabel: 'Filter suggestions',
     status: 'Status',
@@ -319,7 +320,15 @@ export const review = {
       kind: 'Kind',
       attribute: 'Attribute',
       relation: 'Relation',
+      kind_alias: 'Kind alias',
+      attribute_alias: 'Attribute alias',
+      value_alias: 'Value alias',
+      attribute_description: 'Attribute description',
     },
+    standsFor: 'Stands for',
+    proposedDescription: 'Proposed description',
+    missed: (phrase: string, misses: string, callers: string, similarity: string) =>
+      `${phrase}: ${misses} misses, ${callers} callers${similarity === '' ? '' : `, similarity ${similarity}`}`,
     lowSupport: 'Include low-support suggestions',
     viewInDocument: 'View in document',
     details: (name: string) => `Details of ${name}`,

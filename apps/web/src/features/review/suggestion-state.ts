@@ -6,6 +6,7 @@ import type {
   SuggestionStatus,
   SuggestionType,
 } from '@/api/suggestion-types';
+import { VOCABULARY_TYPES } from '@/api/suggestion-types';
 import { review as reviewMessages } from '@/messages/review';
 import type { BadgeTone } from '@/ui/layout';
 
@@ -33,6 +34,10 @@ export const TYPE_LABEL: Record<SuggestionType, string> = {
   kind: reviewMessages.suggestions.typeOptions.kind,
   attribute: reviewMessages.suggestions.typeOptions.attribute,
   relation: reviewMessages.suggestions.typeOptions.relation,
+  kind_alias: reviewMessages.suggestions.typeOptions.kind_alias,
+  attribute_alias: reviewMessages.suggestions.typeOptions.attribute_alias,
+  value_alias: reviewMessages.suggestions.typeOptions.value_alias,
+  attribute_description: reviewMessages.suggestions.typeOptions.attribute_description,
 };
 
 export function toSuggestionFilter(state: SuggestionFilterState): SuggestionFilter {
@@ -47,9 +52,13 @@ export function toSuggestionFilter(state: SuggestionFilterState): SuggestionFilt
 export const refLabel = (ref: string): string =>
   ref.startsWith('+') ? reviewMessages.suggestions.newRef(ref.slice(1)) : ref;
 
-/** The Kind that owns an Attribute, or the ends of a Relation; empty for a Kind. */
+/** The Kind that owns an Attribute, the ends of a Relation, `Kind.attribute` of an alias; empty for a Kind. */
 export function ownerLabel(suggestion: SchemaSuggestion): string {
   const owner = suggestion.kind === null ? null : refLabel(suggestion.kind);
+  if (VOCABULARY_TYPES.includes(suggestion.type)) {
+    if (owner === null) return '';
+    return suggestion.attribute == null ? owner : `${owner}.${suggestion.attribute}`;
+  }
   if (suggestion.type === 'attribute') return owner ?? '';
   if (suggestion.type === 'relation') {
     const unknown = reviewMessages.suggestions.unknownEnd;

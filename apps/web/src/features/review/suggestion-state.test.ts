@@ -55,6 +55,17 @@ describe('suggestion labels', () => {
 
   it('names the owner of an Attribute and the ends of a Relation', () => {
     expect(ownerLabel(suggestion({}))).toBe('');
+    expect(ownerLabel(suggestion({ type: 'kind_alias', kind: 'Supplier' }))).toBe('Supplier');
+    expect(
+      ownerLabel(
+        suggestion({
+          type: 'value_alias',
+          kind: 'Supplier',
+          attribute: 'status',
+          value: 'on_hold',
+        }),
+      ),
+    ).toBe('Supplier.status');
     expect(ownerLabel(suggestion({ type: 'attribute', kind: 'Supplier' }))).toBe('Supplier');
     expect(ownerLabel(suggestion({ type: 'relation', kind: '+Notice', target: 'Part' }))).toBe(
       'Notice (new) to Part',

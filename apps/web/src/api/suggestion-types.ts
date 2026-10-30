@@ -1,6 +1,8 @@
 /**
  * Schema suggestions: Kinds, Attributes and Relations that Scribe's discovery found in the
- * documents and proposes for the schema. The wire shapes are the generated ones of
+ * documents and proposes for the schema, and vocabulary (aliases, Attribute descriptions)
+ * consolidated from the words agents asked for and nothing matched. The wire shapes are the
+ * generated ones of
  * `./generated/keeper.ts`; `examples` is a free-form object list on the wire, so the evidence
  * is typed here and read defensively by the mapper in `./live/suggestions.ts`.
  */
@@ -13,7 +15,8 @@ export type SuggestionType = S['SuggestionOut']['type'];
 export type SuggestionStatus = S['SuggestionOut']['status'];
 export type SuggestionDecisionValue = S['SuggestionDecisionIn']['decision'];
 
-export interface SuggestionExample {
+/** Evidence quoted from a Document. */
+export interface DocumentExample {
   document_id: string;
   chunk: number | null;
   /** Offsets into the parsed text of the document. */
@@ -21,6 +24,25 @@ export interface SuggestionExample {
   end: number;
   quote: string;
 }
+
+/** Evidence of an alias: a phrase agents asked for that matched nothing. There is no Document; told apart by `phrase`. */
+export interface MissExample {
+  phrase: string;
+  misses: number | null;
+  callers: number | null;
+  similarity: number | null;
+}
+
+/** Descriptions carry no evidence of their own: their phrases are the labels. */
+export type SuggestionExample = DocumentExample | MissExample;
+
+/** The types of suggestion that propose vocabulary instead of schema elements. */
+export const VOCABULARY_TYPES: readonly SuggestionType[] = [
+  'kind_alias',
+  'attribute_alias',
+  'value_alias',
+  'attribute_description',
+];
 
 export type TypeGuess = S['TypeGuessOut'];
 export type SuggestionDuplicate = S['DuplicateOut'];

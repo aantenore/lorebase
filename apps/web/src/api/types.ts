@@ -674,6 +674,8 @@ export interface QueryResponse {
   revision: RevisionId;
   rows: RecordRow[];
   next_cursor: string | null;
+  /** What the answer rests on; present when the request asked for `coverage`. */
+  coverage?: components['schemas']['QueryResponse']['coverage'];
 }
 
 export interface TraverseRequest {

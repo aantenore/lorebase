@@ -47,6 +47,21 @@ describe('Review: schema suggestions', () => {
     expect(link).toHaveAttribute('href', expect.stringContaining('/supply/documents/doc_quality'));
   });
 
+  it('shows vocabulary suggestions with their owner, target and missed phrases', async () => {
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const table = await tableOf();
+    const alias = within(table).getByRole('row', { name: /Value alias paused/ });
+    expect(within(alias).getByText('Supplier.status')).toBeInTheDocument();
+    expect(within(table).getByRole('row', { name: /Kind alias vendor/ })).toBeInTheDocument();
+
+    await user.click(within(table).getByRole('button', { name: 'paused' }));
+    const detail = await screen.findByRole('region', { name: 'Details of paused' });
+    expect(within(detail).getByText('on_hold')).toBeInTheDocument();
+    expect(within(detail).getByText(/paused: 4 misses, 2 callers/)).toBeInTheDocument();
+    expect(within(detail).queryByRole('link', { name: 'View in document' })).toBeNull();
+  });
+
   it('accepts a selection and links to the Proposal it opens', async () => {
     const user = userEvent.setup();
     renderApp(PATH);
