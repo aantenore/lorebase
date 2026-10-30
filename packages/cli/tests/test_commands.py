@@ -1046,6 +1046,66 @@ def test_search_with_a_query_vector(http: respx.MockRouter, tmp_path: Path) -> N
     assert "JSON array of numbers" in result.output
 
 
+def test_resolve(http: respx.MockRouter, tmp_path: Path) -> None:
+    route = http.post("/domains/supply/resolve").respond(
+        200,
+        json={
+            "revision": REV,
+            "served_from": "materialized",
+            "candidates": [
+                {
+                    "target": "value",
+                    "kind": "Part",
+                    "attribute": "category",
+                    "values": ["bearing", "cuscinetto"],
+                    "predicate": {"attr": "category", "op": "in", "value": ["bearing"]},
+                    "score": 0.875,
+                    "level": "synonym",
+                    "matched": "bearings",
+                    "records": 12,
+                },
+                {"target": "kind", "kind": "Part", "score": 1, "level": "exact", "matched": "part"},
+            ],
+            "unmatched": ["the"],
+            "skipped": [{"level": "embedding", "reason": "no query vector"}],
+        },
+    )
+    result = run("resolve", "the bearings", "--kind", "Part", "--level", "exact", "-d", "supply")
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == [
+        "target",
+        "kind.attribute",
+        "values",
+        "level",
+        "score",
+        "records",
+        "matched",
+    ]
+    assert "Part.category" in result.stdout
+    assert "bearing, cuscinetto" in result.stdout
+    assert "0.875" in result.stdout
+    assert "embedding skipped: no query vector" in result.output
+    assert "unmatched: the" in result.output
+    plain = tmp_path / "plain.json"
+    plain.write_text("[1, 2]")
+    as_json = json.loads(
+        run("resolve", "bearings", "--vector-file", str(plain), "-d", "supply", "--json").stdout
+    )
+    assert as_json["candidates"][0]["predicate"] == {
+        "attr": "category",
+        "op": "in",
+        "value": ["bearing"],
+    }
+    bodies = request_bodies(route)
+    assert bodies[0] == {
+        "text": "the bearings",
+        "kinds": ["Part"],
+        "levels": ["exact"],
+        "limit": 50,
+    }
+    assert bodies[1]["query_vector"] == [1.0, 2.0]
+
+
 # History ------------------------------------------------------------------------------------
 
 

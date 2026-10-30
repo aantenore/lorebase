@@ -43,6 +43,7 @@ Exit codes: 0 success, 1 usage or configuration error (also not found), 2 valida
 * `whoami`: Show who the credentials authenticate as.
 * `query`: Run a query of the JSON DSL (filters,...
 * `search`: Search Records by text, and by meaning...
+* `resolve`: Ground the words of a text in Kinds,...
 * `log`: Show the history of a branch, newest...
 * `diff`: Show what changed between two Revisions (a...
 * `context`: Build a context pack: seed Records, their...
@@ -127,6 +128,33 @@ $ lorebase search [OPTIONS] {TEXT}
 * `--lens <str>`: Search the Kinds and Traits of this lens unless --kind or --trait.
 * `--mode <str>`: lexical, semantic or hybrid (default: lexical, hybrid with --vector-file).
 * `--vector-file <str>`: Query vector of the Domain&#x27;s embedding model: a JSON array, or the output of `lorebase-inference embed`; `-` reads standard input.
+* `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
+* `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
+* `--at <str>`: Revision id or tag to read at (time travel).
+* `-n, --limit <int range>`: Most items to print (default: list_limit setting).  [x&gt;=1]
+* `--json`: Print JSON instead of a table.
+* `--help`: Show this message and exit.
+
+### `lorebase resolve`
+
+Ground the words of a text in Kinds, Attributes and stored values (with `where` fragments
+in --json); it never runs a query.
+
+**Usage**:
+
+```console
+$ lorebase resolve [OPTIONS] {TEXT}
+```
+
+**Arguments**:
+
+* `TEXT`: Words to ground, e.g. a question.  [required]
+
+**Options**:
+
+* `--kind <str>`: Only look in this Kind. Repeatable.
+* `--level <str>`: exact, synonym, trigram or embedding (default: those the server enables). Repeatable.
+* `--vector-file <str>`: Embedding of TEXT, enabling the embedding level when nothing else matched: a JSON array, or the output of `lorebase-inference embed`; `-` reads standard input.
 * `-d, --domain <str>`: Domain id (default: LOREBASE_DOMAIN or `domain` in the config file).
 * `-b, --branch <str>`: Branch (default: LOREBASE_BRANCH, `branch` in the config file, else the Domain&#x27;s default branch).
 * `--at <str>`: Revision id or tag to read at (time travel).
