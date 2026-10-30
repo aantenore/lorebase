@@ -25,7 +25,11 @@ from lorebase_keeper.reading.settings import SemanticSettings
 from lorebase_platform.secrets import SecretResolutionError, resolve_secret
 from lorebase_platform.settings import ConfigError, Settings
 from lorebase_store import bm25
-from lorebase_store.embeddings import ITERATIVE_SCAN_MIN_VERSION, pgvector_version
+from lorebase_store.embeddings import (
+    ITERATIVE_SCAN_MIN_VERSION,
+    pgvector_version,
+    stored_models,
+)
 from lorebase_store.migrations import head_revisions
 from lorebase_store.replicas import ReplicaState
 
@@ -222,7 +226,11 @@ class SearchBackendCheck:
 class VectorSearchCheck:
     """How filtered vector search is served (design 8.8): iterative HNSW scans with pgvector
     0.8 or later and `search.semantic.iterative_scan: auto`, over-fetching otherwise. Never
-    takes the service out of rotation; the detail names the installed pgvector version."""
+    takes the service out of rotation; the detail names the installed pgvector version.
+
+    Degraded when vectors are stored but none under `search.semantic.model`: the setting
+    drifted from the model Scribe embeds with (`inference.embeddings.model`), and semantic
+    search would find nothing."""
 
     name = "vector_search"
 
@@ -233,10 +241,18 @@ class VectorSearchCheck:
         self._semantic = semantic
 
     async def __call__(self) -> CheckResult:
-        async with self._sessions() as session:
+        async with self._sessions() as session, session.begin():
             version = await pgvector_version(session)
+            models = await stored_models(session) if version is not None else []
         if version is None:
             return CheckResult(CheckStatus.DEGRADED, "pgvector is not installed")
+        model = self._semantic.model
+        if models and model not in models:
+            return CheckResult(
+                CheckStatus.DEGRADED,
+                f"search.semantic.model {model!r} has no stored vectors (stored: "
+                f"{', '.join(models)}); semantic search finds nothing",
+            )
         installed = ".".join(str(part) for part in version)
         if self._semantic.iterative_scan == "auto" and version >= ITERATIVE_SCAN_MIN_VERSION:
             return CheckResult(
