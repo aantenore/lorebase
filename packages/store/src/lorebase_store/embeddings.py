@@ -14,7 +14,8 @@ the last complete pass, so a pass over an unchanged branch reads no Record rows.
 
 Reads of a branch scan its own `mat_records` rows only: an overlay's inherited rows belong to
 its base branch, whose pass covers them. Everything here runs in the caller's transaction,
-in the Domain's row-level security scope (`scope_to_domain`).
+in the Domain's row-level security scope (`scope_to_domain`), except `stored_models`, which
+reads model names across Domains.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.model import Kind, Schema
 from lorebase_core.model.embedding import TemplateError, kind_template
+from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit.schema import load_compiled
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import Materialization, RefKind
@@ -548,6 +550,16 @@ async def pgvector_version(session: AsyncSession) -> tuple[int, ...] | None:
             return None
         _pgvector = parse_version(str(found))
     return _pgvector
+
+
+async def stored_models(session: AsyncSession) -> list[str]:
+    """Models with an embedding cursor in any Domain, sorted: the names vectors are stored
+    under. Model names only, no Record data, so the read lifts row-level security for its own
+    statement; it runs in the caller's transaction."""
+    c = EMBEDDING_CURSORS
+    async with rls_scope(session, bypass=True):
+        found = await session.execute(select(c.c.model).distinct().order_by(c.c.model))
+    return [str(model) for model in found.scalars()]
 
 
 async def iterative_scans(session: AsyncSession) -> bool:

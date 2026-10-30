@@ -61,3 +61,39 @@ async def test_not_ready_when_migrations_are_behind(database_url: str) -> None:
     assert response.json()["checks"]["database"]["detail"] == (
         f"migrations at 0000_old, expected {expected}"
     )
+
+
+async def _store_cursor(url: str, model: str) -> None:
+    """An embedding cursor of `model`, as Scribe leaves one (foreign keys not enforced)."""
+    engine = create_async_engine(url, poolclass=NullPool)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("SET LOCAL session_replication_role = replica"))
+            await connection.execute(
+                text(
+                    "INSERT INTO embedding_cursors (domain_id, branch, model, head, fingerprints,"
+                    " updated_at) VALUES ('supply', 'main', :model,"
+                    " decode(repeat('00', 32), 'hex'), '{}', now())"
+                ),
+                {"model": model},
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_vector_search_is_degraded_when_no_vector_is_of_the_searched_model(
+    database_url: str, app_database_url: str
+) -> None:
+    await _store_cursor(database_url, "other/model")
+    # The application role is subject to row-level security: the check still sees the cursor.
+    async with client_for(app_database_url) as http:
+        response = await http.get("/readyz")
+    assert response.status_code == 200
+    vector = response.json()["checks"]["vector_search"]
+    assert vector["status"] == "degraded"
+    expected = "'BAAI/bge-small-en-v1.5' has no stored vectors (stored: other/model)"
+    assert expected in vector["detail"]
+    await _store_cursor(database_url, "BAAI/bge-small-en-v1.5")
+    async with client_for(app_database_url) as http:
+        response = await http.get("/readyz")
+    assert response.json()["checks"]["vector_search"]["status"] == "ok"
