@@ -379,8 +379,16 @@ decide the remaining value Conflicts from the Lineage of both branches
 ([design 6.10](design.md#610-resolution-flows)).
 
 Automatic merges into a protected target happen only with `auto_merge_protected` (default
-true): the policy is part of the reviewed schema. With it off, those Proposals stay open. A run
-with no changes leaves an open Proposal untouched; with an automatic policy it retries its merge.
+true): the policy is part of the reviewed schema. With it off, those Proposals stay open. Even
+with it on, an automatic merge never stands in for a review: when the effective approval rules of
+the target (`keeper.proposals.required_approvals`, `required_approvals_from_stewards`,
+`required_roles`, each overridden by the Domain setting of the same name) require any approval,
+the merge is not performed, the Proposal stays open for review, and the run's stats say why
+(`merge_blocked: approvals`, with the rules in `blocking_rules`). The default branch is
+protected and `required_approvals` defaults to 1, so a Source merges into it on its own only
+where the operator or the Domain sets `required_approvals: 0` (and no steward or role rule
+applies). Unprotected targets are not affected. A run with no changes leaves an open Proposal
+untouched; with an automatic policy it retries its merge.
 
 A dry run (`dry_run: true`) reads, maps and computes the delta against the state step 3 would
 produce, records the counts in the run (`local_edits` and `seeded` included) and writes
@@ -453,6 +461,12 @@ sources:
     watermark_column: updated_at
     stale_after: P30D             # a Record no run read for 30 days is raised for review
 ```
+
+`stale_after` suits feeds that deliver every live row again within that window (a query that
+re-reads the rows still current, a periodic full extract past the watermark). A feed that sends
+only the rows that changed never re-delivers a Record that stays unchanged upstream, so every
+such Record is raised once `stale_after` has passed although it still exists: false positives.
+Leave `stale_after` null for those feeds.
 
 Nothing is deleted on that signal. The candidate names the Source, the last run that saw the
 Record and when, and no Attribute: a reviewer keeps it (`keep_current`), dismisses it, or

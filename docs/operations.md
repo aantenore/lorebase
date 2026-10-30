@@ -220,6 +220,50 @@ Writes pay little (commits show no difference; bulk deletes of a branch about 15
 Until the index exists, semantic search still answers, with the cost of the model's vectors.
 The downgrade drops the index.
 
+## Rebuilding the embedding index
+
+The HNSW index of `embeddings` (`embeddings_hnsw_<dims>`, or `embeddings_hnsw_half_<dims>` with
+`embedding_precision: half`) is built with pgvector's defaults (m 16, ef_construction 64) unless
+`store.storage.hnsw_m` and `hnsw_ef_construction` say otherwise. The semantic list is only as
+good as that graph: on 300,000 clustered vectors the default index gives a mean recall@20 of
+0.910 unfiltered, `hnsw_ef_construction: 128` gives 0.988 (index 586 MB either way, build 50 s
+against 66 s; [performance](performance.md#filtered-semantic-search)). Raising `hnsw_m` costs
+size and build time and did not do better there (m 32 with ef_construction 128: 0.974, 608 MB,
+124 s).
+
+The settings apply to indexes built from then on (`storage apply` building the index of another
+precision). To rebuild the existing index with them, as the table owner:
+
+```sql
+ALTER INDEX embeddings_hnsw_384 SET (ef_construction = 128);   -- and m = ..., if set
+REINDEX INDEX CONCURRENTLY embeddings_hnsw_384;
+```
+
+`REINDEX CONCURRENTLY` keeps reads and writes going and builds a second copy beside the first:
+plan disk for one more index and `maintenance_work_mem` for the build (the graph is built in
+memory up to that size, then much slower), and follow `pg_stat_progress_create_index`. A failed
+run leaves an invalid `..._ccnew` index: drop it and run again. Search keeps answering from the
+old index until the new one replaces it. Set the same values in `store.storage`, so that an
+index built later matches.
+
+## Approval rules and automatic merges
+
+An automatic merge (a Source with `auto_when_clean` or `auto_with_authority`, an extraction job
+in `direct` mode) into a protected branch is held for review when the target's effective
+approval rules require any approval: `keeper.proposals.required_approvals` above 0,
+`required_approvals_from_stewards` above 0, or a non-empty `required_roles`, each overridden by
+the Domain setting of the same name. The Proposal stays open; the Source run's stats say
+`merge_blocked: approvals`, an extraction job's result `direct_blocked: approvals`, both with
+`blocking_rules`. `scribe.sources.auto_merge_protected` and
+`scribe.extraction.direct_merge_protected` still have to be on for any automatic merge into a
+protected branch.
+
+The default branch is protected and `required_approvals` defaults to 1, so automatic merges into
+it now wait for a review. To let them through where no person needs to approve, set
+`required_approvals: 0` in `keeper.proposals` or on the Domain (and no steward or role rule).
+Scribe reads `keeper.proposals` from the shared configuration file: give Keeper and Scribe the
+same file. Unprotected targets are not affected.
+
 ## Ingestion modes and stewards after the upgrade
 
 Migration `0042` adds `proposals.kinds` (the Kinds a Proposal's changes touch, with a GIN
