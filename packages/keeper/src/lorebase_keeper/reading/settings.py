@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from lorebase_core.query import QueryLimits
+from lorebase_keeper.auth.permissions import permission_names
 from lorebase_keeper.kindhealth.config import HealthSettings
 from lorebase_platform.settings import SectionModel, Settings, register_section
 from lorebase_store.bm25 import SearchBackend
@@ -148,6 +149,26 @@ class HistorySettings(Bounds):
     )
 
 
+class CoverageReadSettings(SectionModel):
+    """The `coverage` block of `POST /query` and `POST /resolve` (design 8.11): how many Records
+    of the Kinds read miss the Attributes used, how fresh their Sources are, and which words
+    matched nothing. It reads the statistics Scribe keeps (`store.coverage`), never the
+    Records."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Add the block to queries and resolutions that do not say `coverage`; "
+        "a request may still turn it off (false) or on (true).",
+    )
+    note_min_share: float = Field(
+        default=0.01,
+        ge=0,
+        le=1,
+        description="Least share of Records missing an Attribute for the block to add a note "
+        "about it (the share is always listed).",
+    )
+
+
 class ReadSettings(SectionModel):
     """Bounds of the read path."""
 
@@ -194,6 +215,7 @@ class ReadSettings(SectionModel):
     time_travel: TimeTravelSettings = Field(default_factory=TimeTravelSettings)
     diff: DiffSettings = Field(default_factory=DiffSettings)
     health: HealthSettings = Field(default_factory=HealthSettings)
+    coverage: CoverageReadSettings = Field(default_factory=CoverageReadSettings)
 
     def query_limits(self) -> QueryLimits:
         """Limits handed to the DSL resolver."""
@@ -328,6 +350,43 @@ class ResolveScores(SectionModel):
     )
 
 
+class ResolveMissRecording(SectionModel):
+    """How Keeper records the phrases `POST /resolve` matched to nothing (design 8.10). Whether
+    it records at all, how long phrases are kept and their bounds are `store.resolve_misses`,
+    shared with Scribe, which prunes and consolidates them."""
+
+    permission: str = Field(
+        default="data.read",
+        description="Permission a caller needs Domain-wide (not narrowed to a Kind or a "
+        "branch) for its misses to be recorded, e.g. proposal.create to learn only from "
+        "editors' agents.",
+    )
+    record_below_score: float | None = Field(
+        default=None,
+        gt=0,
+        le=1,
+        description="Also record a phrase whose best candidate scores below this (a weak "
+        "match); null records only phrases that matched nothing.",
+    )
+    queue_size: int = Field(
+        default=10_000,
+        ge=1,
+        description="Distinct phrases held in memory between writes; further new ones are "
+        "dropped and counted.",
+    )
+    flush_interval_s: float = Field(
+        default=5.0, gt=0, description="Longest time a miss waits in memory before it is written."
+    )
+    write_timeout_s: float = Field(default=5.0, gt=0, description="Budget of one batch write.")
+
+    @field_validator("permission")
+    @classmethod
+    def _known_permission(cls, value: str) -> str:
+        if value not in permission_names():
+            raise ValueError(f"unknown permission {value!r}")
+        return value
+
+
 class ResolveSettings(SectionModel):
     """Resolution of words to schema elements and indexed values (`POST /resolve`, design
     8.9). The value index itself is configured under store.values."""
@@ -381,6 +440,7 @@ class ResolveSettings(SectionModel):
     )
     levels: ResolveLevels = Field(default_factory=ResolveLevels)
     scores: ResolveScores = Field(default_factory=ResolveScores)
+    misses: ResolveMissRecording = Field(default_factory=ResolveMissRecording)
 
 
 class SearchSettings(SectionModel):

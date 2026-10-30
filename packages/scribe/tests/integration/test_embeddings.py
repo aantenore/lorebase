@@ -372,6 +372,7 @@ async def test_job_continuation_and_schedule(
             webhook_interval_s=0,
             gc_schedule=None,
             embeddings_interval_s=60,
+            coverage_interval_s=0,
             audit_verify_interval_s=0,
         ),
         jobs=runtime.settings.jobs,

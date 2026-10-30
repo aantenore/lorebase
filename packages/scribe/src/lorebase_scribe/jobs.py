@@ -17,6 +17,8 @@
 | `reconcile_sweep` | `{"branch", "resume"}` optional, Domain set | `ReconcileSweep.run` |
 | `document_version_check` | `{"document", "mode", "resume"}`, Domain set | `DocumentVersionCheck` |
 | `value_index` | `{"rebuild": bool}` optional, Domain set | `values.run_value_index` |
+| `coverage` | `{"force": bool}` optional, Domain set | `coverage.run_coverage` |
+| `vocabulary_consolidation` | none, Domain set | `consolidation.ConsolidationPass` |
 
 An `extraction` job reads `documents` (ids) with `tiers` (a list, or null for
 `scribe.extraction.tiers`); `requested_by` is recorded on the extraction job.
@@ -59,6 +61,13 @@ A `value_index` job (design 8.9) brings the Domain's value index selection in li
 default branch (nothing to do while that branch and the settings are unchanged), or recounts
 every value with `rebuild`.
 
+A `coverage` job (design 8.11) recounts the Records and missing values per Kind of the
+Domain's default branch head when the head moved (or with `force`).
+
+A `vocabulary_consolidation` job (design 8.10) prunes the Domain's expired resolution misses
+and turns the frequent ones into vocabulary suggestions; its optional model step uses the chat
+model of task `schema_consolidation`.
+
 Index DDL runs on `JobContext.ddl_engine` (the maintenance role) when one is configured.
 """
 
@@ -78,6 +87,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 import lorebase_inference
 from lorebase_inference import InferenceSettings
 from lorebase_scribe.checkpoints import CheckpointSink, build_sink, publish_checkpoints
+from lorebase_scribe.consolidation import TASK as CONSOLIDATION_TASK
+from lorebase_scribe.consolidation import ConsolidationPass
 from lorebase_scribe.embeddings import PERMANENT_ERRORS as EMBEDDING_ERRORS
 from lorebase_scribe.embeddings import EmbeddingModels, EmbeddingPass, Templates
 from lorebase_scribe.extraction.pipeline import PERMANENT_ERRORS as EXTRACTION_ERRORS
@@ -98,11 +109,14 @@ from lorebase_scribe.webhooks import HttpxSender
 from lorebase_scribe.worker import JobHandler, PermanentJobError
 from lorebase_store.approval_rules import ApprovalRuleSettings
 from lorebase_store.auth import AuditRepository, AuditStream, Chains
+from lorebase_store.coverage import run_coverage
 from lorebase_store.embeddings import SchemaCache
 from lorebase_store.gc import GcBusyError, GcError, run_gc_job
 from lorebase_store.indexes import run_index_job
 from lorebase_store.jobs import (
     BRANCH_DELETE_JOB,
+    CONSOLIDATION_JOB,
+    COVERAGE_JOB,
     DOCUMENT_VERSION_CHECK_JOB,
     EMBEDDINGS_JOB,
     EXTRACTION_JOB,
@@ -156,6 +170,8 @@ JOB_TYPES = (
     RECONCILE_SWEEP_JOB,
     DOCUMENT_VERSION_CHECK_JOB,
     VALUE_INDEX_JOB,
+    COVERAGE_JOB,
+    CONSOLIDATION_JOB,
 )
 """Every job type Scribe knows."""
 
@@ -203,6 +219,18 @@ class JobContext:
             dims=self.runtime.settings.embeddings.dims,
             clock=self.clock,
             templates=self.embedding_templates,
+        )
+
+    def consolidation_pass(self) -> ConsolidationPass:
+        """A consolidation pass of resolution misses; its model step (when enabled) uses the
+        chat model of task `schema_consolidation`."""
+        inference = self.inference
+        return ConsolidationPass(
+            self.sessions,
+            self.runtime,
+            self.settings.consolidation,
+            clock=self.clock,
+            chat=lambda: lorebase_inference.create_chat_model(inference, task=CONSOLIDATION_TASK),
         )
 
     def semantic_stage(self) -> EmbeddingSemanticStage | None:
@@ -529,6 +557,20 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         )
         return report.as_dict()
 
+    async def coverage(job: JobRow) -> Mapping[str, Any]:
+        report = await run_coverage(
+            context.sessions,
+            _domain(job),
+            settings=context.runtime.settings.coverage,
+            clock=context.clock,
+            force=bool(job.payload.get("force", False)),
+        )
+        return report.as_dict()
+
+    async def vocabulary_consolidation(job: JobRow) -> Mapping[str, Any]:
+        report = await context.consolidation_pass().run(_domain(job), job_id=str(job.id))
+        return report.as_dict()
+
     available: dict[str, JobHandler] = {
         SOURCE_SYNC_JOB: source_sync,
         WEBHOOK_DELIVERY_JOB: webhook_delivery,
@@ -546,6 +588,8 @@ def build_handlers(context: JobContext, types: Iterable[str] = ()) -> dict[str, 
         RECONCILE_SWEEP_JOB: reconcile_sweep,
         DOCUMENT_VERSION_CHECK_JOB: document_version_check,
         VALUE_INDEX_JOB: value_index,
+        COVERAGE_JOB: coverage,
+        CONSOLIDATION_JOB: vocabulary_consolidation,
     }
     chosen = list(types) or list(available)
     unknown = sorted(set(chosen) - available.keys())

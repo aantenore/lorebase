@@ -141,6 +141,11 @@ async def open_scribe(
                 reconcile_interval_s=(
                     scribe.reconciliation.sweep_interval_s if scribe.reconciliation.enabled else 0
                 ),
+                consolidation_interval_s=(
+                    scribe.scheduler.consolidation_interval_s
+                    if runtime.settings.resolve_misses.enabled
+                    else 0
+                ),
             )
             yield Scribe(engine, context, worker, scheduler, scribe)
     finally:

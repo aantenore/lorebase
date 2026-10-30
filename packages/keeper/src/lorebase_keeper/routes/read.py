@@ -21,10 +21,13 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.query import Query as DslQuery
+from lorebase_keeper.auth.permissions import Permission
+from lorebase_keeper.auth.rbac import AccessContext
 from lorebase_keeper.errors import Problem, ValidationProblem
-from lorebase_keeper.reading import graph, record_history, records, resolve, search
+from lorebase_keeper.reading import coverage, graph, record_history, records, resolve, search
 from lorebase_keeper.reading.caching import CACHE_CONTROL, JSON, respond
 from lorebase_keeper.reading.cursors import fingerprint
+from lorebase_keeper.reading.misses import missed_phrases
 from lorebase_keeper.reading.points import (
     REVISION_HEADER,
     ReadPoint,
@@ -55,6 +58,7 @@ from lorebase_keeper.reading.views import (
     served,
 )
 from lorebase_keeper.services.reads import ReadGuard
+from lorebase_store.resolve_misses import caller_digest
 
 router = APIRouter(tags=["read"])
 
@@ -429,15 +433,26 @@ async def query_records(
     runtime: ReadRuntimeDep,
     session: ReadSessionDep,
 ) -> Response:
-    """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates."""
+    """Run a DSL query (design 8.2): filters, Relation predicates, includes, aggregates. The
+    answer says how complete it can be (`coverage`, design 8.11) unless the request turns it
+    off."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
-    query = DslQuery.model_validate(body.model_dump(by_alias=True, exclude={"branch", "at"}))
+    query = DslQuery.model_validate(
+        body.model_dump(by_alias=True, exclude={"branch", "at", "coverage"})
+    )
     plan = records.plan_query(query, point, runtime, "/body")
     page = await records.run_query(
         session, runtime, point, plan, shape=_shape(query), cursor_pointer="/body/cursor"
     )
+    block = None
+    if coverage.wanted(body.coverage, runtime):
+        block = await coverage.for_query(session, runtime, point, plan)
     out = QueryResponse(
-        **served(point), items=page.items, next_cursor=page.next_cursor, aggregate=page.aggregate
+        **served(point),
+        items=page.items,
+        next_cursor=page.next_cursor,
+        aggregate=page.aggregate,
+        coverage=block,
     )
     return await _sent(session, runtime, point, body, out)
 
@@ -511,7 +526,36 @@ async def resolve_words(
 ) -> Response:
     """Ground the words of a text in the schema and the indexed values (design 8.9): ranked
     candidate Kinds, Attributes and values, each with the words it matched and, for values,
-    a ready-to-use predicate. No query is run and nothing is interpreted beyond matching."""
+    a ready-to-use predicate. No query is run and nothing is interpreted beyond matching.
+    Phrases that matched nothing are listed in `coverage.unknown` and, where the operator
+    turned it on, kept for vocabulary suggestions (design 8.10)."""
     point = await resolve_point(session, runtime, access, branch=body.branch, at=body.at)
-    result = await resolve.resolve(session, runtime, point, body)
-    return await _sent(session, runtime, point, body, result)
+    resolution = await resolve.resolve(session, runtime, point, body)
+    await _record_misses(runtime, access, point, body, resolution)
+    return await _sent(session, runtime, point, body, resolution.response)
+
+
+async def _record_misses(
+    runtime: ReadRuntime,
+    access: ReadGuard,
+    point: ReadPoint,
+    body: ResolveRequest,
+    resolution: resolve.Resolution,
+) -> None:
+    """Hand the missed phrases of a head read to the recorder: only when recording is on,
+    the request did not opt out and the caller holds `search.resolve.misses.permission`
+    Domain-wide."""
+    recorder = runtime.misses
+    if recorder is None or not body.record_misses or body.at is not None:
+        return
+    phrases = missed_phrases(resolution.unknown, resolution.weak, recorder.store)
+    if not phrases:
+        return
+    permission = Permission(runtime.search.resolve.misses.permission)
+    if not await access.authorizer.allows(
+        access.principal, permission, point.domain.id, AccessContext()
+    ):
+        return
+    recorder.offer(
+        point.domain.id, point.branch, phrases, caller_digest(point.domain.id, access.principal.id)
+    )

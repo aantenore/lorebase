@@ -312,9 +312,11 @@ async def test_trait_queries_at_a_past_revision_match_the_head(
         set(item["values"]) <= {"country", "city"} or item["values"] for item in page["items"]
     )
     where = {"attr": "country", "op": "eq", "value": "IT"}
-    filtered = await post_ok(http, "/query", {"trait": "Located", "at": at, "where": where})
+    # Coverage statistics describe the head only (design 8.11): compared without them.
+    plain = {"trait": "Located", "where": where, "coverage": False}
+    filtered = await post_ok(http, "/query", {**plain, "at": at})
     assert filtered == {
-        **await post_ok(http, "/query", {"trait": "Located", "where": where}),
+        **await post_ok(http, "/query", plain),
         "revision": at,
         "served_from": "tree",
     }

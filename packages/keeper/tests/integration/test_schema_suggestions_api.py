@@ -4,6 +4,7 @@ rejected and accepted into a schema change Proposal."""
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -214,3 +215,102 @@ async def test_stored_variants_are_merged_on_request(seeded: Seeded) -> None:
 
         again = await http.post(f"{SUGGESTIONS}:merge")
         assert again.json() == {"merged": 0, "kept": 0}
+
+
+async def store_vocabulary(seeded: Seeded, observations: list[Observation]) -> None:
+    engine = create_engine(DatabaseSettings(), url=seeded.owner_url, statement_timeout_ms=0)
+    try:
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            await SchemaSuggestionRepository(session, DOMAIN).record(
+                observations,
+                job_id="job_vocabulary",
+                options=SuggestionOptions(),
+                now=Clock()(),
+                new_id=lambda: f"ssg_vocabulary_{uuid.uuid4().hex}",
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_vocabulary_suggestions_are_accepted_as_schema_changes(seeded: Seeded) -> None:
+    """Design 8.10: an alias suggestion from resolution misses lists with its phrase and
+    target, and accepting it proposes the alias on the existing Attribute."""
+    async with keeper(seeded.app_url) as http:
+        document = (await http.get(f"{BASE}/schema", params={"format": "json"})).json()
+        kinds = document["schema"]["kinds"]
+        supplier = next(k for k, v in kinds.items() if v["api_name"] == "Supplier")
+        status = next(
+            a for a, v in kinds[supplier]["attributes"].items() if v["api_name"] == "status"
+        )
+        vat = next(
+            a for a, v in kinds[supplier]["attributes"].items() if v["api_name"] == "vat_number"
+        )
+
+        def seen(type_: SuggestionType, phrase: str, target: str, value: str | None) -> Observation:
+            return Observation(
+                type_,
+                phrase,
+                f"miss:main:{phrase}",
+                0.6,
+                "resolve_misses",
+                kind=supplier,
+                target=target,
+                payload=None if value is None else {"value": value},
+                weight=4,
+                evidence={"document_id": f"miss:main:{phrase}", "phrase": phrase, "misses": 4},
+            )
+
+        await store_vocabulary(
+            seeded,
+            [
+                seen(SuggestionType.VALUE_ALIAS, "paused", status, "on_hold"),
+                seen(SuggestionType.ATTRIBUTE_ALIAS, "eu tax id", vat, None),
+            ],
+        )
+        listed = named(
+            (
+                await http.get(SUGGESTIONS, params={"type": ["value_alias", "attribute_alias"]})
+            ).json()["items"]
+        )
+        alias = listed["value_alias:paused"]
+        assert (alias["kind"], alias["attribute"], alias["value"]) == (
+            "Supplier",
+            "status",
+            "on_hold",
+        )
+        assert (alias["support"], alias["documents"]) == (4, 1)
+        assert alias["examples"][0]["phrase"] == "paused"
+
+        refused = await http.post(
+            f"{SUGGESTIONS}:decide",
+            json={
+                "decisions": [
+                    {
+                        "suggestion": listed["attribute_alias:eu tax id"]["id"],
+                        "decision": "accepted",
+                    }
+                ]
+            },
+        )
+        assert refused.status_code == 422, refused.text
+        assert "sensitive" in refused.text
+
+        accepted = await http.post(
+            f"{SUGGESTIONS}:decide",
+            json={"decisions": [{"suggestion": alias["id"], "decision": "accepted"}]},
+        )
+        assert accepted.status_code == 200, accepted.text
+        proposal = accepted.json()["proposal"]
+        assert {(c["op"], c["api_name"]) for c in proposal["changes"]} == {("update", "Supplier")}
+        changed = (
+            await http.get(f"{BASE}/schema/kinds/Supplier", params={"branch": proposal["branch"]})
+        ).json()
+        assert "paused" in str(changed)
+        listed_after = named(
+            (await http.get(SUGGESTIONS, params={"type": "value_alias", "all": "true"})).json()[
+                "items"
+            ]
+        )
+        assert listed_after["value_alias:paused"]["status"] == "accepted"

@@ -589,6 +589,7 @@ async def test_scheduler_leader_election_and_schedules(
         webhook_interval_s=10,
         embeddings_interval_s=0,
         value_index_interval_s=0,
+        coverage_interval_s=0,
         audit_verify_interval_s=86400,
     )
 
