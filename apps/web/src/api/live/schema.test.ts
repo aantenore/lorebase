@@ -139,3 +139,118 @@ describe('mapSchema', () => {
     }
   });
 });
+
+describe('sections the Modeler does not edit', () => {
+  type Obj = Record<string, unknown>;
+
+  /** The mapping at `path` below `value`. */
+  const at = (value: unknown, ...path: string[]): Obj =>
+    path.reduce<unknown>((node, key) => (node as Obj)[key], value) as Obj;
+  const firstOf = (value: unknown): Obj => Object.values(value as Obj)[0] as Obj;
+
+  /** Keeper's `SchemaOut` with lenses, stewards and members the view does not model. */
+  function enriched() {
+    const copy = structuredClone(out);
+    const body = copy.schema as Obj;
+    const byName = (section: string, name: string) => {
+      const found = Object.values(at(body, section)).find((e) => (e as Obj)['api_name'] === name);
+      if (found === undefined) throw new Error(`No ${name}`);
+      return found as Obj;
+    };
+    const supplier = byName('kinds', 'Supplier');
+    const supplied = byName('relations', 'supplied_by');
+    at(body, 'domain')['stewards'] = ['supply-steward'];
+    at(body, 'domain')['future_domain_key'] = { a: 1 };
+    supplier['stewards'] = ['risk-analyst'];
+    supplier['future_kind_key'] = ['x'];
+    supplied['future_relation_key'] = true;
+    const located = byName('traits', 'Located');
+    located['future_trait_key'] = { b: 2 };
+    firstOf(located['attributes'])['future_trait_attribute_key'] = 'y';
+    firstOf(supplier['attributes'])['future_attribute_key'] = 3;
+    firstOf(body['derivations'])['future_derivation_key'] = 'z';
+    const lensId = 'lns_01KEZF7C00LENS000000000001';
+    body['lenses'] = {
+      [lensId]: {
+        id: lensId,
+        api_name: 'supplier_risk',
+        description: 'A supplier with its parts and open risk flags.',
+        kinds: [supplier['id']],
+        traits: [],
+        relations: [supplied['id']],
+        depth: 1,
+        include_recent_changes: true,
+        budget_tokens: 4000,
+      },
+    };
+    body['retention'] = {
+      default_days: 90,
+      rules: [{ kind: 'Part', days: 30 }],
+    };
+    return copy;
+  }
+
+  const noNewId = () => {
+    throw new Error('no element should need a new id');
+  };
+  const document = () => schemaToDocument(mapSchema(enriched()));
+
+  it('writes lenses, stewards and unknown members into the document verbatim', () => {
+    const doc = document();
+    expect(doc.domain).toMatchObject({
+      stewards: ['supply-steward'],
+      future_domain_key: { a: 1 },
+    });
+    expect(doc.domain).not.toHaveProperty('default_branch');
+    expect(at(doc, 'kinds', 'Supplier')).toMatchObject({
+      stewards: ['risk-analyst'],
+      future_kind_key: ['x'],
+    });
+    expect(at(doc, 'relations', 'supplied_by')).toMatchObject({ future_relation_key: true });
+    expect(at(doc, 'traits', 'Located')).toMatchObject({ future_trait_key: { b: 2 } });
+    expect(firstOf(at(doc, 'traits', 'Located', 'attributes'))).toMatchObject({
+      future_trait_attribute_key: 'y',
+    });
+    expect(firstOf(at(doc, 'kinds', 'Supplier', 'attributes'))).toMatchObject({
+      future_attribute_key: 3,
+    });
+    expect(firstOf(doc.derivations)).toMatchObject({ future_derivation_key: 'z' });
+    expect(doc.lenses).toEqual({
+      supplier_risk: {
+        id: 'lns_01KEZF7C00LENS000000000001',
+        description: 'A supplier with its parts and open risk flags.',
+        kinds: ['Supplier'],
+        relations: ['supplied_by'],
+        depth: 1,
+        include_recent_changes: true,
+        budget_tokens: 4000,
+      },
+    });
+    expect(at(doc, 'retention')).toEqual({ default_days: 90, rules: [{ kind: 'Part', days: 30 }] });
+  });
+
+  it('keeps every untouched part when an unrelated Kind is edited and the document saved', () => {
+    const schema = mapSchema(enriched());
+    const edited = document();
+    at(edited, 'kinds', 'Plant')['description'] = 'Edited';
+    const back = documentToSchema(edited, schema, noNewId);
+    expect(back.issues).toEqual([]);
+    expect(back.schema.lenses).toEqual(schema.lenses);
+    expect(back.schema.extra).toEqual(schema.extra);
+    expect(schemaToDocument(back.schema)).toEqual(edited);
+  });
+
+  it('reads an unedited document back into the schema it came from', () => {
+    const schema = mapSchema(enriched());
+    const back = documentToSchema(document(), schema, noNewId);
+    expect(back.issues).toEqual([]);
+    expect(back.schema.kinds).toEqual(schema.kinds);
+    expect(back.schema.relations).toEqual(schema.relations);
+    expect(back.schema.traits).toEqual(schema.traits);
+    expect(back.schema.derivations).toEqual(schema.derivations);
+    expect(back.schema.lenses).toEqual(schema.lenses);
+    expect(back.schema.extra).toEqual({
+      retention: { default_days: 90, rules: [{ kind: 'Part', days: 30 }] },
+    });
+  });
+});

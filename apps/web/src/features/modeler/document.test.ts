@@ -198,6 +198,60 @@ describe('source fields beyond the modelled ones', () => {
   });
 });
 
+describe('sections the Modeler does not edit', () => {
+  async function enriched(): Promise<Schema> {
+    const schema = await sample('main');
+    expect(schema.lenses?.length).toBeGreaterThan(0);
+    return {
+      ...schema,
+      domain_info: { stewards: ['supply-steward'], extra: { future_domain_key: 1 } },
+      kinds: schema.kinds.map((k) =>
+        k.api_name === 'Supplier'
+          ? { ...k, stewards: ['risk-analyst'], extra: { future_kind_key: { a: [1] } } }
+          : k,
+      ),
+      lenses: (schema.lenses ?? []).map((l, i) =>
+        i === 0 ? { ...l, extra: { depth: 1, budget_tokens: 2000 } } : l,
+      ),
+      extra: { retention: { default_days: 90 } },
+    };
+  }
+
+  it('writes lenses, stewards and unknown members into the document', async () => {
+    const schema = await enriched();
+    const document = schemaToDocument(schema);
+    const lens = schema.lenses?.[0];
+    expect(Object.keys(document.lenses ?? {})).toEqual(schema.lenses?.map((l) => l.api_name));
+    expect(document.lenses?.[lens?.api_name ?? '']).toMatchObject({
+      id: lens?.id,
+      depth: 1,
+      budget_tokens: 2000,
+    });
+    expect(document.domain).toMatchObject({ stewards: ['supply-steward'], future_domain_key: 1 });
+    expect(document.kinds?.['Supplier']).toMatchObject({
+      stewards: ['risk-analyst'],
+      future_kind_key: { a: [1] },
+    });
+    expect((document as Record<string, unknown>)['retention']).toEqual({ default_days: 90 });
+  });
+
+  it('keeps them through an edit of an unrelated Kind and a save', async () => {
+    const schema = await enriched();
+    const edited = structuredClone(schemaToDocument(schema));
+    const plant = edited.kinds?.['Plant'];
+    if (plant === undefined) throw new Error('No Plant');
+    plant.description = 'Edited';
+    const { schema: back, issues } = documentToSchema(edited, schema, mint);
+    expect(issues).toEqual([]);
+    expect(back.lenses).toEqual(schema.lenses);
+    expect(back.extra).toEqual(schema.extra);
+    expect(back.kinds.find((k) => k.api_name === 'Supplier')).toEqual(
+      schema.kinds.find((k) => k.api_name === 'Supplier'),
+    );
+    expect(schemaToDocument(back)).toEqual(edited);
+  });
+});
+
 describe('schema YAML', () => {
   it('reports syntax errors with line and column', () => {
     const parsed = parseSchemaYaml('kinds:\n  Supplier:\n    attributes: [oops\n');

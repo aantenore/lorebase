@@ -44,6 +44,12 @@ const isRaw = (value: unknown): value is Raw =>
 const omit = (raw: Raw, keys: readonly string[]): Raw =>
   Object.fromEntries(Object.entries(raw).filter(([key]) => !keys.includes(key)));
 
+/** The members of `raw` outside `known`, as the `extra` the view carries; nothing when none. */
+const extraOf = (raw: Raw, known: readonly string[]): { extra?: Raw } => {
+  const rest = omit(raw, known);
+  return Object.keys(rest).length === 0 ? {} : { extra: rest };
+};
+
 const entries = (value: unknown): Raw[] => (isRaw(value) ? Object.values(value).filter(isRaw) : []);
 const str = (value: unknown, fallback = ''): string =>
   typeof value === 'string' ? value : fallback;
@@ -100,6 +106,26 @@ function constraintsOf(raw: unknown, type: RawType): AttributeConstraints {
   return out;
 }
 
+const ATTRIBUTE_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'type',
+  'required',
+  'unique',
+  'default',
+  'constraints',
+  'sensitivity',
+  'indexed',
+  'searchable',
+  'search_weight',
+  'derivation_id',
+  'authority',
+  'vault',
+  'valid_time',
+] as const;
+
 function attribute(raw: Raw, names: Names): Attribute {
   const type = (isRaw(raw['type']) ? raw['type'] : { name: 'string' }) as unknown as RawType;
   const searchable = raw['searchable'] === true;
@@ -120,6 +146,7 @@ function attribute(raw: Raw, names: Names): Attribute {
     authority: strOrNull(raw['authority']),
     ...(raw['vault'] === true ? { vault: true } : {}),
     ...(raw['valid_time'] === true ? { valid_time: true } : {}),
+    ...extraOf(raw, ATTRIBUTE_KEYS),
   };
 }
 
@@ -137,12 +164,30 @@ function status(raw: Raw): { status?: ElementStatus } {
   return value === undefined || value === 'active' ? {} : { status: value as ElementStatus };
 }
 
+const KIND_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'primary_key',
+  'title_attribute',
+  'attributes',
+  'traits',
+  'status',
+  'search',
+  'icon',
+  'color',
+  'operations_builtin',
+  'stewards',
+] as const;
+
 function kind(raw: Raw, names: Names): Kind {
   const mapped = attributes(raw['attributes'], names);
   const primaryKey = list(raw['primary_key']).map(String);
   const builtin = list(raw['operations_builtin']);
   const withBuiltin =
     raw['operations_builtin'] === undefined ? ['create', 'update', 'delete'] : builtin;
+  const stewards = list(raw['stewards']).map(String);
   return {
     id: str(raw['id']),
     api_name: str(raw['api_name']),
@@ -182,8 +227,27 @@ function kind(raw: Raw, names: Names): Kind {
       update: withBuiltin.includes('update'),
       delete: withBuiltin.includes('delete'),
     },
+    ...(stewards.length === 0 ? {} : { stewards }),
+    ...extraOf(raw, KIND_KEYS),
   };
 }
+
+const RELATION_KEYS = [
+  'id',
+  'api_name',
+  'inverse_api_name',
+  'display_name',
+  'description',
+  'from_kind',
+  'to_kind',
+  'cardinality',
+  'required_from',
+  'attributes',
+  'on_delete',
+  'backing',
+  'foreign_key_attribute',
+  'status',
+] as const;
 
 function relation(raw: Raw, names: Names): Relation {
   const foreignKey = strOrNull(raw['foreign_key_attribute']);
@@ -202,8 +266,26 @@ function relation(raw: Raw, names: Names): Relation {
     backing: str(raw['backing'], 'explicit') as Relation['backing'],
     ...(foreignKey === null ? {} : { foreign_key_attribute: foreignKey }),
     ...status(raw),
+    ...extraOf(raw, RELATION_KEYS),
   };
 }
+
+const TRAIT_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'attributes',
+  'status',
+] as const;
+const TRAIT_ATTRIBUTE_KEYS = [
+  'id',
+  'api_name',
+  'type',
+  'required',
+  'display_name',
+  'description',
+] as const;
 
 function trait(raw: Raw, names: Names): Trait {
   return {
@@ -222,9 +304,11 @@ function trait(raw: Raw, names: Names): Trait {
         required: a['required'] === true,
         ...(display === '' ? {} : { display_name: display }),
         ...(description === '' ? {} : { description }),
+        ...extraOf(a, TRAIT_ATTRIBUTE_KEYS),
       };
     }),
     ...status(raw),
+    ...extraOf(raw, TRAIT_KEYS),
   };
 }
 
@@ -259,6 +343,22 @@ function stepWith(raw: Raw, names: Names): Raw {
   return out;
 }
 
+const OPERATION_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'parameters',
+  'preconditions',
+  'steps',
+  'review_policy',
+  'permissions',
+  'side_effects',
+  'rate_limit',
+  'status',
+  'builtin',
+] as const;
+
 function operation(raw: Raw, names: Names): Operation {
   const policy = isRaw(raw['review_policy']) ? raw['review_policy'] : {};
   const mode = str(policy['mode'], 'never');
@@ -290,8 +390,18 @@ function operation(raw: Raw, names: Names): Operation {
       limit === null ? null : `${String(limit['max_calls'])} per ${String(limit['per_seconds'])}s`,
     status: str(raw['status'], 'active') as Operation['status'],
     builtin: false,
+    ...extraOf(raw, OPERATION_KEYS),
   };
 }
+
+const DERIVATION_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'definition',
+  'status',
+] as const;
 
 function derivation(raw: Raw, names: Names): Derivation {
   const definition = isRaw(raw['definition']) ? raw['definition'] : {};
@@ -320,6 +430,7 @@ function derivation(raw: Raw, names: Names): Derivation {
         : { type: 'attribute', kind_id: str(kindId), api_name: names.of(attributeId) },
     definition: body,
     ...status(raw),
+    ...extraOf(raw, DERIVATION_KEYS),
   };
 }
 
@@ -425,6 +536,40 @@ function domainExamples(value: unknown): DomainExample[] {
   );
 }
 
+/** `default_branch` is Keeper's own bookkeeping of the Domain, not part of the schema document. */
+const DOMAIN_KEYS = [
+  'id',
+  'default_branch',
+  'display_name',
+  'description',
+  'settings',
+  'examples',
+  'stewards',
+] as const;
+
+const LENS_KEYS = [
+  'id',
+  'api_name',
+  'display_name',
+  'description',
+  'kinds',
+  'traits',
+  'relations',
+] as const;
+
+/** Sections of the schema body the view models; any other member is carried in `Schema.extra`. */
+export const SCHEMA_SECTIONS = [
+  'format',
+  'domain',
+  'kinds',
+  'relations',
+  'traits',
+  'operations',
+  'derivations',
+  'sources',
+  'lenses',
+] as const;
+
 /** The view `Schema` of a `SchemaOut`. */
 export function mapSchema(out: SchemaOut): Schema {
   const body: Raw = out.schema;
@@ -439,6 +584,7 @@ export function mapSchema(out: SchemaOut): Schema {
   const info = isRaw(body['domain']) ? body['domain'] : {};
   const settings = isRaw(info['settings']) ? info['settings'] : undefined;
   const examples = domainExamples(info['examples']);
+  const stewards = list(info['stewards']).map(String);
   return {
     domain: out.domain,
     domain_info: {
@@ -446,6 +592,8 @@ export function mapSchema(out: SchemaOut): Schema {
       ...(typeof info['description'] === 'string' ? { description: info['description'] } : {}),
       ...(settings === undefined ? {} : { settings }),
       ...(examples.length === 0 ? {} : { examples }),
+      ...(stewards.length === 0 ? {} : { stewards }),
+      ...extraOf(info, DOMAIN_KEYS),
     },
     branch: out.branch ?? '',
     revision: out.revision,
@@ -466,7 +614,12 @@ export function mapSchema(out: SchemaOut): Schema {
       description: str(l['description']),
       kinds: list(l['kinds']).map((id) => names.of(id)),
       traits: list(l['traits']).map((id) => names.of(id)),
+      ...(list(l['relations']).length === 0
+        ? {}
+        : { relations: list(l['relations']).map((id) => names.of(id)) }),
+      ...extraOf(l, LENS_KEYS),
     })),
+    ...extraOf(body, SCHEMA_SECTIONS),
     search: { modes: [...out.search.modes], embedding: out.search.embedding },
   };
 }
