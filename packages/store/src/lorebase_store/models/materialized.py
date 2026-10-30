@@ -174,6 +174,64 @@ class MatLexicon(Base):
     records: Mapped[int] = mapped_column(BigInteger)
 
 
+class MatValueAttribute(Base):
+    """An Attribute whose values `mat_values` holds on every branch of the Domain, values
+    longer than `max_chars` left out (revision 0045, `lorebase_store.values`)."""
+
+    __tablename__ = "mat_value_attributes"
+    __table_args__ = (domain_fk(),)
+
+    domain_id: Mapped[DomainKey]
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    attribute_id: Mapped[str] = mapped_column(primary_key=True)
+    max_chars: Mapped[int] = mapped_column(Integer)
+
+
+class MatValue(Base):
+    """Per branch, a value of a selected Attribute and how many of the branch's own live rows
+    hold it (revision 0045). `norm` is `lb_value_norm(value)`, the compared form.
+
+    Kept by triggers on `mat_records`, like `mat_lexicon`: an overlay holds the values of its
+    own rows, and its readers add its base's.
+    """
+
+    __tablename__ = "mat_values"
+    __table_args__ = (
+        _branch_fk(),
+        Index("ix_mat_values_norm", "domain_id", "branch", "norm"),
+        Index(
+            "ix_mat_values_trgm",
+            "domain_id",
+            "branch",
+            "norm",
+            postgresql_using="gin",
+            postgresql_ops={"norm": "gin_trgm_ops"},
+        ),
+        Index("ix_mat_values_spent", "domain_id", "branch", postgresql_where=text("records <= 0")),
+    )
+
+    domain_id: Mapped[DomainKey]
+    branch: Mapped[str] = mapped_column(primary_key=True)
+    kind_id: Mapped[str] = mapped_column(primary_key=True)
+    attribute_id: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[str] = mapped_column(primary_key=True)
+    norm: Mapped[str]
+    records: Mapped[int] = mapped_column(BigInteger)
+
+
+class MatValueCursor(Base):
+    """What the last selection pass of a Domain read (revision 0045): the default branch's
+    head and the fingerprint of its schema and the `store.values` settings."""
+
+    __tablename__ = "mat_value_cursors"
+    __table_args__ = (domain_fk(),)
+
+    domain_id: Mapped[DomainKey]
+    head: Mapped[bytes]
+    fingerprint: Mapped[str]
+    updated_at: Mapped[datetime]
+
+
 class MatHistory(Base):
     """Per branch, per element change log along the first-parent chain."""
 
