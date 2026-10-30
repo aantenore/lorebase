@@ -13,6 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from lorebase_core.model import Domain, Schema
+from lorebase_store import values
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.definer import BM25_FUNCTIONS, READ_FUNCTIONS, grant_read_functions
 from lorebase_store.indexes import plan_indexes, run_index_jobs
@@ -561,6 +562,10 @@ async def _exercise(
     await search_records(
         session, DOMAIN, branch, "Suplier 77", limit=20, corrections=fixes, runtime=runtime
     )
+    if isinstance(branch, BranchLayout):
+        await values.similar_values(
+            session, branch, ["suplier"], threshold=0.3, per_term=3, runtime=runtime
+        )
 
 
 def _assert_index_plans(plans: list[list[tuple[str, str | None]]]) -> None:
@@ -766,7 +771,7 @@ async def test_overlay_reads_keep_index_plans(
     }
     assert functions == {
         f for f in READ_FUNCTIONS if f.endswith("_overlay") and f not in LEGACY_FUNCTIONS
-    } | {"lb_search_corrections"}
+    } | {"lb_search_corrections", "lb_values_similar"}
     _assert_overlay_plans(nested, own)
     assert changed is not None
     assert changed.title is not None

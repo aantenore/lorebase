@@ -18,10 +18,10 @@ from lorebase_keeper.auth.principals import Principal
 from lorebase_keeper.auth.rbac import Authorizer
 from lorebase_keeper.errors import ProblemError
 from lorebase_keeper.reading.sensitivity import UNCLEARED
-from lorebase_keeper.routes.proposals import _Visibility
 from lorebase_keeper.services.proposal_reads import (
     NO_SCOPE,
     ConflictScope,
+    ConflictVisibility,
     conflict_scope,
     readable_proposals,
     require_target_read,
@@ -261,7 +261,7 @@ def test_record_level_conflicts_lose_values_and_messages_left_out() -> None:
     status = order.attribute_by_api_name("status")
     assert supplier is not None
     assert status is not None
-    seen = _Visibility(None, UNCLEARED, frozenset({supplier.id}))
+    seen = ConflictVisibility(None, UNCLEARED, frozenset({supplier.id}))
     payload = {
         "ours": {supplier.id: "S-1001", status.id: "open"},
         "theirs": {"values": {supplier.id: "S-1002"}},
@@ -273,4 +273,4 @@ def test_record_level_conflicts_lose_values_and_messages_left_out() -> None:
     assert scrubbed["theirs"] == {"values": {}}
     assert scrubbed["details"] == {}
     assert supplier.id not in scrubbed["message"]
-    assert _Visibility(None, UNCLEARED).scrub(payload) == payload
+    assert ConflictVisibility(None, UNCLEARED).scrub(payload) == payload

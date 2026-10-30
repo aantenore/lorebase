@@ -424,7 +424,9 @@ async def test_gc_job_is_claimed_once_and_runs(
     async with sessions() as session, session.begin():
         await session.execute(text("SELECT set_config('lorebase.bypass_rls', 'on', true)"))
         rows = (
-            await session.execute(text("SELECT id, status::text, result FROM jobs ORDER BY id"))
+            await session.execute(
+                text("SELECT id, status::text, result FROM jobs WHERE type = 'gc' ORDER BY id")
+            )
         ).all()
     assert [row[1] for row in rows] == ["succeeded", "succeeded"]
     by_id = {row[0]: row[2] for row in rows}
