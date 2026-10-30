@@ -1811,6 +1811,7 @@ One Lorebase installation serves one organization. Domains are the isolation bou
 ### 13.4 Secrets
 
 - Configuration references secrets (`secret://env/NAME`, `secret://file/path`); secret values never enter the database, logs or traces.
+- Other secret stores plug in as providers: `lorebase_platform.secrets.register_secret_provider(name, resolver)`, called before the settings load, makes `secret://<name>/TARGET` resolve through `resolver`. `env` and `file` cannot be replaced, and a name registered twice is refused unless `replace=True`.
 - Source credentials use read-only database roles by convention, checked at registration with a warning when write privileges are detected.
 
 ### 13.5 Personal data and erasure
