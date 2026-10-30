@@ -49,7 +49,7 @@ merged: Revision 2cacd1bb, parents 60f665d3, 4d5440a3
 validation: 72 Records against the merged schema, 0 issues
 ```
 
-The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in the [quickstart](docs/quickstart.md#7-run-the-core-demo).
+The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in [manual setup](docs/manual-setup.md#1-run-the-core-demo).
 
 ## Try the five-day demo
 
@@ -146,7 +146,7 @@ Then open the web app at `http://127.0.0.1:8090` (the URL `make up` printed). It
 
 There is nothing to sign in to: the example configuration runs with authentication off, on loopback only. `make down` stops the stack and `make clean-stack` deletes its data.
 
-The first `make up` builds the backend and web images (a few minutes); the rest takes about a minute. The [quickstart](docs/quickstart.md) explains each step and continues with [an agent connected over MCP](docs/quickstart.md#3-connect-an-agent-over-mcp), [a real model](docs/quickstart.md#4-use-a-real-model) (Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file), [cleanup](docs/quickstart.md#5-stop-and-clean-up) and [troubleshooting](docs/quickstart.md#6-troubleshooting), then goes through the REST API one call at a time. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
+The first `make up` builds the backend and web images (a few minutes); the rest takes about a minute. The [quickstart](docs/quickstart.md) explains each step and continues with [an agent connected over MCP](docs/quickstart.md#3-connect-an-agent-over-mcp), [a real model](docs/quickstart.md#4-use-a-real-model) (Ollama by default, or any hosted OpenAI-compatible endpoint with its key in a file), [cleanup](docs/quickstart.md#5-stop-and-clean-up) and [troubleshooting](docs/quickstart.md#6-troubleshooting); [manual setup](docs/manual-setup.md) goes through the REST API one call at a time. Scale-out with replicas is in [docs/deployment.md](docs/deployment.md), and the Kubernetes install in [docs/kubernetes.md](docs/kubernetes.md). Configuration is external: `.env` for compose, `config/lorebase.example.yaml` for the services, `apps/web/.env.example` for the web app.
 
 ### Install the command line and the MCP server from PyPI
 

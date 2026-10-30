@@ -16,6 +16,10 @@ site_dir: build/site
 exclude_docs: |
   launch/
 
+# Built and linked from the roadmap, but not listed in the navigation (a planning record).
+not_in_nav: |
+  plan/m1.md
+
 # Pages built from repository files outside docs/ and links that leave the docs tree.
 hooks:
   - scripts/docs/mkdocs_hooks.py
@@ -97,6 +101,7 @@ nav:
   - Start:
       - Overview: index.md
       - Quickstart: quickstart.md
+      - Manual setup: manual-setup.md
       - Five-day demo: demo.md
       - Visual tour: tour.md
   - Concepts:
@@ -138,4 +143,3 @@ nav:
       - Contributing: project/contributing.md
       - Security policy: project/security.md
       - Releasing: release.md
-      - M1 plan: plan/m1.md
