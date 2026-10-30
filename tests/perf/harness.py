@@ -644,7 +644,7 @@ async def _create_schema(
             DOMAIN,
             "main",
             [],
-            schema_changes=[SchemaUpsert(e) for e in elements],
+            schema_changes=[SchemaUpsert(e) for e in elements],  # type: ignore[arg-type]
             author=AUTHOR,
             message="schema",
             origin=ORIGIN,
