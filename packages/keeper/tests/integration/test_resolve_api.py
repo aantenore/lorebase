@@ -9,18 +9,22 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lorebase_core.model import Schema
 from lorebase_keeper.auth.api_keys import ApiKeyCodec
 from lorebase_keeper.auth.config import ApiKeySettings
+from lorebase_keeper.reading.settings import SearchSettings
 from lorebase_store import values
 from lorebase_store.auth import SqlAuthStore
 from lorebase_store.db import create_engine
+from lorebase_store.embeddings import template_fingerprints
 from lorebase_store.materialize import BranchMode, create_branch
 from lorebase_store.models.enums import GrantScope, PrincipalType
 from lorebase_store.repositories import scope_to_domain
 from lorebase_store.runtime import StoreRuntime
-from lorebase_store.settings import DatabaseSettings
+from lorebase_store.settings import DatabaseSettings, StoreSettings
 
 from .read_fixtures import Seeded, keeper, owner_session, seeded_database
 from .resolve_shop import (
@@ -40,6 +44,7 @@ BASE = f"/api/v1/domains/{DOMAIN}"
 PEPPER = "resolve-tests-pepper-0123456789-0123456"
 CODEC = ApiKeyCodec(ApiKeySettings(pepper=PEPPER))
 OVERLAY = "agent/repaint"
+DIMS = StoreSettings().embeddings.dims
 SECTION = {"auth": {"mode": "api_key", "api_keys": {"pepper": PEPPER}}}
 
 
@@ -81,6 +86,7 @@ async def seed(
         await commit_changes(
             owner, runtime, clock, products(schema, 3, color="Viola"), branch=OVERLAY
         )
+    await _embed(owner_url, schema)
     engine = create_engine(DatabaseSettings(), url=owner_url, pooled=False)
     try:
         store = SqlAuthStore(async_sessionmaker(engine, expire_on_commit=False))
@@ -99,6 +105,45 @@ async def seed(
     seeded = Seeded(owner_url=owner_url, app_url=app_url, schema=schema)
     seeded.facts = {"keys": keys, "schema_revision": results[1].revision_id.hex()}
     return seeded
+
+
+def unit_vector(index: int) -> list[float]:
+    vector = [0.0] * DIMS
+    vector[index % DIMS] = 1.0
+    return vector
+
+
+EMBEDDED = {"P-000001": 0, "P-000002": 5, "P-000004": 10}
+"""Products with a vector (index of its unit axis): P-000001 is a red bag."""
+
+
+async def _embed(owner_url: str, schema: Schema) -> None:
+    product = schema.kind_by_api_name("Product")
+    assert product is not None
+    fingerprint = template_fingerprints([product])[product.id]
+    async with owner_session(owner_url) as session, session.begin():
+        found = await session.execute(
+            text(
+                "SELECT key, object_hash FROM mat_records WHERE domain_id = :d "
+                "AND branch = 'main' AND kind_id = :k AND key = ANY(:keys)"
+            ),
+            {"d": DOMAIN, "k": product.id, "keys": list(EMBEDDED)},
+        )
+        for key, digest in found.all():
+            await session.execute(
+                text(
+                    "INSERT INTO embeddings (domain_id, object_hash, model, fingerprint, dims, "
+                    "embedding) VALUES (:d, :h, :m, :f, :n, CAST(:v AS vector))"
+                ),
+                {
+                    "d": DOMAIN,
+                    "h": digest,
+                    "m": SearchSettings().semantic.model,
+                    "f": fingerprint,
+                    "n": DIMS,
+                    "v": str(unit_vector(EMBEDDED[key])),
+                },
+            )
 
 
 @pytest.fixture(scope="module")
@@ -244,3 +289,29 @@ async def test_bounds_and_embedding_level(seeded: Seeded) -> None:
     assert body["candidates"] == []
     assert {"level": "embedding", "reason": "no query_vector"} in body["skipped"]
     assert len(limited.json()["candidates"]) == 1
+
+
+async def test_embedding_level_reads_the_nearest_records(seeded: Seeded) -> None:
+    async with keeper(seeded.app_url, SECTION) as http:
+        response = await _resolve(
+            http, seeded, {"text": "zzqx wvvk", "query_vector": unit_vector(0)}
+        )
+        disabled = await _resolve(
+            http,
+            seeded,
+            {"text": "zzqx", "query_vector": unit_vector(0), "levels": ["exact", "trigram"]},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["skipped"] == []
+    assert body["unmatched"] == []
+    candidates = body["candidates"]
+    assert candidates
+    assert {c["level"] for c in candidates} == {"embedding"}
+    top = candidates[0]
+    assert top["kind"] == "Product"
+    category = _by(candidates, "Product", "category", "value")
+    assert category["values"][0] == "Borse"  # the nearest Record's, counted from the index
+    assert category["records"] == 100
+    assert disabled.json()["candidates"] == []
+    assert {"level": "embedding", "reason": "not requested"} in disabled.json()["skipped"]

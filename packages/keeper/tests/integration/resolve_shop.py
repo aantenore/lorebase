@@ -32,6 +32,7 @@ kinds:
     aliases: [article, item]
     primary_key: [sku]
     title_attribute: name
+    search: {{embedding_template: "{{name}}"}}
     attributes:
       sku: {{type: string, required: true, description: Stock keeping unit.}}
       name: {{type: string, required: true, description: Product name.}}

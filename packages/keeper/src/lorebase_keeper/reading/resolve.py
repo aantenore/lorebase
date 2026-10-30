@@ -263,8 +263,12 @@ class Match:
     """Its values are not in the index: their counts are unknown."""
 
     @property
-    def key(self) -> tuple[str, str | None, bool, tuple[int, ...]]:
-        return (self.kind_id, self.attribute_id, bool(self.values), tuple(self.phrase.span))
+    def key(self) -> tuple[str, str | None, tuple[str, ...], tuple[int, ...]]:
+        return (self.kind_id, self.attribute_id, tuple(self.values), tuple(self.phrase.span))
+
+
+_Key = tuple[str, str | None, bool | str]
+"""What `_merge` gathers hits under: Kind, Attribute, and whether values (or which one)."""
 
 
 @dataclass(slots=True)
@@ -404,7 +408,7 @@ async def _exact(
     for phrase in phrases:
         if covered.intersection(phrase.span):
             continue
-        matched: dict[tuple[str, str | None, bool], Match] = {}
+        matched: dict[_Key, Match] = {}
         for form in forms[phrase]:
             for entry in context.index.phrases.get(form, ()):
                 level: Level = "synonym" if entry.synonym else "exact"
@@ -445,7 +449,7 @@ async def _exact(
 
 
 def _merge(
-    matched: dict[tuple[str, str | None, bool], Match],
+    matched: dict[_Key, Match],
     context: _Context,
     phrase: Phrase,
     kind_id: str,
@@ -455,12 +459,14 @@ def _merge(
     value: tuple[str, int] | None,
     *,
     description: bool = False,
+    split: bool = False,
 ) -> None:
-    """Add a hit to the match of its target, which keeps the best level and every value."""
+    """Add a hit to the match of its target, which keeps the best level and every value
+    (with `split`, each value is a target of its own)."""
     scores = context.settings.scores
     weight = scores.description if description else 1.0
     score = getattr(scores, level) * similar * weight
-    key = (kind_id, attribute_id, value is not None)
+    key: _Key = (kind_id, attribute_id, value[0] if split and value else value is not None)
     match = matched.get(key)
     if match is None:
         match = Match(kind_id, attribute_id, level, score, phrase, description=description)
@@ -504,7 +510,7 @@ async def _similar(
     for phrase in open_:
         if covered.intersection(phrase.span):
             continue
-        matched: dict[tuple[str, str | None, bool], Match] = {}
+        matched: dict[_Key, Match] = {}
         grams = trigrams(phrase.text)
         for name, name_grams in context.index.grams.items():
             similar = similarity(grams, name_grams)
@@ -576,7 +582,8 @@ async def _embedded(
     words: Sequence[str],
     covered: set[int],
 ) -> list[Match]:
-    """Level 4: indexed values held by the Records nearest to the query vector."""
+    """Level 4: indexed values held by the Records nearest to the query vector, each value a
+    candidate of its own scored by the closest Record holding it."""
     point, settings = context.point, context.settings
     names = sorted(context.kinds[k].api_name for k in context.kinds)
     hits = await search(
@@ -607,7 +614,7 @@ async def _embedded(
     )
     score_of = {(k.id, key): score for k, key, score in nearest}
     phrase = Phrase(0, tuple(words))
-    matched: dict[tuple[str, str | None, bool], Match] = {}
+    matched: dict[_Key, Match] = {}
     for kind_id, key, stored in rows.all():
         closeness = max(0.0, min(1.0, float(score_of.get((kind_id, key), 0.0))))
         kind = context.kinds[kind_id]
@@ -624,6 +631,7 @@ async def _embedded(
                     "embedding",
                     closeness,
                     (value, 0),
+                    split=True,
                 )
     if matched:
         covered.update(phrase.span)
@@ -652,7 +660,7 @@ async def _candidates(
         ),
     )
     chosen: list[Match] = []
-    seen: set[tuple[str, str | None, bool, tuple[int, ...]]] = set()
+    seen: set[tuple[str, str | None, tuple[str, ...], tuple[int, ...]]] = set()
     for match in ranked:
         if match.key in seen:
             continue
