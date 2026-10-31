@@ -8,11 +8,13 @@ Canonical description, to adapt to each list's format:
 
 Repository: `https://github.com/aantenore/lorebase`. License: Apache-2.0. Languages: Python (backend), TypeScript (web app).
 
-## Submit once there is a tagged release
+## Lists with stricter requirements
+
+Tagged releases exist since v0.1.0; the current one is [v0.3.0](https://github.com/aantenore/lorebase/releases/tag/v0.3.0). Check each list's minimum release age and project age before submitting.
 
 ### awesome-selfhosted
 
-List: https://github.com/awesome-selfhosted/awesome-selfhosted. Section: Knowledge Management Tools. The format and the requirements (release age, documentation, a working deployment path) are strict; follow its contribution file exactly and wait until the compose quickstart covers a full flow.
+List: https://github.com/awesome-selfhosted/awesome-selfhosted. Section: Knowledge Management Tools. The format and the requirements (release age, documentation, a working deployment path) are strict; follow its contribution file exactly. The compose quickstart and `make demo` (the five-day scenario against a real stack) cover a full flow; point to both in the pull request.
 
 ```markdown
 - [Lorebase](https://github.com/aantenore/lorebase) - Versioned ontology and knowledge graph for AI agents with git-like branching and merging, on Postgres only. ([Source Code](https://github.com/aantenore/lorebase)) `Apache-2.0` `Python`
@@ -49,7 +51,7 @@ List: https://github.com/semantalytics/awesome-semantic-web. Section: ontology t
 List: https://github.com/punkpeye/awesome-mcp-servers. Section: the closest to knowledge and memory. Herald exists and is documented in [docs/mcp.md](../mcp.md); submit the MCP server, not the REST API.
 
 ```markdown
-- [aantenore/lorebase](https://github.com/aantenore/lorebase) - MCP server over a versioned, typed knowledge graph: context packs, schema, query, search, neighborhood, explain and diff, with governed writes through Operations.
+- [aantenore/lorebase](https://github.com/aantenore/lorebase) - MCP server over a versioned, typed knowledge graph: context packs, schema, word resolution, query, search, neighborhood, explain, history and diff, with governed writes through Operations.
 ```
 
 ## Not a fit

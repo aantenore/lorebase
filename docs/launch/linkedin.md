@@ -1,6 +1,6 @@
 # LinkedIn
 
-A single post from a personal account, with the GIF (`docs/images/tour.gif`) attached as media and the repository link in the first comment, since links in the body lower reach. Keep it plain and first person. Tag no one.
+A single post from a personal account, with the GIF (`docs/images/tour.gif`) attached as media and the release link and the demo command in the first comment, since links in the body lower reach. Keep it plain and first person. Tag no one.
 
 ## Post
 
@@ -15,15 +15,15 @@ The idea is to treat knowledge the way we treat code.
 - Every change is a Revision with an author and a reason, so you can read the knowledge base as it was last month.
 - Agents read through an API that never calls a language model, so answers are deterministic and take milliseconds. They write only through governed Operations.
 
-It is pre-alpha, and I would rather say what works than oversell. The versioning engine, the REST API, a CLI, an MCP server for agents and document extraction into reviewed proposals run today. Version 0.2.0 is the current tagged release; the 1M-Record performance baseline is next.
+It is pre-alpha, and I would rather say what works than oversell. The versioning engine, the REST API, a CLI, an MCP server for agents and document extraction into reviewed proposals run today. Version 0.3.0 is out, and it is about knowledge that stays correct: a sync from another system no longer overwrites a value someone corrected by hand, and values on which sources disagree wait in a queue for a person to decide. If you already run it, read the breaking changes in the release notes first. The benchmark on reference hardware is next.
 
 If you run knowledge for agents, or you are weighing a proprietary ontology platform, I would like your view on the model. What would you version first?
 
-First comment: https://github.com/aantenore/lorebase
+First comment: https://github.com/aantenore/lorebase/releases/tag/v0.3.0. To try it, `make demo` in a clone of https://github.com/aantenore/lorebase runs a five-day scenario against a real stack.
 
 ## Shorter variant
 
-Branches, reviews and merges for company knowledge, so that agents read something you can audit. Lorebase is an open-source versioned knowledge graph on Postgres, with a model-free read path and governed writes. Pre-alpha, current release 0.2.0: the engine, the REST API, the CLI and the MCP server work. Feedback on the merge model welcome.
+Branches, reviews and merges for company knowledge, so that agents read something you can audit. Lorebase is an open-source versioned knowledge graph on Postgres, with a model-free read path and governed writes. Pre-alpha, current release 0.3.0 (https://github.com/aantenore/lorebase/releases/tag/v0.3.0); `make demo` runs the five-day scenario. The engine, the REST API, the CLI and the MCP server work, and corrections now survive syncs from other systems. Feedback on the merge model welcome.
 
 ## Notes
 

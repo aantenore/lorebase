@@ -2,6 +2,8 @@
 
 *Draft for a technical blog post, about 1,200 words. The output below is real, from `uv run python examples/merge_demo.py`. Link to [docs/why.md](../why.md) for the argument and to the repository for the code.*
 
+Lorebase 0.3.0 is out: [release notes](https://github.com/aantenore/lorebase/releases/tag/v0.3.0). To watch it end to end against a real stack, `make demo` in a clone runs the five-day scenario of the design; the merge below needs no services at all.
+
 Suppose a supplier risk score lives in two places. Analysts maintain it by hand. A nightly feed from the ERP also writes it. Both are right about something, and they overlap on a Tuesday. In most systems one of the two writes wins and the other disappears. Nobody notices until an agent that reads this data recommends the wrong supplier.
 
 Lorebase is an open-source ontology platform built around the idea that this should be a merge conflict. It stores a typed knowledge graph in Postgres, versions schema and data together with branches and immutable Revisions, and exposes it to AI agents through an API that never calls a language model. This post walks through one merge, because the merge is where the design shows.
@@ -106,9 +108,11 @@ The read path has no model in it. This is enforced by the build: the API service
 
 ## What exists, and what does not
 
-Lorebase is pre-alpha. The engine you just watched, the Postgres store, and a REST API with Domains, branches, schema change sets, schema inference, governed Operations, Proposals with merge and Conflict resolution, Records, a query DSL, traversal, neighborhood, search, log and diff are built and tested. Authentication supports API keys and OIDC, and reads can be served from Postgres replicas behind a freshness guard. The `lorebase` CLI, a Python client, an MCP server, CSV and Postgres Source syncs and document extraction into reviewed Proposals are built too, and the web app, including the conflict resolver in the GIF in the README, is tested against a live Keeper. A read baseline on 100k Records is published in [docs/performance.md](https://github.com/aantenore/lorebase/blob/main/docs/performance.md): every agent read is within its budget, under row-level security too.
+Lorebase is pre-alpha, and 0.3.0 is the current release. The engine you just watched, the Postgres store, and a REST API with Domains, branches, schema change sets, schema inference, governed Operations, Proposals with merge and Conflict resolution, Records, a query DSL, traversal, neighborhood, search, Record history and lineage, log and diff are built and tested. Authentication supports API keys and OIDC, sensitive values are masked without clearance, and reads can be served from Postgres replicas behind a freshness guard. The `lorebase` CLI, a Python client, an MCP server, Source syncs from files, HTTP and databases, document extraction into reviewed Proposals and embeddings computed offline are built too, and the web app, including the conflict resolver in the GIF in the README, is tested against a live Keeper. Read baselines at 100k, 1M and 10M Records are in [docs/performance.md](https://github.com/aantenore/lorebase/blob/main/docs/performance.md): at 100k every agent read is within its budget, under row-level security too; at 10M, on a laptop, the 2-hop neighborhood, full-text search, history and lineage are not.
 
-Not built: lineage and history endpoints, jobs that compute embeddings, sensitivity masking, and the 1M-Record baseline. The documentation is at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/).
+0.3.0 is about knowledge that stays correct after the first merge. A Source sync no longer puts back a value someone corrected by hand: it writes only what changed upstream, and when upstream does change a corrected value the sync stops at a Conflict. Values on which Sources disagree go to a reconciliation queue, where a person decides. And an agent can ask which Kinds, Attributes and stored values the words of a question stand for (`POST /resolve`), with a coverage block that says what share of the Records lacks each Attribute it used and how fresh the Sources are. Some of this changes behavior for existing installations, as a pre-1.0 minor may; the breaking changes are at the top of the release notes.
+
+Not done: the design's performance targets at 10M Records on the reference hardware, and the stability guarantees for `/api/v1`, which bind from 1.0. The documentation is at [aantenore.github.io/lorebase](https://aantenore.github.io/lorebase/).
 
 ## Try it
 
@@ -116,6 +120,7 @@ Not built: lineage and history endpoints, jobs that compute embeddings, sensitiv
 git clone https://github.com/aantenore/lorebase.git && cd lorebase
 uv sync --all-packages
 uv run python examples/merge_demo.py
+make demo        # the five-day scenario against a real stack; needs Docker
 ```
 
-It needs no services and takes a couple of seconds. If you manage knowledge that agents depend on, I would like to hear which conflicts you would expect to see that this does not cover.
+The merge demo needs no services and takes a couple of seconds. `make demo` builds the image on its first run; the five days themselves take under a minute. If you manage knowledge that agents depend on, I would like to hear which conflicts you would expect to see that this does not cover.
