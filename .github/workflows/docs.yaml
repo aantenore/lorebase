@@ -1,10 +1,19 @@
 name: Docs
 
-# Builds the documentation site (mkdocs.yml) with every warning as an error. On main the site is
-# published to GitHub Pages; a pull request only builds it, so a broken link fails the review.
-# The repository setting Pages > Source must be "GitHub Actions".
+# Builds the documentation site (mkdocs.yml) with every warning as an error and publishes it to
+# GitHub Pages. release.yaml calls it with the version tag after each release, so the site shows
+# the released documentation; a run by hand publishes the ref it runs on. The repository setting
+# Pages > Source must be "GitHub Actions", and the github-pages environment must allow version
+# tags (v*) to deploy.
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build the site from (default, the ref of the run)
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -21,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:

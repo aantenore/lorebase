@@ -11,11 +11,12 @@ Work through it on a branch, merge it, then tag. Items marked with a command hav
 ### 1. Version and notes
 
 - [ ] Choose the version. Before 1.0 a minor version may change interfaces; say so in the notes.
-- [ ] Set it everywhere it lives: `version` in the root and in each `packages/*/pyproject.toml`, `__version__` in each `packages/*/src/*/__init__.py`, `version` in `apps/web/package.json`, and `appVersion` (and `version`) in `deploy/helm/lorebase/Chart.yaml`.
+- [ ] Set it everywhere it lives: `version` in the root and in each `packages/*/pyproject.toml`, `__version__` in each `packages/*/src/*/__init__.py`, `version` in `apps/web/package.json`, `appVersion` (and `version`) in `deploy/helm/lorebase/Chart.yaml`, and in `server.json` the `version`, the version of the PyPI package and the tag of the image.
 - [ ] On a new minor version, move the ranges of the dependencies between workspace packages in each `packages/*/pyproject.toml` (`lorebase-core>=0.1,<0.2` becomes `>=0.2,<0.3`; for a pre-release the lower bound may be the pre-release, `>=0.2.0rc1,<0.3`) and run `uv lock`. In a checkout the workspace resolves them from source; on PyPI they keep `pip install lorebase-keeper` from taking a `lorebase-store` of another minor.
-- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 23 versions and 16 internal ranges agree`. The workflow runs the same check first and stops on a mismatch.
+- [ ] `uv run python scripts/release_tool.py check --tag vX.Y.Z` prints `all 26 versions and 16 internal ranges agree, every package has its PyPI metadata and the registry entry is publishable`. The workflow runs the same check first and stops on a mismatch.
 - [ ] Write the `## X.Y.Z` section of CHANGELOG.md: summary, breaking changes first, then added, changed, fixed, security, not done yet, upgrade notes. Link the pull request or issue of each line. `uv run python scripts/release_tool.py notes X.Y.Z` prints what the GitHub release will say.
 - [ ] A migration, a configuration key or an API response that changed is named in the first lines of the section.
+- [ ] While the section is collected its heading reads `## X.Y.Z - unreleased`. In the commit you tag, replace `unreleased` with the date of the tag (`YYYY-MM-DD`, UTC): the date in each heading is the day the tag was pushed.
 - [ ] Update the status wording that a release makes false: the "Pre-alpha" banner and "Nothing is released" in [README.md](../README.md) and [roadmap.md](roadmap.md).
 
 ### 2. Tests
@@ -25,7 +26,7 @@ Work through it on a branch, merge it, then tag. Items marked with a command hav
 - [ ] `make openapi` leaves `docs/openapi.json` unchanged
 - [ ] Web app, in `apps/web`: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`
 - [ ] `make demo`: the five-day demo runs to the end against a fresh stack ([demo](demo.md))
-- [ ] CI is green on the commit to be tagged, including the `helm` job (`helm lint --strict`, `helm template` for every profile, kubeconform)
+- [ ] CI is green on the commit to be tagged, including the `helm` job (`helm lint --strict`, `helm template` for every profile, kubeconform). The checks do not run on pull requests or pushes: start them with `gh workflow run CI --ref main` (and `End-to-end`, `CodeQL`, `Audit` the same way) and read the result before tagging
 
 The full suite is for releases; day to day, `make test-changed` is enough.
 
@@ -52,12 +53,13 @@ The full suite is for releases; day to day, `make test-changed` is enough.
 ### 6. Tag
 
 - [ ] From an up-to-date `main`: `git tag -s vX.Y.Z -m "Lorebase X.Y.Z"` and `git push origin vX.Y.Z`. (Use `-a` when you cannot sign.)
-- [ ] Watch the workflow ([What the workflow does](#what-the-workflow-does)).
+- [ ] Watch the workflow ([What the workflow does](#what-the-workflow-does)): it runs CI on the tag before it publishes anything, and publishes the documentation site from the tag once the release exists. For that last job the `github-pages` environment must allow `v*` tags to deploy (repository settings, Environments, deployment branches and tags), set once.
 
 ### 7. Images
 
 - [ ] After the first release, make the three GHCR packages (`lorebase`, `lorebase-ml`, `lorebase-web`) public (Packages, package settings, change visibility) and link them to the repository, so that anyone can pull and the registry page shows the README.
 - [ ] Verify the signatures ([Verify a release](#verify-a-release)).
+- [ ] `docker buildx imagetools inspect ghcr.io/aantenore/lorebase:X.Y.Z` lists `linux/amd64` and `linux/arm64` (the same for `lorebase-ml` and `lorebase-web`); 0.3.0 and earlier are `linux/amd64` only.
 
 ### 8. Helm
 
@@ -70,6 +72,11 @@ The full suite is for releases; day to day, `make test-changed` is enough.
 - [ ] The GitHub release text is the changelog section; read it once in the browser.
 - [ ] The launch kit in [docs/launch](launch) has the posts: [blog post](launch/blog-post.md), [Hacker News](launch/hacker-news.md), [Reddit](launch/reddit.md), [LinkedIn](launch/linkedin.md), [awesome lists](launch/awesome-lists.md). Post the release link and the demo command (`make demo`), not a feature list.
 - [ ] Answer questions in the first days from the FAQ ([faq.md](faq.md)); anything asked twice becomes a line in the FAQ.
+
+### 10. MCP registry
+
+- [ ] Once the `pypi` job has published `lorebase-herald` and the images are public: from the repository root, `mcp-publisher login github` and `mcp-publisher publish` ([the registry](https://github.com/modelcontextprotocol/registry)) submit `server.json`, whose versions `release_tool.py check` keeps equal to the tag. The registry proves ownership through the `mcp-name: io.github.aantenore/lorebase-herald` line of the package README on PyPI and the `io.modelcontextprotocol.server.name` label of the backend image; the same check fails when either is missing.
+- [ ] `curl -s 'https://registry.modelcontextprotocol.io/v0/servers?search=lorebase'` lists the entry.
 
 ## What the workflow does
 
@@ -86,14 +93,17 @@ The workflow definition comes from `main`; every job checks out the tag, and `ve
 | Job | What it does |
 |-----|--------------|
 | `verify` | Checks that every version in the repository equals the tag, that CHANGELOG.md has a section for it, and keeps that section as the release notes. A tag with `-` in it is a pre-release. |
+| `ci` | Calls `ci.yaml` on the tagged commit: lint, types, unit, integration (with and without the BM25 backend), web, web end-to-end and Helm checks. `image-platforms`, `release` and `pypi` wait for it, so a tag whose checks fail publishes nothing. |
 | `sbom` | Calls `sbom.yaml`: CycloneDX documents of the Python workspace (`sbom-python.cdx.json`) and of the web app (`sbom-web.cdx.json`), from the lockfiles. |
-| `images` | Builds `deploy/docker/backend.Dockerfile` (twice: the default target and `backend-ml`, the same image plus fastembed and a baked embedding model, used by Scribe and Guide) and `deploy/docker/web.Dockerfile`, pushes `ghcr.io/aantenore/lorebase`, `ghcr.io/aantenore/lorebase-ml` and `ghcr.io/aantenore/lorebase-web` tagged `X.Y.Z`, `X.Y` and `latest` (the last two not for pre-releases), with build provenance. Then signs each image by digest with cosign keyless (the GitHub OIDC identity of the workflow, recorded in the Sigstore transparency log) and attaches the matching SBOM as a CycloneDX attestation. |
+| `image-platforms` | Builds `deploy/docker/backend.Dockerfile` (twice: the default target and `backend-ml`, the same image plus fastembed and a baked embedding model, used by Scribe and Guide) and `deploy/docker/web.Dockerfile` for `linux/amd64` and `linux/arm64`, each on a runner of its own architecture (no emulation), with build provenance, and pushes every platform image to GHCR by digest only. |
+| `images` | Joins the platform images of `ghcr.io/aantenore/lorebase`, `ghcr.io/aantenore/lorebase-ml` and `ghcr.io/aantenore/lorebase-web` into one multi-arch index each, tagged `X.Y.Z`, `X.Y` and `latest` (the last two not for pre-releases), checks that the index holds both platforms, then signs the index digest with cosign keyless (the GitHub OIDC identity of the workflow, recorded in the Sigstore transparency log) and attaches the matching SBOM as a CycloneDX attestation. |
 | `helm` | Lints the chart, builds its dependency and packages it with `--version` and `--app-version` set to the release version. |
 | `python` | `uv build --all-packages`: an sdist and a wheel for each of the ten workspace packages. |
 | `release` | Creates the GitHub release with the changelog section as notes and attaches the SBOMs, the chart package, the Python distributions and `SHA256SUMS` with its cosign bundle (`SHA256SUMS.sigstore.json`). When the release exists, it uploads the files to it instead, so a failed run can be repeated. |
 | `pypi` | Publishes each package to PyPI from its own environment (`pypi-<short>`), through trusted publishing, only when the repository variable `PYPI_TRUSTED_PUBLISHING` is `true`. Otherwise it prints a notice and does nothing; the packages are on the release. Existing files are skipped, so it is safe to repeat. |
+| `docs` | Calls `docs.yaml` on the tag once the release exists: `mkdocs build --strict` and the deployment to GitHub Pages, so the site shows the released documentation. |
 
-Permissions: the workflow defaults to `contents: read`. Only `images` (`packages: write`, `id-token: write`), `release` (`contents: write`, `id-token: write`) and `pypi` (`id-token: write`) get more. It uses no secret except `GITHUB_TOKEN`.
+Permissions: the workflow defaults to `contents: read`. Only `image-platforms` (`packages: write`), `images` (`packages: write`, `id-token: write`), `release` (`contents: write`, `id-token: write`), `pypi` (`id-token: write`) and `docs` (`pages: write`, `id-token: write`) get more. It uses no secret except `GITHUB_TOKEN`.
 
 ### PyPI: trusted publishing
 
@@ -158,9 +168,11 @@ To bump one:
 
 1. Get the index digest, the top-level `Digest:` line: `docker buildx imagetools inspect python:3.12-slim`. (`docker pull` prints the same digest for a multi-arch tag.)
 2. Replace the `@sha256:...` part of the `ARG ..._IMAGE` default (and of the proxy image, if it is the nginx one), keeping the tag.
-3. Rebuild both images. The `docker` workflow builds the backend image on pull requests, which verifies the new pin resolves.
+3. Rebuild both images. Running the `docker` workflow on the branch (`gh workflow run docker.yaml --ref <branch>`) builds the backend image and verifies that the new pin resolves.
 
-`tests/tooling/test_dockerfile_pins.py` fails if a `FROM` of an external image is not pinned by a 64-hex digest.
+The third-party defaults of the compose files (`${POSTGRES_IMAGE:-...}` and the other `*_IMAGE` variables of `deploy/compose/*.yaml`: Postgres, Ollama, LiteLLM, the OpenTelemetry collector, Jaeger, Prometheus, Grafana, the OIDC mock and the proxy) and the `ollama` image of the chart are pinned the same way, a version tag in front of the digest of the multi-arch index, and bumped by hand the same way.
+
+`tests/tooling/test_dockerfile_pins.py` fails if a `FROM` of an external image is not pinned by a 64-hex digest, or if one of those defaults names no version and digest.
 
 ## Known gaps
 

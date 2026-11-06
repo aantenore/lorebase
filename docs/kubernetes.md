@@ -48,6 +48,9 @@ The chart is installed from the repository or from the `lorebase-0.3.0.tgz` pack
 #    docker build -f deploy/docker/backend.Dockerfile -t registry.example.com/lorebase:<tag> .
 docker pull ghcr.io/aantenore/lorebase:0.3.0      # optional: check that the images are reachable
 docker pull ghcr.io/aantenore/lorebase-ml:0.3.0
+#    The 0.3.0 images are linux/amd64 only: on arm64 nodes and workstations (Apple silicon,
+#    Graviton) the pull fails with "no matching manifest", so build your own image as above.
+#    0.3.1 and later are published for linux/amd64 and linux/arm64.
 #    Scribe and Guide run on ghcr.io/aantenore/lorebase-ml (`imageMl`): the same image plus fastembed
 #    and a baked embedding model, built with --target backend-ml. With your own build push both, or
 #    set --set imageMl.repository= to run them on `image` (then embeddings need an openai_compatible

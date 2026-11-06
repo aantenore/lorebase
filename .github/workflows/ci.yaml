@@ -1,10 +1,19 @@
 name: CI
 
+# Runs on demand, and from release.yaml on the tagged commit before anything is published.
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to check (default, the ref of the run)
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
+# The calling workflow is part of the group, so a run by hand never cancels the run of a release.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -23,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -39,6 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -55,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -83,7 +95,9 @@ jobs:
   integration:
     name: Integration tests (Postgres 16 with pgvector)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # About 15 minutes on a hosted runner before 0.3.0, close to 20 locally since: room for a
+    # slow runner.
+    timeout-minutes: 35
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -103,6 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -137,6 +152,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -159,6 +175,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
           # docs/openapi.json: the generated API types are checked against it.
           sparse-checkout: |
@@ -207,6 +224,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
           # deploy/observability: the chart's `observability` symlink points into it.
           sparse-checkout: |
@@ -315,6 +333,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
@@ -367,7 +386,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [lint, types, unit, integration, web, web-e2e, helm]
+    needs: [lint, types, unit, integration, integration-bm25, web, web-e2e, helm]
     runs-on: ubuntu-latest
     env:
       RESULTS: ${{ join(needs.*.result, ' ') }}

@@ -10,13 +10,24 @@ concurrency:
 permissions:
   contents: read
 
-# Builds the backend image on pull requests to prove it still builds. Nothing is pushed and no
+# Builds the backend images on demand to prove they still build and run, on a runner of each
+# architecture the release publishes (release.yaml, image-platforms). Nothing is pushed and no
 # registry credentials are used; publishing belongs to the release workflow.
 jobs:
   backend-image:
-    name: Build backend image
-    runs-on: ubuntu-latest
+    name: Build backend image (${{ matrix.platform.os }})
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - os: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -27,11 +38,12 @@ jobs:
         with:
           context: .
           file: deploy/docker/backend.Dockerfile
+          platforms: ${{ matrix.platform.os }}
           push: false
           load: true
           tags: lorebase:ci
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
+          cache-from: type=gha,scope=backend-${{ matrix.platform.arch }}
+          cache-to: type=gha,scope=backend-${{ matrix.platform.arch }},mode=max
       - name: The image runs as a non-root user
         run: |
           uid="$(docker run --rm lorebase:ci id -u)"
@@ -44,11 +56,12 @@ jobs:
           context: .
           file: deploy/docker/backend.Dockerfile
           target: backend-ml
+          platforms: ${{ matrix.platform.os }}
           push: false
           load: true
           tags: lorebase-ml:ci
-          cache-from: type=gha,scope=backend-ml
-          cache-to: type=gha,scope=backend-ml,mode=max
+          cache-from: type=gha,scope=backend-ml-${{ matrix.platform.arch }}
+          cache-to: type=gha,scope=backend-ml-${{ matrix.platform.arch }},mode=max
       - name: The embedding image embeds offline with a read-only file system
         run: >-
           docker run --rm --network none --read-only --tmpfs /tmp lorebase-ml:ci python -c

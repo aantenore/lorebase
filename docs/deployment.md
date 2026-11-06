@@ -253,6 +253,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.yaml build
 To run prebuilt images instead (a registry, a CI artifact), set `LOREBASE_IMAGE`,
 `LOREBASE_ML_IMAGE`, `LOREBASE_WEB_IMAGE` and `LOREBASE_TAG` to them and
 `LOREBASE_PULL_POLICY=missing` (or `always`); `up --no-build` also skips the build for one run.
+The published `ghcr.io/aantenore/lorebase*` images of 0.3.0 are `linux/amd64` only, so on an
+arm64 machine (Apple silicon, Graviton) keep the default build; 0.3.1 and later are published for
+`linux/amd64` and `linux/arm64`.
 
 `migrate` refuses a database that a newer Lorebase already migrated, before changing anything:
 it exits 1 with `FAILED: the database is at revision <db revision>, which this code does not
