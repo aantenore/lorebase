@@ -374,7 +374,7 @@ def test_request_urls_with_record_keys_stay_out_of_the_logs(
     for name in ("httpx", "httpcore"):
         monkeypatch.setattr(logging.getLogger(name), "level", logging.NOTSET)
 
-    herald_main.main()
+    herald_main.main([])  # no argv: under pytest, sys.argv is pytest's
 
     assert started
     for name in ("httpx", "httpcore"):
