@@ -41,7 +41,7 @@ uv run lorebase import batch -b work \
 uv run lorebase record get Supplier S-1001 -b work
 ```
 
-[The quickstart](../docs/quickstart.md#11-import-the-sample-data-and-read-it-back) loads the same
+[Manual setup](../docs/manual-setup.md#5-import-the-sample-data-and-read-it-back) loads the same
 six Kinds (`import records` and `import links` for three, `import batch` for the three
 that need Links), shows `Part.supplier_count` and `Part.single_sourced` computed by the
 materializer, and runs `flag_supplier_risk` and `approve_contract` through the Operation

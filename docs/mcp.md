@@ -51,7 +51,8 @@ It listens on port 8090 in the container and is published on `127.0.0.1:8091`
 rebinding protection accepts the Host values `127.0.0.1`, `localhost` and `herald` on any port
 and the Origins `http://127.0.0.1` and `http://localhost` (`HERALD_ALLOWED_HOSTS`,
 `HERALD_ALLOWED_ORIGINS`, JSON lists; add the name agents use when they reach it another way).
-`HERALD_DOMAIN` and `HERALD_BRANCH` set the defaults of calls that name none, and
+`HERALD_DOMAIN` and `HERALD_BRANCH` set the defaults of calls that name none (`make env` sets
+`HERALD_DOMAIN=supply`, the sample Domain, while it is unset), and
 `HERALD_ALLOW_ANONYMOUS=true` lets calls without a credential through to a Keeper in auth mode
 none (below). The variables are listed in `.env.example`.
 
@@ -91,6 +92,44 @@ it off for anything but a laptop, because whoever reaches Herald then reaches Ke
 anonymous administrator.
 
 ## MCP host configuration
+
+### From PyPI, without a clone
+
+Hosts that start servers over stdio can run Herald straight from PyPI with `uvx lorebase-herald`
+(uv downloads and caches the package; `pip install lorebase-herald` and `"command":
+"lorebase-herald"` work too). Use the Keeper URL your stack answers on (`make up` prints it); a
+Keeper with authentication on also needs `LOREBASE_API_KEY`, kept out of shared files as
+described below.
+
+Claude Code, one command (`--scope project` writes `.mcp.json` for the whole team):
+
+```bash
+claude mcp add lorebase -e LOREBASE_URL=http://127.0.0.1:8080 -e LOREBASE_DOMAIN=supply -- uvx lorebase-herald
+```
+
+Cursor, in `.cursor/mcp.json` (or `~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "lorebase": {
+      "command": "uvx",
+      "args": ["lorebase-herald"],
+      "env": {"LOREBASE_URL": "http://127.0.0.1:8080", "LOREBASE_DOMAIN": "supply"}
+    }
+  }
+}
+```
+
+VS Code, one command (or the same entry under `servers` in `.vscode/mcp.json`, with `"type":
+"stdio"`):
+
+```bash
+code --add-mcp '{"name":"lorebase","command":"uvx","args":["lorebase-herald"],"env":{"LOREBASE_URL":"http://127.0.0.1:8080","LOREBASE_DOMAIN":"supply"}}'
+```
+
+The sections below start Herald from a clone instead (`uv --directory /path/to/lorebase run
+lorebase-herald`), which runs the code of the checkout.
 
 ### Generic stdio configuration
 

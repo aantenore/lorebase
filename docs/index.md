@@ -6,7 +6,7 @@ keywords: versioned knowledge graph, open-source ontology platform, knowledge ba
 
 # Lorebase
 
-**Git for knowledge: an open-source ontology platform where AI agents read a versioned, governed knowledge graph in milliseconds.**
+**A governed, versioned knowledge graph that AI agents read over MCP: schema and data branch, merge and get reviewed like code, on the Postgres you already run, with no model in the read path.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
@@ -14,15 +14,30 @@ keywords: versioned knowledge graph, open-source ontology platform, knowledge ba
 ![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
+- **For data and platform teams** who own company knowledge (suppliers, parts, contracts) and want it typed, reviewed and versioned, with Sources that disagree sent to a reconciliation queue instead of the newest write winning.
+- **For agent builders** who want typed Records with provenance, answers stamped with the Revision they came from, and writes only through governed Operations and Proposals.
+- **Instead of** chunk retrieval over stale documents, agent memory engines that a model writes unreviewed, or a proprietary ontology platform: see the [comparison](comparison.md).
+
+## An agent call
+
+Herald, the MCP server, is on PyPI. Against a running Keeper with the sample Domain ([getting started](#getting-started)):
+
+```bash
+export LOREBASE_URL=http://127.0.0.1:8080   # your Keeper; `make up` prints the local one
+claude mcp add lorebase -e LOREBASE_URL="$LOREBASE_URL" -e LOREBASE_DOMAIN=supply -- uvx lorebase-herald
+```
+
+The agent then calls `lorebase_search` with `{"query": "bearing", "kinds": ["Part"], "limit": 2, "format": "json"}` and gets typed hits stamped with the Revision they were read from (64 hex digits, cut short here; snippets shortened):
+
+```json
+{"revision": "10a13aad99df...", "mode": "lexical", "items": [
+  {"ref": "Part/P-10001", "title": "Tapered roller bearing 6305", "snippet": "Tapered roller <b>bearing</b> 6305 ...", "score": 2.4},
+  {"ref": "Part/P-10010", "title": "Needle roller bearing 6305", "snippet": "Needle roller <b>bearing</b> 6305 ...", "score": 2.4}]}
+```
+
+No model ran to answer it. Cursor, VS Code and other hosts take the same `uvx lorebase-herald` command ([MCP host configuration](mcp.md#mcp-host-configuration)); a Keeper with authentication on also needs `LOREBASE_API_KEY`.
+
 > **Pre-alpha, v0.3.0.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](quickstart.md) is the place to start and the [validation record](validation.md) the place to check the claims.
-
-## What it is
-
-Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres and nothing else. You model what your organization knows as a typed ontology (Kinds, Attributes, Relations, Operations) and change it the way developers change code: on a branch, reviewed, merged, traceable. Schema and data branch and merge together, with three-way Conflicts resolved per Attribute. Agents live outside Lorebase, in any framework. They read through a REST API or the MCP server, neither of which calls a language model, so answers are deterministic and fast, and they write only through governed Operations and Proposals. It is meant as an open-source alternative to proprietary ontology platforms and runs on a laptop with `docker compose`.
-
-![Lorebase web app: Explorer, a Record, the Canvas graph, the Review conflict resolver and the Reconciliation queue](images/tour.gif)
-
-<sub>The web app walking through Explorer, Canvas and a Conflict in Review. It runs on a mock API with sample data; see the [visual tour](tour.md).</sub>
 
 ## 30-second demo
 
@@ -36,7 +51,7 @@ uv run python examples/merge_demo.py
 
 ```text
 == 5. merge source/erp into main
-merge base 7ad4a553: 5 Conflicts
+merge base 44de5fcc: 5 Conflicts
 
 DV1 ATTRIBUTE_VALUE (1)
   where            attribute   base  ours  theirs  choices
@@ -49,11 +64,19 @@ DV2 DELETE_MODIFY (1)
   Part P-10003  -          {record}  (absent)  {record}  ours/theirs/base/custom
 ...
 == 7. merge again
-merged: Revision 2cacd1bb, parents 60f665d3, 4d5440a3
+merged: Revision f6e285ab, parents bd2792a4, 95cc2625
 validation: 72 Records against the merged schema, 0 issues
 ```
 
 The analysts say 80, the ERP says 45, and someone has to decide. That decision is a recorded resolution, not a silent overwrite. The walkthrough of the whole output is in [manual setup](manual-setup.md#1-run-the-core-demo).
+
+## What it is
+
+Lorebase is an open-source ontology platform: a versioned knowledge graph for AI agents, self-hosted on Postgres, the only datastore it needs (language models are optional and used only by Scribe and Guide, never on reads). You model what your organization knows as a typed ontology (Kinds, Attributes, Relations, Operations) and change it the way developers change code: on a branch, reviewed, merged, traceable. Schema and data branch and merge together, with three-way Conflicts resolved per Attribute. Agents live outside Lorebase, in any framework. They read through a REST API or the MCP server, neither of which calls a language model, so answers are deterministic and fast, and they write only through governed Operations and Proposals. It is meant as an open-source alternative to proprietary ontology platforms and runs on a laptop with `docker compose`.
+
+![Lorebase web app: Explorer, a Record, the Canvas graph, the Review conflict resolver and the Reconciliation queue](images/tour.gif)
+
+<sub>The web app walking through Explorer, Canvas and a Conflict in Review. It runs on a mock API with sample data; see the [visual tour](tour.md).</sub>
 
 ## Try the five-day demo
 
@@ -94,7 +117,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Retrieval lab | Two search settings compared side by side, with the resulting context pack ([retrieval lab](retrieval-lab.md)). |
 | Web app | Explorer, Canvas, Modeler, Review, Reconciliation, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](tour.md)). |
 | Storage profiles | `compact`, `balanced` and `fast` decide which secondary indexes exist and how lineage is stored; `python -m lorebase_store.storage apply` switches a running install ([performance](performance.md#working-set)). |
-| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL and signed images ([operations](operations.md), [Kubernetes](kubernetes.md)). |
+| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL (run on demand and on every release tag, not on every pull request) and signed images ([operations](operations.md), [Kubernetes](kubernetes.md)). |
 
 The milestone breakdown with checkboxes is in the [roadmap](roadmap.md).
 
@@ -142,7 +165,7 @@ make env            # .env from .env.example, with generated database passwords
 make up             # build the images, start Postgres, migrations, Keeper and the web app; prints the web URL
 make example-data   # Domain `supply`: schema, 185 Records with their Links, merged into main
 
-export LOREBASE_URL=http://localhost:8080 LOREBASE_DOMAIN=supply
+eval "$(make shell-env)"   # exports LOREBASE_URL (the Keeper URL `make up` printed) and LOREBASE_DOMAIN=supply
 uv run lorebase search bearing --kind Part     # first query
 ```
 
@@ -211,6 +234,8 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 | Cognee | Agent memory built by LLM pipelines | No | You want automated memory for a single agent |
 | Graphiti and Zep | Temporal knowledge graph for agent memory | No (facts carry validity time) | You need conversational memory with temporal reasoning |
 | Mem0 | Per-user memory layer | No | You want personalization memory for assistants |
+| DataHub | Metadata catalog with an MCP server and metadata proposals | Versions and proposals of metadata, not of the data | You need lineage, ownership and a glossary across a data platform |
+| Semantica | Python framework building knowledge graphs with OWL, SHACL and PROV-O | No | You want a standards-heavy toolkit inside your own application |
 
 ## Who is it for
 
@@ -223,7 +248,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 Pre-alpha. [v0.3.0](https://github.com/aantenore/lorebase/releases/tag/v0.3.0) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](project/changelog.md) and the [release process](release.md). Interfaces may change, and before 1.0 any minor version may change them.
 
-What runs on `main` is described above. The [validation record](validation.md) lists the runs behind it: performance at 100k, 1M and 10M Records, the five-day scenario (79 checks in CI), the security reviews and live runs with language models.
+What runs on `main` is described above. The [validation record](validation.md) lists the runs behind it: performance at 100k, 1M and 10M Records, the five-day scenario (79 checks, run by the end-to-end workflow on demand), the security reviews and live runs with language models.
 
 Open:
 
@@ -251,6 +276,15 @@ The pages are also in the [repository](https://github.com/aantenore/lorebase/tre
 - **Guides**: [agents](agents.md), the [MCP server](mcp.md), [schema inference](inference.md), [inference providers](inference-providers.md), [document extraction](extraction.md), [Scribe](scribe.md), [operations](operations.md), [metrics](metrics.md), [deployment](deployment.md), [Kubernetes](kubernetes.md), [performance](performance.md), the [security review](security-review.md) and the [validation record](validation.md).
 - **Reference**: the [REST API](reference/api.md), the [command line](reference/cli.md) and the [configuration](reference/configuration.md).
 - **Project**: the [roadmap](roadmap.md), the [changelog](project/changelog.md), [contributing](project/contributing.md), the [security policy](project/security.md) and the [release process](release.md).
+
+## Ecosystem
+
+The family. Lorebase is one of four open-source projects meant to work together, each usable on its own:
+
+- **[reinloop](https://github.com/aantenore/reinloop)** is the runtime: agents as files, budgets, approvals, durable resume and OpenTelemetry traces, with zero dependencies.
+- **[agent-layers](https://github.com/aantenore/agent-layers)** is the eleven-layer SDK for building agents; reinloop is one of its runtime adapters.
+- **[agent-plexus](https://github.com/aantenore/agent-plexus)** composes several agents, with an agent-layers stack as the host.
+- **Lorebase** is the governed, versioned knowledge graph those agents read over MCP ([Herald](mcp.md)) and change through Operations and Proposals.
 
 ## Community
 
