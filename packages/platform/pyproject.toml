@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-platform"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lorebase platform: settings, secrets, logging and telemetry"
 requires-python = ">=3.12"
 readme = "README.md"

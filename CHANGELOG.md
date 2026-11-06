@@ -2,7 +2,7 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
-## 0.3.1 - unreleased
+## 0.3.1 - 2026-11-06
 
 A patch for the first contact with the project: the published images run on arm64, the PyPI packages carry their license and links, a Scribe worker keeps all its slots when the database fails while it records a job and gets a liveness check, the console scripts answer `--help`, and the quickstart commands point at the Keeper they started. No migration and no breaking change. Three new settings, all optional: `scribe.worker.outcome_retry_delay_s`, `scribe.worker.liveness_file` and `scribe.worker.liveness_interval_s`. The lines link the documentation of each change: the work landed directly on `main`, without pull requests to link.
 

@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-inference"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lorebase inference: model-agnostic chat, embedding and span extraction providers"
 requires-python = ">=3.12"
 readme = "README.md"

@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-scribe"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lorebase Scribe: job worker, scheduler and Source synchronization"
 requires-python = ">=3.12"
 readme = "README.md"

@@ -37,7 +37,7 @@ from lorebase_inference.registry import (
 )
 from lorebase_inference.settings import InferenceSettings, inference_settings
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "ChatModel",

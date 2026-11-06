@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-herald"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lorebase Herald: MCP server over the Keeper REST API"
 requires-python = ">=3.12"
 readme = "README.md"
