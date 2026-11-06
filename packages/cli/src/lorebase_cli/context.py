@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
@@ -10,7 +11,7 @@ import typer
 
 from lorebase_cli.failures import CliError
 from lorebase_cli.output import Output
-from lorebase_cli.settings import ENV_DOMAIN, CliSettings
+from lorebase_cli.settings import ENV_DOMAIN, CliSettings, default_config_path
 from lorebase_client import LorebaseClient
 
 ClientFactory = Callable[[CliSettings], LorebaseClient]
@@ -19,6 +20,12 @@ ClientFactory = Callable[[CliSettings], LorebaseClient]
 def default_client(settings: CliSettings) -> LorebaseClient:
     """A client for the configured server. (Imports send idempotency keys themselves; creating
     things does not, so that creating what exists is reported as a conflict.)"""
+    if not settings.url:
+        path = settings.config_path or default_config_path(os.environ)
+        raise CliError(
+            f"no server URL: pass --url, set LOREBASE_URL or `url` in a profile of the config "
+            f"file ({path})"
+        )
     return LorebaseClient(
         settings.url,
         api_prefix=settings.api_prefix,

@@ -142,7 +142,10 @@ def test_no_server_configured_is_a_configuration_error(monkeypatch: pytest.Monke
     monkeypatch.delenv("LOREBASE_URL")
     result = run("whoami")
     assert result.exit_code == 1
-    assert "LOREBASE_URL" in result.stderr
+    # The ways a person has, not the client library's argument.
+    assert "error: no server URL: pass --url, set LOREBASE_URL or `url`" in result.stderr
+    assert "config.toml" in result.stderr
+    assert "base_url" not in result.stderr
 
 
 def test_usage_errors_exit_with_one() -> None:
