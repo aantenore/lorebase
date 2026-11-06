@@ -68,6 +68,23 @@ tick, queued again, or failed when it has used `store.jobs.max_attempts` (a job 
 killing its worker is not run forever). A worker that lost a job this way cannot record its
 outcome over the next run. `lorebase.jobs.reclaimed` counts reclaimed jobs by type and outcome.
 
+An outcome the store refuses to take (a dropped connection, a statement timeout) is written
+once more after `outcome_retry_delay_s` (1 s). When that fails too the run counts `unrecorded`
+in `lorebase.scribe.jobs`, the slot goes on claiming, and the job, no longer heartbeated, is
+reclaimed like a lost one. A slot whose task ends with an error is logged and started again
+after `poll_interval_s`, so a process never runs with fewer slots than configured for long;
+`lorebase.scribe.worker.slots` reports the slots `live` and `lost`.
+
+Scribe serves no HTTP, so its liveness is a file. With `liveness_file` set, the loop rewrites it
+every `liveness_interval_s` (10 s) with its live slots, the jobs running and the time it last
+reached the store, and removes it when it stops. `python -m lorebase_scribe.liveness FILE
+[--max-age SECONDS] [--min-slots N] [--max-store-age SECONDS]` reads it (standard library only:
+one interpreter start) and exits 0, or 1 with the reason: no file, a file older than three
+intervals (the process hangs or is gone), fewer live slots than `--min-slots` (1) or, with
+`--max-store-age`, a store not reached within that long. The compose `scribe` service sets
+`LOREBASE__SCRIBE__WORKER__LIVENESS_FILE=/tmp/scribe-liveness.json` and runs that command as its
+healthcheck; the `scribe` values of the chart show the same as an exec `livenessProbe`.
+
 On SIGTERM (Scribe runs as PID 1 of its container and handles the signal itself) the slots stop
 claiming and running jobs get `shutdown_grace_s` to finish. The rest are cancelled and go back to
 the queue without counting the attempt; a job whose handler has not stopped `shutdown_cancel_s`
@@ -77,7 +94,8 @@ platform waits before it kills the process (`SCRIBE_STOP_GRACE` in compose,
 `scribe.terminationGracePeriodSeconds` in the chart).
 
 Spans (`scribe.job <type>`, `scribe.source_sync`, `scribe.scheduler.tick`) and metrics
-(`lorebase.scribe.jobs`, `lorebase.scribe.job.duration`, `lorebase.scribe.scheduled`,
+(`lorebase.scribe.jobs`, `lorebase.scribe.job.duration`, `lorebase.scribe.worker.slots`,
+`lorebase.scribe.scheduled`,
 `lorebase.scribe.source.rows`, `lorebase.scribe.source.changes`) are exported when
 `telemetry.otlp_endpoint` is set. Logs are structured JSON with the job, type, Domain, status
 and duration.

@@ -157,3 +157,36 @@ meter.create_observable_gauge(
     description="Open reconciliation candidates by Domain and type, counted by each "
     "reconcile_sweep job.",
 )
+
+
+class WorkerSlots:
+    """The slots of this process's job loop as the worker last reported them: `live` run the
+    claim loop, `lost` ended with an error and wait to be started again. Nothing is reported
+    before the worker runs or after it stopped."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._counts: dict[str, int] | None = None
+
+    def update(self, *, live: int, configured: int) -> None:
+        with self._lock:
+            self._counts = {"live": live, "lost": max(configured - live, 0)}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._counts = None
+
+    def observe(self, _options: CallbackOptions | None = None) -> Iterable[Observation]:
+        with self._lock:
+            counts = dict(self._counts or {})
+        return [Observation(count, {"state": state}) for state, count in sorted(counts.items())]
+
+
+WORKER_SLOTS = WorkerSlots()
+meter.create_observable_gauge(
+    "lorebase.scribe.worker.slots",
+    callbacks=[WORKER_SLOTS.observe],
+    unit="{slot}",
+    description="Slots of this process's job loop by state: live (claiming and running jobs) "
+    "or lost (ended with an error; started again after scribe.worker.poll_interval_s).",
+)

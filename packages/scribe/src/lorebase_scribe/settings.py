@@ -57,6 +57,22 @@ class WorkerSettings(SectionModel):
         "(collections and index builds run long). Postgres Sources use "
         "scribe.sources.postgres.statement_timeout_ms.",
     )
+    outcome_retry_delay_s: float = Field(
+        default=1.0,
+        ge=0,
+        description="Pause before the one more try at writing a job's outcome when the first "
+        "write failed (a dropped connection, a statement timeout). When that fails too the "
+        "job counts as unrecorded and runs again once its lock goes stale.",
+    )
+    liveness_file: str | None = Field(
+        default=None,
+        description="Path of a file the job loop rewrites every liveness_interval_s with its "
+        "live slots, running jobs and the time it last reached the store, for a container "
+        "healthcheck or a probe (`python -m lorebase_scribe.liveness FILE`); null writes none.",
+    )
+    liveness_interval_s: float = Field(
+        default=10.0, gt=0, description="How often the liveness file is rewritten."
+    )
     principal: str = Field(
         default="svc_scribe",
         min_length=1,

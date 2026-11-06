@@ -1590,6 +1590,9 @@ Scribe, the job worker (docs/scribe.md): Source synchronization, webhook deliver
 | `scribe.worker.heartbeat_interval_s` | `30.0` | running jobs refresh their lock this often (&lt;= stale_after_seconds / 2) |
 | `scribe.worker.shutdown_grace_s` | `30.0` | on SIGTERM, running jobs get this long, then go back to the queue |
 | `scribe.worker.shutdown_cancel_s` | `5.0` | then cancelled jobs get this long to stop before they are released anyway |
+| `scribe.worker.outcome_retry_delay_s` | `1.0` | pause before the one more try at writing an outcome the store refused; failing again, the run counts unrecorded and the job runs again once its lock goes stale |
+| `scribe.worker.liveness_file` | `null` | file the job loop rewrites every liveness_interval_s with its live slots, running jobs and last store round trip, for a healthcheck or probe (python -m lorebase_scribe.liveness FILE); null writes none |
+| `scribe.worker.liveness_interval_s` | `10.0` | how often the liveness file is rewritten |
 | `scribe.worker.statement_timeout_ms` | `0` | Scribe's own connections; 0 disables (GC and index builds run long) |
 | `scribe.worker.principal` | `svc_scribe` | author of Scribe's commits and Proposals |
 | `scribe.worker.types` | `[]` | job types this process runs; empty: all of them |
