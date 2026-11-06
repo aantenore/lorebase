@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, Table, delete, func, insert, or_, select, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,7 +150,7 @@ class MergeAttemptRepository:
             return {}
         result = await self._session.execute(
             select(ATTEMPTS)
-            .distinct(ATTEMPTS.c.proposal_id)
+            .ext(distinct_on(ATTEMPTS.c.proposal_id))
             .where(
                 ATTEMPTS.c.domain_id == self._domain,
                 ATTEMPTS.c.proposal_id.in_(list(proposal_ids)),

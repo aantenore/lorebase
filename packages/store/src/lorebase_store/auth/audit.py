@@ -33,6 +33,7 @@ from enum import Enum, StrEnum
 from typing import Any
 
 from sqlalchemy import ColumnElement, insert, select, text
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.canonical import jcs_bytes
@@ -279,7 +280,7 @@ class AuditRepository:
         model = self._model
         statement = (
             select(model.domain_id, model.seq, model.entry_hash)
-            .distinct(model.domain_id)
+            .ext(distinct_on(model.domain_id))
             .order_by(model.domain_id, model.seq.desc())
         )
         async with rls_scope(self._session, bypass=True):
