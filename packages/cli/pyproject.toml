@@ -3,6 +3,20 @@ name = "lorebase-cli"
 version = "0.3.0"
 description = "Lorebase CLI"
 requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Antonio Antenore" }]
+keywords = ["ontology", "knowledge-graph", "mcp", "postgres", "versioning"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Database",
+]
 dependencies = [
   "lorebase-client>=0.3,<0.4",
   # Command line framework with shell completion.
@@ -18,8 +32,15 @@ linkml = ["pyyaml>=6.0"]
 [project.scripts]
 lorebase = "lorebase_cli.main:main"
 
+[project.urls]
+Homepage = "https://github.com/aantenore/lorebase"
+Documentation = "https://aantenore.github.io/lorebase/"
+Repository = "https://github.com/aantenore/lorebase"
+Changelog = "https://github.com/aantenore/lorebase/blob/main/CHANGELOG.md"
+Issues = "https://github.com/aantenore/lorebase/issues"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

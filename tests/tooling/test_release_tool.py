@@ -77,3 +77,48 @@ def test_notes_stop_at_the_next_version_and_missing_versions_fail() -> None:
     assert tool.notes("0.1.0", text) == "Old.\n"
     with pytest.raises(SystemExit):
         tool.notes("0.3.0", text)
+
+
+def test_every_package_has_its_pypi_metadata_and_license_copy() -> None:
+    assert tool.metadata_problems() == []
+
+
+def test_missing_pypi_metadata_and_a_stale_license_copy_are_reported(tmp_path: Path) -> None:
+    (tmp_path / "LICENSE").write_text("Apache License 2.0\n")
+    package = tmp_path / "packages" / "herald"
+    package.mkdir(parents=True)
+    (package / "LICENSE").write_text("an older text\n")
+    (package / "README.md").write_text("# lorebase-herald\n")
+    (package / "pyproject.toml").write_text(
+        '[project]\nname = "lorebase-herald"\nversion = "0.3.0"\nreadme = "README.md"\n'
+        'license = "MIT"\nkeywords = ["mcp"]\n\n[project.urls]\nHomepage = "https://example.org"\n\n'
+        '[build-system]\nrequires = ["hatchling"]\n'
+    )
+    problems = tool.metadata_problems(tmp_path)
+    name = "packages/herald/pyproject.toml"
+    assert f"{name}: license is not 'Apache-2.0'" in problems
+    assert f"{name}: license-files is not ['LICENSE']" in problems
+    assert "packages/herald/LICENSE: missing or not the repository LICENSE" in problems
+    assert f"{name}: no authors" in problems
+    assert f"{name}: no classifiers" in problems
+    assert f"{name}: no keywords" not in problems
+    assert f"{name}: no project URL Documentation" in problems
+    assert f"{name}: no project URL Homepage" not in problems
+    assert any("has no line 'mcp-name: io.github.aantenore/lorebase-herald'" in p for p in problems)
+    assert f"{name}: build-system requires is not 'hatchling>=1.27'" in problems
+
+
+def test_the_registry_entry_is_publishable() -> None:
+    assert tool.registry_problems() == []
+
+
+def test_a_registry_entry_the_registry_would_refuse_is_reported(tmp_path: Path) -> None:
+    assert tool.registry_problems(tmp_path) == ["server.json: missing"]
+    (tmp_path / "server.json").write_text(
+        '{"name": "io.github.someone/other", "version": "0.3.0"}\n'
+    )
+    assert tool.registry_problems(tmp_path) == [
+        "server.json: name is not 'io.github.aantenore/lorebase-herald'",
+        "deploy/docker/backend.Dockerfile: no label "
+        'io.modelcontextprotocol.server.name="io.github.aantenore/lorebase-herald"',
+    ]

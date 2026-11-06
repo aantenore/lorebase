@@ -64,11 +64,13 @@ ARG VCS_URL=https://github.com/aantenore/lorebase
 ARG VERSION=dev
 ARG REVISION=unknown
 
+# The last label is how the MCP registry proves that server.json may name this image.
 LABEL org.opencontainers.image.title="lorebase" \
       org.opencontainers.image.source="${VCS_URL}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="Apache-2.0" \
+      io.modelcontextprotocol.server.name="io.github.aantenore/lorebase-herald"
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \

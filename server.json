@@ -1,0 +1,84 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.aantenore/lorebase-herald",
+  "title": "Lorebase",
+  "description": "Read and change a governed, versioned knowledge graph on Postgres through typed tools.",
+  "version": "0.3.0",
+  "websiteUrl": "https://aantenore.github.io/lorebase/mcp/",
+  "repository": {
+    "url": "https://github.com/aantenore/lorebase",
+    "source": "github",
+    "subfolder": "packages/herald"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "lorebase-herald",
+      "version": "0.3.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "LOREBASE_URL",
+          "description": "Origin of the Keeper REST API, for example http://127.0.0.1:8080",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "LOREBASE_DOMAIN",
+          "description": "Domain used when a tool call names none",
+          "format": "string"
+        },
+        {
+          "name": "LOREBASE_API_KEY",
+          "description": "API key of the agent's service principal; not needed when Keeper runs with authentication off",
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/aantenore/lorebase:0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "python"
+        },
+        {
+          "type": "positional",
+          "value": "-m"
+        },
+        {
+          "type": "positional",
+          "value": "lorebase_herald"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "LOREBASE_URL",
+          "description": "Origin of the Keeper REST API as seen from the container",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "LOREBASE_DOMAIN",
+          "description": "Domain used when a tool call names none",
+          "format": "string"
+        },
+        {
+          "name": "LOREBASE_API_KEY",
+          "description": "API key of the agent's service principal; not needed when Keeper runs with authentication off",
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

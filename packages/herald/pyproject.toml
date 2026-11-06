@@ -3,6 +3,20 @@ name = "lorebase-herald"
 version = "0.3.0"
 description = "Lorebase Herald: MCP server over the Keeper REST API"
 requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Antonio Antenore" }]
+keywords = ["ontology", "knowledge-graph", "mcp", "postgres", "versioning"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Database",
+]
 # mcp: the official Model Context Protocol SDK (tools, resources and prompts; stdio and
 #   Streamable HTTP transports; in-memory client sessions for tests).
 # lorebase-client: the typed client of Keeper's REST API (requests, models, errors, retries).
@@ -22,8 +36,15 @@ dependencies = [
 [project.scripts]
 lorebase-herald = "lorebase_herald.__main__:main"
 
+[project.urls]
+Homepage = "https://github.com/aantenore/lorebase"
+Documentation = "https://aantenore.github.io/lorebase/"
+Repository = "https://github.com/aantenore/lorebase"
+Changelog = "https://github.com/aantenore/lorebase/blob/main/CHANGELOG.md"
+Issues = "https://github.com/aantenore/lorebase/issues"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

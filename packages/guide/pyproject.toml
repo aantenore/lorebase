@@ -3,6 +3,20 @@ name = "lorebase-guide"
 version = "0.3.0"
 description = "Lorebase Guide: optional exploration assistant and query embedding over Keeper"
 requires-python = ">=3.12"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Antonio Antenore" }]
+keywords = ["ontology", "knowledge-graph", "mcp", "postgres", "versioning"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Database",
+]
 # lorebase-inference: the chat model of the exploration agent and the embedding model of /embed.
 # lorebase-client: every read goes to Keeper with the caller's own credential.
 # lorebase-platform: layered settings, secret references, structured logs and telemetry.
@@ -25,8 +39,15 @@ fastembed = ["lorebase-inference[fastembed]>=0.3,<0.4"]
 [project.scripts]
 lorebase-guide = "lorebase_guide.__main__:main"
 
+[project.urls]
+Homepage = "https://github.com/aantenore/lorebase"
+Documentation = "https://aantenore.github.io/lorebase/"
+Repository = "https://github.com/aantenore/lorebase"
+Changelog = "https://github.com/aantenore/lorebase/blob/main/CHANGELOG.md"
+Issues = "https://github.com/aantenore/lorebase/issues"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
