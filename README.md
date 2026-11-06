@@ -247,7 +247,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. [v0.3.0](https://github.com/aantenore/lorebase/releases/tag/v0.3.0) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](CHANGELOG.md) and the [release process](docs/release.md). Interfaces may change, and before 1.0 any minor version may change them.
+Pre-alpha. [v0.3.1](https://github.com/aantenore/lorebase/releases/tag/v0.3.1) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](CHANGELOG.md) and the [release process](docs/release.md). Interfaces may change, and before 1.0 any minor version may change them.
 
 What runs on `main` is described above. The [validation record](docs/validation.md) lists the runs behind it: performance at 100k, 1M and 10M Records, the five-day scenario (79 checks, run by the end-to-end workflow on demand), the security reviews and live runs with language models.
 

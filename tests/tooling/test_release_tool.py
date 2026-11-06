@@ -122,3 +122,16 @@ def test_a_registry_entry_the_registry_would_refuse_is_reported(tmp_path: Path) 
         "deploy/docker/backend.Dockerfile: no label "
         'io.modelcontextprotocol.server.name="io.github.aantenore/lorebase-herald"',
     ]
+
+
+def test_the_pages_that_name_the_current_release_agree_with_the_version() -> None:
+    """The release checklist asks for these banners; a stale one outlives a version bump."""
+    import re
+
+    root = SCRIPT.parents[1]
+    version = tool.versions(root)["pyproject.toml"]
+    pattern = re.compile(r"\[v(\d+\.\d+\.\d+)\]\([^)]+\) is the current")
+    for page in ("README.md", "docs/index.md", "docs/roadmap.md", "docs/faq.md"):
+        text = (root / page).read_text()
+        for found in pattern.findall(text):
+            assert found == version, f"{page} names v{found} as the current release, not v{version}"
