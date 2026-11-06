@@ -28,18 +28,18 @@ make security                     # dependency advisories (see below)
 ```
 
 1. Branch from `main` (`feat/...`, `fix/...`, `docs/...`).
-2. Make a focused change with tests, then run `make lint type test-changed` before pushing. The full suite runs in CI on every pull request.
+2. Make a focused change with tests, then run `make lint type test-changed` before pushing. The CI checks do not run on every pull request: a maintainer starts them on demand (`gh workflow run CI --ref <branch>`), and they run for every release tag.
 3. Write the commit subject in conventional form: imperative mood, at most 72 characters, no trailing period, optional type prefix (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`). Explain why in the body when it is not obvious.
 4. Commits carry the author only: no trailers (`Signed-off-by`, `Co-authored-by` and similar).
-5. Open a pull request; CI must be green before merge.
+5. Open a pull request; a maintainer runs CI on it before merging, and it must be green.
 
 ### Dependency advisories
 
-`make security` exports the locked Python runtime dependencies with `uv export` and checks them with `uvx pip-audit`, then runs `pnpm audit --prod --audit-level=high` in `apps/web`. `scripts/audit_check.py` fails on any advisory that is not in `.github/audit-allowlist.yaml` and on expired allowlist entries; allowlisted advisories are printed as warnings. The same checks run in CI (`audit.yaml`) on every pull request, on `main` and weekly. An allowlist entry names the advisory, package, ecosystem, reason, review date and an expiry date; add one only when no fixed version exists or the vulnerable code is not reachable, in the pull request that accepts the risk, and review it again before it expires. It needs network access. Dependency versions are updated by hand: no Dependabot or Renovate version updates run.
+`make security` exports the locked Python runtime dependencies with `uv export` and checks them with `uvx pip-audit`, then runs `pnpm audit --prod --audit-level=high` in `apps/web`. `scripts/audit_check.py` fails on any advisory that is not in `.github/audit-allowlist.yaml` and on expired allowlist entries; allowlisted advisories are printed as warnings. The same checks run in the Audit workflow (`audit.yaml`), on demand and before every release; they do not run on pull requests or on a schedule. An allowlist entry names the advisory, package, ecosystem, reason, review date and an expiry date; add one only when no fixed version exists or the vulnerable code is not reachable, in the pull request that accepts the risk, and review it again before it expires. It needs network access. Dependency versions are updated by hand: no Dependabot or Renovate version updates run.
 
 ### Testing policy
 
-- Locally, run the tests that cover what you changed (`make test-changed`) and the fast validators. The full suite runs in CI on every pull request.
+- Locally, run the tests that cover what you changed (`make test-changed`) and the fast validators. The full suite runs in CI, which a maintainer starts on demand and which runs for every release tag; it does not run on every pull request.
 - New behavior needs tests. The core versioning engine needs property-based tests for any change to hashing, trees, diff or merge.
 - Integration tests run `admin verify` at teardown; keep it passing.
 
@@ -57,7 +57,7 @@ make security                     # dependency advisories (see below)
 2. Keep pull requests focused on one task or fix.
 3. Follow the commit conventions in [Development workflow](#development-workflow).
 4. Fill in the pull request template: what changed, why, how it was tested.
-5. A maintainer reviews; CI must be green before merge.
+5. A maintainer reviews and runs CI on demand; it must be green before merge.
 
 ## Labels
 
