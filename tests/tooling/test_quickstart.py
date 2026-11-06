@@ -1,7 +1,8 @@
-"""The quickstart helpers: `scripts/quickstart.sh env` and the hosted model compose overlay.
+"""The quickstart helpers: `scripts/quickstart.sh env`, the checks and the lines `up` prints
+(with a `docker` that only echoes its arguments), and the hosted model compose overlay.
 
-The stack commands of the script (up, data, down, clean) need Docker and a running Keeper; they
-are exercised by the fresh-clone check in docs/validation.md, not here.
+The stack commands of the script (up, data, down, clean) need Docker and a running Keeper for
+the rest; they are exercised by the fresh-clone check in docs/validation.md, not here.
 """
 
 from __future__ import annotations
@@ -10,8 +11,10 @@ import json
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +25,15 @@ SCRIPT = ROOT / "scripts" / "quickstart.sh"
 COMPOSE_FILE = ROOT / "deploy" / "compose" / "docker-compose.yaml"
 HOSTED_FILE = ROOT / "deploy" / "compose" / "hosted-model.yaml"
 PASSWORDS = ("POSTGRES_PASSWORD", "LOREBASE_APP_PASSWORD")
-GENERATED = (*PASSWORDS, "LOREBASE_WEBHOOK_KEY")
+GENERATED = (*PASSWORDS, "LOREBASE_WEBHOOK_KEY", "HERALD_DOMAIN")
+# Host port variables of the services `up` can start, in the order the script probes them.
+PORT_VARIABLES = (
+    "POSTGRES_HOST_PORT",
+    "KEEPER_HOST_PORT",
+    "LOREBASE_WEB_PORT",
+    "GUIDE_HOST_PORT",
+    "HERALD_HOST_PORT",
+)
 
 
 def run_env(env_file: Path) -> subprocess.CompletedProcess[str]:
@@ -57,23 +68,38 @@ def test_env_creates_the_file_with_generated_passwords_and_webhook_key(tmp_path:
         k: v for k, v in expected.items() if k not in GENERATED
     }
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    # The sample Domain for the mcp profile, set where .env.example documents it.
+    assert got["HERALD_DOMAIN"] == "supply"
+    lines = env_file.read_text().splitlines()
+    assert "# HERALD_DOMAIN=supply" not in lines
+    assert lines.index("HERALD_DOMAIN=supply") < lines.index("# HERALD_BRANCH=")
 
 
 def test_env_keeps_set_values_and_fills_placeholders(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "POSTGRES_PASSWORD=change-me\nLOREBASE_APP_PASSWORD=mine\nKEEPER_HOST_PORT=18080\n"
+        "HERALD_DOMAIN=mine-too\n"
     )
     run_env(env_file)
     first = values(env_file)
     assert re.fullmatch(r"[0-9a-f]{48}", first["POSTGRES_PASSWORD"])
     assert first["LOREBASE_APP_PASSWORD"] == "mine"
     assert first["KEEPER_HOST_PORT"] == "18080"
+    assert first["HERALD_DOMAIN"] == "mine-too"
     # A file from before the webhook key gets one, appended.
     assert re.fullmatch(r"[0-9a-f]{64}", first["LOREBASE_WEBHOOK_KEY"])
 
     run_env(env_file)
     assert values(env_file) == first
+
+
+def test_env_appends_the_sample_domain_to_a_file_without_it(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("POSTGRES_PASSWORD=x\nLOREBASE_APP_PASSWORD=y\nLOREBASE_WEBHOOK_KEY=z\n")
+    result = run_env(env_file)
+    assert values(env_file)["HERALD_DOMAIN"] == "supply"
+    assert "set HERALD_DOMAIN=supply" in result.stderr
 
 
 def test_up_starts_the_web_service_and_prints_its_url() -> None:
@@ -129,6 +155,22 @@ def test_makefile_passes_profiles_to_up() -> None:
     assert "up-assistant:" in makefile
     assert "PROFILES=assistant scripts/quickstart.sh up" in makefile
     assert "example-documents:" in makefile
+
+
+def test_makefile_prints_the_shell_exports_on_their_own() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    assert "shell-env:" in makefile
+    assert "\n\t@scripts/quickstart.sh shell-env\n" in makefile  # stdout holds the line only
+    assert " shell-env " in makefile.split(".PHONY:")[1].split("\n\n")[0].replace("\\\n", " ")
+
+
+def test_shell_env_prints_the_export_line_for_the_configured_port(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("KEEPER_HOST_PORT=18580\n")
+    result = run_script("shell-env", env_file=env_file)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "export LOREBASE_URL=http://127.0.0.1:18580 LOREBASE_DOMAIN=supply\n"
+    assert run_script("shell-env", env_file=tmp_path / "missing.env").returncode == 1
 
 
 def test_example_documents_exist_and_share_a_suggestion() -> None:
@@ -298,3 +340,213 @@ def test_makefile_hands_compose_overlays_to_the_script() -> None:
     assert "export COMPOSE_OVERLAYS" in makefile
     assert "scripts/quickstart.sh logs $(SERVICES)" in makefile
     assert "COMPOSE_OVERLAYS" in values(ROOT / ".env.example")
+
+
+# `up` before compose: the port and exposure checks, and the lines it prints afterwards -------
+
+
+def free_ports(count: int) -> list[int]:
+    """Ports nothing listens on right now (bound and released one after the other)."""
+    sockets = [socket.socket() for _ in range(count)]
+    try:
+        for sock in sockets:
+            sock.bind(("127.0.0.1", 0))
+        return [sock.getsockname()[1] for sock in sockets]
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
+def stack_env(tmp_path: Path, **extra: str) -> Path:
+    """An environment file whose published ports are all free, plus `extra`."""
+    settings = dict(zip(PORT_VARIABLES, map(str, free_ports(len(PORT_VARIABLES))), strict=True))
+    settings.update(extra)
+    env_file = tmp_path / ".env"
+    env_file.write_text("".join(f"{name}={value}\n" for name, value in settings.items()))
+    return env_file
+
+
+@pytest.fixture
+def listener() -> Iterator[int]:
+    """A port something listens on, on 127.0.0.1."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    try:
+        yield sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+def compose_up(result: subprocess.CompletedProcess[str]) -> list[str]:
+    """The arguments of the `compose up` call the echoing docker saw, if any (the script sends
+    that call's output to standard error, before the lines it prints itself)."""
+    lines = result.stderr.splitlines()
+    if "up" not in lines:
+        return []
+    args = lines[lines.index("up") :]
+    ends = [i for i, line in enumerate(args) if line.startswith("[quickstart]")]
+    return args[: ends[0]] if ends else args
+
+
+def test_up_stops_before_compose_when_a_published_port_is_taken(
+    tmp_path: Path, listener: int
+) -> None:
+    env_file = stack_env(tmp_path, GUIDE_HOST_PORT=str(listener))
+    result = run_with_docker(tmp_path, "up", env_file=env_file, PROFILES="assistant")
+    assert result.returncode == 1
+    assert f"port {listener} on 127.0.0.1 (GUIDE_HOST_PORT) is already in use" in result.stderr
+    assert f"set GUIDE_HOST_PORT in {env_file}" in result.stderr
+    assert compose_up(result) == []
+    # Without the profile that publishes it, the port is nobody's business.
+    result = run_with_docker(tmp_path, "up", env_file=env_file)
+    assert result.returncode == 0, result.stderr
+    assert compose_up(result)[:4] == ["up", "-d", "--build", "--wait"]
+
+
+def test_up_probes_the_configured_bind_address(tmp_path: Path, listener: int) -> None:
+    # Published on every address, a port taken on 127.0.0.1 is taken (the exposure check is
+    # opted out of first, or it would stop the run before the probe).
+    env_file = stack_env(
+        tmp_path,
+        KEEPER_HOST_PORT=str(listener),
+        KEEPER_BIND="0.0.0.0",
+        KEEPER_PUBLISH_INSECURE="true",
+    )
+    result = run_with_docker(tmp_path, "up", env_file=env_file)
+    assert result.returncode == 1
+    assert f"port {listener} on 0.0.0.0 (KEEPER_HOST_PORT) is already in use" in result.stderr
+
+
+def test_up_prints_the_export_line_for_the_configured_port(tmp_path: Path) -> None:
+    env_file = stack_env(tmp_path)
+    port = values(env_file)["KEEPER_HOST_PORT"]
+    result = run_with_docker(tmp_path, "up", env_file=env_file)
+    assert result.returncode == 0, result.stderr
+    assert compose_up(result) == [
+        "up",
+        "-d",
+        "--build",
+        "--wait",
+        "postgres",
+        "migrate",
+        "keeper",
+        "web",
+    ]
+    assert f"Keeper is ready at http://127.0.0.1:{port}" in result.stderr
+    assert f"export LOREBASE_URL=http://127.0.0.1:{port} LOREBASE_DOMAIN=supply" in result.stderr
+    assert 'eval "$(make shell-env)"' in result.stderr
+    assert (
+        f'"env": {{"LOREBASE_URL": "http://127.0.0.1:{port}", "LOREBASE_DOMAIN": "supply"}}'
+        in result.stderr
+    )
+
+
+def test_up_with_the_mcp_profile_names_the_streamable_http_endpoint(tmp_path: Path) -> None:
+    env_file = stack_env(tmp_path)
+    port = values(env_file)["HERALD_HOST_PORT"]
+    result = run_with_docker(tmp_path, "up", env_file=env_file, PROFILES="mcp")
+    assert result.returncode == 0, result.stderr
+    assert compose_up(result)[-1] == "herald"
+    assert f"http://127.0.0.1:{port}/mcp" in result.stderr
+
+
+def test_up_refuses_to_publish_an_unauthenticated_keeper_beyond_loopback(
+    tmp_path: Path,
+) -> None:
+    # The web service proxies /api/ to Keeper, so its bind address counts as well.
+    env_file = stack_env(tmp_path, WEB_BIND="0.0.0.0")
+    result = run_with_docker(tmp_path, "up", env_file=env_file)
+    assert result.returncode == 1
+    assert "refusing to start: WEB_BIND=0.0.0.0 publishes Keeper beyond this machine" in (
+        result.stderr
+    )
+    assert "administrator of every Domain" in result.stderr
+    assert "KEEPER_PUBLISH_INSECURE=true" in result.stderr
+    assert compose_up(result) == []
+    # The binds of the profiles count only with the profile.
+    env_file = stack_env(tmp_path, HERALD_BIND="0.0.0.0")
+    assert run_with_docker(tmp_path, "up", env_file=env_file).returncode == 0
+    result = run_with_docker(tmp_path, "up", env_file=env_file, PROFILES="mcp")
+    assert result.returncode == 1
+    assert "HERALD_BIND=0.0.0.0" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"KEEPER_PUBLISH_INSECURE": "true"},
+        {"LOREBASE__KEEPER__AUTH__MODE": "api_key"},
+        {"KEEPER_ALLOW_INSECURE": "false"},
+    ],
+)
+def test_up_publishes_beyond_loopback_with_authentication_or_an_explicit_opt_in(
+    tmp_path: Path, extra: dict[str, str]
+) -> None:
+    env_file = stack_env(tmp_path, KEEPER_BIND="0.0.0.0", **extra)
+    result = run_with_docker(tmp_path, "up", env_file=env_file)
+    assert result.returncode == 0, result.stderr
+    assert compose_up(result)[:1] == ["up"]
+    # Only the opt-in is worth a warning: the other two run an authenticating Keeper.
+    assert ("warning: Keeper takes every request" in result.stderr) == (
+        "KEEPER_PUBLISH_INSECURE" in extra
+    )
+
+
+def test_the_opt_in_is_read_from_the_environment_too(tmp_path: Path) -> None:
+    env_file = stack_env(tmp_path, KEEPER_BIND="0.0.0.0")
+    result = run_with_docker(tmp_path, "up", env_file=env_file, KEEPER_PUBLISH_INSECURE="true")
+    assert result.returncode == 0, result.stderr
+    assert "KEEPER_PUBLISH_INSECURE=true" in result.stderr
+
+
+def test_shell_variables_win_over_the_env_file_in_the_exposure_check(tmp_path: Path) -> None:
+    # docker compose gives the shell precedence over --env-file, so the check does the same.
+    env_file = stack_env(
+        tmp_path, KEEPER_BIND="127.0.0.1", WEB_BIND="localhost", KEEPER_ALLOW_INSECURE="false"
+    )
+    result = run_with_docker(
+        tmp_path, "up", env_file=env_file, KEEPER_BIND="0.0.0.0", KEEPER_ALLOW_INSECURE="true"
+    )
+    assert result.returncode == 1
+    assert "refusing to start: KEEPER_BIND=0.0.0.0 publishes Keeper beyond this machine" in (
+        result.stderr
+    )
+    assert "administrator of every Domain" in result.stderr
+    assert compose_up(result) == []
+    # An opt-in in the env file loses to one turned off in the shell.
+    env_file = stack_env(tmp_path, KEEPER_PUBLISH_INSECURE="true")
+    result = run_with_docker(
+        tmp_path, "up", env_file=env_file, KEEPER_BIND="0.0.0.0", KEEPER_PUBLISH_INSECURE="false"
+    )
+    assert result.returncode == 1
+    assert compose_up(result) == []
+    # A loopback address in the shell wins over an exposed one in the env file.
+    env_file = stack_env(tmp_path, KEEPER_BIND="0.0.0.0")
+    for address in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        result = run_with_docker(tmp_path, "up", env_file=env_file, KEEPER_BIND=address)
+        assert "refusing to start" not in result.stderr, address
+
+
+def test_the_opt_in_in_the_shell_allows_a_bind_set_in_the_shell(tmp_path: Path) -> None:
+    env_file = stack_env(tmp_path, KEEPER_BIND="127.0.0.1")
+    result = run_with_docker(
+        tmp_path,
+        "up",
+        env_file=env_file,
+        KEEPER_BIND="0.0.0.0",
+        KEEPER_ALLOW_INSECURE="true",
+        KEEPER_PUBLISH_INSECURE="true",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "warning: Keeper takes every request" in result.stderr
+    assert "KEEPER_BIND=0.0.0.0" in result.stderr
+    assert compose_up(result)[:1] == ["up"]
+
+
+def test_the_port_check_reads_the_shell_first(tmp_path: Path, listener: int) -> None:
+    env_file = stack_env(tmp_path)
+    result = run_with_docker(tmp_path, "up", env_file=env_file, KEEPER_HOST_PORT=str(listener))
+    assert result.returncode == 1
+    assert f"port {listener} on 127.0.0.1 (KEEPER_HOST_PORT) is already in use" in result.stderr
+    assert compose_up(result) == []

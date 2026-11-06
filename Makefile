@@ -63,7 +63,7 @@ export PERF_PG_PORT PERF_PG_PASSWORD PERF_PG_SHARED_BUFFERS PERF_PG_EFFECTIVE_CA
 
 .PHONY: help sync fmt lint type openapi docs-generate docs docs-serve test-unit test-int test-changed \
 	test-perf perf-up perf-1m perf-10m perf-down security security-python security-web demo demo-down \
-	env up up-assistant logs example-data example-documents down clean-stack
+	env up up-assistant shell-env logs example-data example-documents down clean-stack
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -141,6 +141,9 @@ up: ## Build the images and start Postgres, migrations, Keeper and the web app (
 
 up-assistant: ## Same as `make up PROFILES=assistant`: also Guide and Scribe on the backend-ml image (embeddings, semantic search)
 	@PROFILES=assistant scripts/quickstart.sh up
+
+shell-env: ## Print the export line that points the CLI at the running stack: eval "$$(make shell-env)"
+	@scripts/quickstart.sh shell-env
 
 logs: ## Follow the logs of the quickstart stack (SERVICES="scribe guide" narrows them)
 	@PROFILES="$(PROFILES)" scripts/quickstart.sh logs $(SERVICES)

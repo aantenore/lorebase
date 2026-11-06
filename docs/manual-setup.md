@@ -21,7 +21,7 @@ again and diffs two Revisions. The output is the same on every run. Excerpt:
 
 ```text
 == 5. merge source/erp into main
-merge base 7ad4a553: 5 Conflicts
+merge base 44de5fcc: 5 Conflicts
 
 DV1 ATTRIBUTE_VALUE (1)
   where            attribute   base  ours  theirs  choices
@@ -94,7 +94,8 @@ docs.
 > none`: Keeper accepts every request as an administrator
 > (`curl http://localhost:8080/api/v1/auth/whoami` answers `"anonymous"` with
 > `"installation_admin":true`). Compose publishes the port on `127.0.0.1` only and sets
-> `KEEPER_ALLOW_INSECURE=true`, without which Keeper refuses that mode off loopback. Do not expose it,
+> `KEEPER_ALLOW_INSECURE=true`, without which Keeper refuses that mode off loopback; `make up`
+> refuses to start while a `*_BIND` value in `.env` would publish it beyond this machine. Do not expose it,
 > and use `api_key` or `oidc` modes (they need the `database` section and further settings,
 > see the comments in the file) for anything shared.
 

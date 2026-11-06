@@ -38,10 +38,16 @@ stack publishes these ports on `127.0.0.1` only:
 | 5432 | Postgres | `POSTGRES_HOST_PORT` |
 | 11434 | Ollama (profile `local-models`) | `OLLAMA_HOST_PORT` |
 | 8090 | web app (container started by `make up`) | `LOREBASE_WEB_PORT` |
+| 8095 | Guide (profile `assistant`) | `GUIDE_HOST_PORT` |
+| 8091 | Herald, Streamable HTTP (profile `mcp`) | `HERALD_HOST_PORT` |
+| 8088, 5433 | load balancer in front of the Keepers and read replica (profile `scale-out`, [deployment](deployment.md)) | `PROXY_HOST_PORT`, `POSTGRES_REPLICA_HOST_PORT` |
 | 5173 | web app dev server (`pnpm dev`, contributors) | picks the next free port by itself |
 
-`lsof -nP -iTCP:8080 -sTCP:LISTEN` (and the same for 8090 and 5432) shows whether a port is taken; if it
-is, change the variable in `.env` after step 2.2. The compose project name comes from
+`make up` checks every port the chosen profiles publish before it starts anything and names the
+variable to change (`lsof -nP -iTCP:8080 -sTCP:LISTEN` shows who holds a port); if one is taken,
+change the variable in `.env` after step 2.2. It also refuses to start while a `*_BIND` value in
+`.env` would publish the Keeper of this stack, which runs with authentication off, beyond this
+machine (`KEEPER_PUBLISH_INSECURE=true`, in `.env` or the shell, starts it anyway). The compose project name comes from
 `COMPOSE_PROJECT_NAME` in `.env` (default `lorebase`): give a second checkout on the same
 machine another name, so that the two stacks never share containers or volumes.
 
@@ -81,18 +87,21 @@ This runs `docker compose --env-file .env -f deploy/compose/docker-compose.yaml 
 --wait postgres migrate keeper web`. The first run builds the backend and web images (a few
 minutes; later runs reuse the layers). Compose starts Postgres 16, creates the application role Keeper connects
 as (`db-roles`), runs the migrations once (`migrate` exits when done), starts the web app and returns when Keeper
-and the web app are healthy. It ends by printing the web app URL (`http://127.0.0.1:8090`). Check
-Keeper:
+and the web app are healthy. It ends by printing the Keeper URL (`Keeper is ready at http://127.0.0.1:8080` with the
+default `KEEPER_HOST_PORT`), the web app URL (`http://127.0.0.1:8090`) and the `export` line that
+points the CLI at them (`make shell-env` prints it again). Point the commands of this page at that
+Keeper and check it:
 
 ```bash
-curl http://localhost:8080/readyz
+eval "$(make shell-env)"   # export LOREBASE_URL=http://127.0.0.1:<KEEPER_HOST_PORT> LOREBASE_DOMAIN=supply, the line `make up` printed
+curl "$LOREBASE_URL/readyz"
 ```
 
 ```json
 {"status":"ready","checks":{"database":{"status":"ok","detail":null}}}
 ```
 
-`http://localhost:8080/api/v1/docs` serves the interactive OpenAPI docs. The web app answers on
+`$LOREBASE_URL/api/v1/docs` serves the interactive OpenAPI docs. The web app answers on
 `http://127.0.0.1:8090`, and `http://127.0.0.1:8090/api/v1/auth/whoami` reaches Keeper through it.
 
 **Credentials.** There are none to type. The example configuration
@@ -130,7 +139,7 @@ does nothing once the sample is on `main`.
 ### 2.5 First query
 
 ```bash
-export LOREBASE_URL=http://localhost:8080 LOREBASE_DOMAIN=supply
+# LOREBASE_URL and LOREBASE_DOMAIN=supply as exported in step 2.3
 uv run lorebase record list Part -n 5 \
   --where '{"attr": "category", "op": "eq", "value": "bearing"}' --select category --select unit_cost
 uv run lorebase search bearing --kind Part
@@ -148,7 +157,7 @@ P-10029  Needle roller bearing 6001   bearing   45.94
 The same over REST, with no CLI:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/domains/supply/query \
+curl -s -X POST "$LOREBASE_URL/api/v1/domains/supply/query" \
   -H 'Content-Type: application/json' \
   -d '{"kind": "Part", "aggregate": {"group_by": "category"}}'
 ```
@@ -206,12 +215,11 @@ reload, on the Keeper of the stack:
 cd apps/web
 pnpm install
 printf 'VITE_API_MODE=live\nVITE_KEEPER_BASE_URL=/\n' > .env.local
-LOREBASE_KEEPER_PROXY=http://localhost:8080 pnpm dev
+LOREBASE_KEEPER_PROXY="$LOREBASE_URL" pnpm dev    # the Keeper URL of step 2.3
 ```
 
 Open the URL it prints (`http://localhost:5173`, or the next free port). The dev server forwards
-`/api` to Keeper, so no CORS setting is needed here either. Use `KEEPER_HOST_PORT` in the proxy
-URL if you changed it.
+`/api` to Keeper, so no CORS setting is needed here either.
 
 ### 2.7 Guide, Scribe and the example documents
 
@@ -239,9 +247,9 @@ Guide embeds the query, and the vector goes to the search:
 ```bash
 curl -s http://127.0.0.1:8090/guide/embed -H 'Content-Type: application/json' \
   -d '{"text": "protects a rotating shaft from oil leaks", "mode": "query"}' \
-  | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["vector"]))' > query.json
+  | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["vector"]))' > "${TMPDIR:-/tmp}/query.json"
 uv run lorebase search "protects a rotating shaft from oil leaks" --kind Part \
-  --mode semantic --vector-file query.json -n 3
+  --mode semantic --vector-file "${TMPDIR:-/tmp}/query.json" -n 3
 ```
 
 ```text
@@ -283,7 +291,8 @@ Herald, the MCP server, turns the Domain into tools an MCP host can call (`loreb
 `lorebase_get`, `lorebase_query`, `lorebase_context` and more, listed in [mcp.md](mcp.md#tools)).
 It runs from the checkout; the host starts it over stdio. Add this entry to the MCP
 configuration of your host (most hosts read an `mcpServers` map; [mcp.md](mcp.md#mcp-host-configuration)
-has the file for each host), with the absolute path of your clone:
+has the file for each host), with the absolute path of your clone and the Keeper URL `make up`
+printed:
 
 ```json
 {
@@ -310,7 +319,7 @@ To check Herald without a host, list its tools and run one search from Python (t
 package is installed by `uv sync`):
 
 ```bash
-LOREBASE_URL=http://127.0.0.1:8080 LOREBASE_DOMAIN=supply uv run python - <<'EOF'
+LOREBASE_DOMAIN=supply uv run python - <<'EOF'    # LOREBASE_URL as exported in step 2.3
 import asyncio, os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -344,8 +353,9 @@ make up PROFILES=mcp      # Herald at http://127.0.0.1:8091/mcp (HERALD_HOST_POR
 ```
 
 Agents send `Authorization: Bearer <api key>`; with the stack's authentication off, set
-`HERALD_ALLOW_ANONYMOUS=true` in `.env` to let them call without one
-([mcp.md](mcp.md#docker-compose)).
+`HERALD_ALLOW_ANONYMOUS=true` in `.env` to let them call without one, and `HERALD_DOMAIN=supply`
+so that calls naming no `domain` read the sample Domain (without it every call must pass
+`domain`) ([mcp.md](mcp.md#docker-compose)).
 
 ## 4. Use a real model
 
@@ -457,7 +467,8 @@ well: `docker image rm lorebase:dev lorebase-ml:dev lorebase-web:dev` (the `LORE
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| `Bind for 127.0.0.1:5432 failed: port is already allocated` (or 8080, 8090, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the new Keeper port in `LOREBASE_URL` (and `LOREBASE_KEEPER_PROXY` of the dev server). |
+| `port 5432 on 127.0.0.1 (POSTGRES_HOST_PORT) is already in use` from `make up`, or `Bind for 127.0.0.1:5432 failed: port is already allocated` from compose run by hand (or 8080, 8090, 8091, 8095, 11434) | Another Postgres, service or Ollama holds the port. Set `POSTGRES_HOST_PORT`, `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT`, `HERALD_HOST_PORT` (profile `mcp`), `GUIDE_HOST_PORT` (profile `assistant`) or `OLLAMA_HOST_PORT` in `.env`, run `make up` again, and use the Keeper URL it prints in `LOREBASE_URL` (and `LOREBASE_KEEPER_PROXY` of the dev server). |
+| `refusing to start: KEEPER_BIND=0.0.0.0 publishes Keeper beyond this machine` (or `WEB_BIND`, `GUIDE_BIND`, `HERALD_BIND`) | The stack runs with authentication off, so `make up` keeps its ports on `127.0.0.1`. Keep the `*_BIND` values there, turn authentication on first (`KEEPER_ALLOW_INSECURE=false` and an auth mode, [manual setup](manual-setup.md)), or set `KEEPER_PUBLISH_INSECURE=true` to publish it anyway. |
 | `required variable POSTGRES_PASSWORD is missing a value`, `set LOREBASE_APP_PASSWORD in the environment file` or `set LOREBASE_WEBHOOK_KEY in the environment file` | `.env` is missing or a password or the webhook key is empty: `make env` fills them. |
 | Keeper unhealthy, `make up` fails with `dependency failed to start` | `docker compose --env-file .env -f deploy/compose/docker-compose.yaml logs migrate keeper` names the error. A password changed after the first start does not change the database: run `make clean-stack` (deletes the data) and `make up`. |
 | `curl: (52) Empty reply from server` right after `up -d` without `--wait` | Keeper is still starting; `make up` waits for its health check. |
