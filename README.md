@@ -33,7 +33,7 @@ The agent then calls `lorebase_search` with `{"query": "bearing", "kinds": ["Par
 
 No model ran to answer it. Cursor, VS Code and other hosts take the same `uvx lorebase-herald` command ([MCP host configuration](docs/mcp.md#mcp-host-configuration)); a Keeper with authentication on also needs `LOREBASE_API_KEY`.
 
-> **Pre-alpha, v0.3.0.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](docs/quickstart.md) is the place to start and the [validation record](docs/validation.md) the place to check the claims.
+> **Pre-alpha, v0.3.1.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](docs/quickstart.md) is the place to start and the [validation record](docs/validation.md) the place to check the claims.
 
 ## 30-second demo
 
@@ -173,7 +173,7 @@ The first `make up` builds the backend and web images (a few minutes); the rest 
 
 ### Install the command line and the MCP server from PyPI
 
-The ten packages are published on PyPI at 0.3.0 (`lorebase-cli`, `lorebase-client`, `lorebase-herald`, `lorebase-keeper`, and the rest). To talk to a running Keeper you do not need a clone:
+The ten packages are published on PyPI at 0.3.1 (`lorebase-cli`, `lorebase-client`, `lorebase-herald`, `lorebase-keeper`, and the rest). To talk to a running Keeper you do not need a clone:
 
 ```bash
 uv tool install lorebase-cli            # or: pip install lorebase-cli

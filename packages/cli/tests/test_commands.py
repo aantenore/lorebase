@@ -16,6 +16,8 @@ import pytest
 import respx
 from typer.testing import CliRunner, Result
 
+import lorebase_client
+from lorebase_cli import __version__
 from lorebase_cli.main import app
 
 API = "http://keeper.test/api/v1"
@@ -24,6 +26,7 @@ REV2 = "cd" * 32
 NOW = "2026-10-01T08:00:00Z"
 PROBLEM = "application/problem+json"
 runner = CliRunner()
+VERSION_LINE = f"lorebase {__version__} (client {lorebase_client.__version__})"
 
 
 @pytest.fixture
@@ -163,7 +166,7 @@ def test_no_arguments_prints_help() -> None:
 def test_version() -> None:
     result = run("--version")
     assert result.exit_code == 0
-    assert result.stdout.startswith("lorebase 0.3.0")
+    assert result.stdout.strip() == VERSION_LINE
 
 
 @pytest.mark.parametrize(
@@ -1869,7 +1872,7 @@ def test_module_entry_point_runs() -> None:
         check=False,
     )
     assert done.returncode == 0
-    assert done.stdout.startswith("lorebase 0.3.0")
+    assert done.stdout.strip() == VERSION_LINE
 
 
 # Proposals, context and explain --------------------------------------------------------------
