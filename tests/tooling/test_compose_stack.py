@@ -306,7 +306,7 @@ def test_bm25_overlay_runs_postgres_on_paradedb_with_pg_search_preloaded() -> No
     assert "shared_preload_libraries=pg_search" in alone
     # The default stack keeps the pgvector image and the default ranking.
     default = services(BASE_ENV)
-    assert default["postgres"]["image"] == "pgvector/pgvector:pg16"
+    assert default["postgres"]["image"].startswith("pgvector/pgvector:0.8.7-pg16@sha256:")
     assert "LOREBASE__SEARCH__BACKEND" not in default["keeper"]["environment"]
 
 
@@ -391,3 +391,13 @@ def test_prebuilt_images_can_be_used_instead() -> None:
     found = services({**BASE_ENV, "LOREBASE_PULL_POLICY": "missing"})
     for name in BUILT_SERVICES:
         assert found[name]["pull_policy"] == "missing", name
+
+
+def test_scribe_reports_liveness_through_the_file_its_healthcheck_reads() -> None:
+    scribe = services(BASE_ENV)["scribe"]
+    path = scribe["environment"]["LOREBASE__SCRIBE__WORKER__LIVENESS_FILE"]
+    assert path.startswith("/tmp/")  # the one writable path of the read-only container
+    assert "/tmp" in scribe["tmpfs"]
+    check = scribe["healthcheck"]
+    assert check["test"] == ["CMD", "python", "-m", "lorebase_scribe.liveness", path]
+    assert check["retries"] >= 3

@@ -91,7 +91,7 @@ x-webhooks: &webhooks
 # when a value is empty, still `change-me`, or too short. `${VAR:?}` cannot be used for these,
 # because compose interpolates every service whether its profile is enabled or not.
 x-require-secrets: &require-secrets
-  image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+  image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.7-pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f}
   restart: "no"
   user: postgres
   security_opt:
@@ -166,7 +166,7 @@ x-keeper: &keeper
 
 services:
   postgres:
-    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.7-pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f}
     restart: unless-stopped
     # Memory settings per storage profile: see .env.example and docs/performance.md#sizing.
     # The defaults are those of Postgres. pg_prewarm in POSTGRES_PRELOAD_LIBRARIES turns on
@@ -200,7 +200,7 @@ services:
   # Creates or updates the application role on every start (postgres/app-role.sh). It is
   # idempotent, so a volume created before the role existed gets it too.
   db-roles:
-    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.7-pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f}
     restart: "no"
     user: postgres
     security_opt:
@@ -329,6 +329,10 @@ services:
       LOREBASE__TELEMETRY__SERVICE_NAME: lorebase-scribe
       LOREBASE__TELEMETRY__SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.1}
       LOREBASE__SCRIBE__WORKER__CONCURRENCY: ${SCRIBE_CONCURRENCY:-2}
+      # The job loop rewrites this file every scribe.worker.liveness_interval_s (10 s) with its
+      # live slots; the healthcheck below reads it, so a process that hangs, or runs no slot,
+      # shows unhealthy instead of running on with a growing queue.
+      LOREBASE__SCRIBE__WORKER__LIVENESS_FILE: /tmp/scribe-liveness.json
       LOREBASE__SCRIBE__SOURCES__CSV__ALLOWED_ROOTS: '["/data/sources"]'
       # The only references a Source `connection` may name (scribe.sources.allowed_connections).
       LOREBASE__SCRIBE__SOURCES__ALLOWED_CONNECTIONS: '["secret://env/SUPPLY_APPROVED_SUPPLIERS_CSV", "secret://env/ERP_DSN"]'
@@ -343,6 +347,14 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    # Scribe serves no HTTP: the check reads the liveness file (stale after three intervals, or
+    # without a live slot, it fails; the module imports the standard library only).
+    healthcheck:
+      test: ["CMD", "python", "-m", "lorebase_scribe.liveness", "/tmp/scribe-liveness.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # ---- profile assistant ----------------------------------------------------------------
   # Guide: holds no Keeper credential, it forwards the caller's own Authorization or session
@@ -450,7 +462,7 @@ services:
 
   ollama:
     profiles: [local-models]
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761}
     restart: unless-stopped
     volumes:
       - ollama-data:/root/.ollama
@@ -465,7 +477,7 @@ services:
 
   ollama-pull:
     profiles: [local-models]
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761}
     restart: "no"
     environment:
       OLLAMA_HOST: http://ollama:11434
@@ -512,7 +524,7 @@ services:
 
   litellm:
     profiles: [litellm]
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.83.14-stable.patch.3@sha256:f12d528d4a05add56cb09e54c5126088f2edc6bdf3a2f943bcd3a32b08769da2}
     restart: unless-stopped
     command: ["--config", "/etc/litellm/config.yaml", "--port", "${LITELLM_PORT:-4000}"]
     depends_on:
@@ -534,7 +546,7 @@ services:
 
   otel-collector:
     profiles: [observability]
-    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:latest}
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b}
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
@@ -547,14 +559,14 @@ services:
 
   jaeger:
     profiles: [observability]
-    image: ${JAEGER_IMAGE:-jaegertracing/all-in-one:latest}
+    image: ${JAEGER_IMAGE:-jaegertracing/all-in-one:1.76.0@sha256:ab6f1a1f0fb49ea08bcd19f6b84f6081d0d44b364b6de148e1798eb5816bacac}
     restart: unless-stopped
     ports:
       - "${JAEGER_BIND:-127.0.0.1}:${JAEGER_UI_HOST_PORT:-16686}:16686"
 
   prometheus:
     profiles: [observability]
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06}
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -578,7 +590,7 @@ services:
 
   grafana:
     profiles: [observability]
-    image: ${GRAFANA_IMAGE:-grafana/grafana:latest}
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205}
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
@@ -610,7 +622,7 @@ services:
 
   replica-prep:
     profiles: [scale-out]
-    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.7-pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f}
     restart: "no"
     user: root
     entrypoint: ["sh", "/scripts/prepare-primary.sh"]
@@ -631,7 +643,7 @@ services:
 
   postgres-replica:
     profiles: [scale-out]
-    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.7-pg16@sha256:0dd3149a06e4579a0d70d8fef9945636cd514005e7237deb27f9b67886f8dc4f}
     restart: unless-stopped
     user: postgres
     entrypoint: ["sh", "/scripts/replica-entrypoint.sh"]

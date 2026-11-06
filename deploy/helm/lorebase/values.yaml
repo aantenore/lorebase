@@ -489,7 +489,15 @@ scribe:
       memory: 1Gi
     limits:
       memory: 2Gi
-  # Scribe has no HTTP port; add probes here (for example an exec probe) once it ships a health command.
+  # Scribe has no HTTP port. For a liveness probe, have the job loop write its liveness file
+  # (scribe.worker.liveness_file; /tmp is an emptyDir) and read it with an exec probe, which
+  # imports the standard library only (docs/scribe.md#worker-loop):
+  #   extraEnv:
+  #     - {name: LOREBASE__SCRIBE__WORKER__LIVENESS_FILE, value: /tmp/scribe-liveness.json}
+  #   livenessProbe:
+  #     exec: {command: [python, -m, lorebase_scribe.liveness, /tmp/scribe-liveness.json]}
+  #     initialDelaySeconds: 20
+  #     periodSeconds: 10
   startupProbe: {}
   livenessProbe: {}
   readinessProbe: {}
@@ -817,8 +825,8 @@ ollama:
   enabled: false
   image:
     repository: ollama/ollama
-    # Pin a version in production; compose follows `latest` as well.
-    tag: latest
+    # A version and the digest of its multi-arch index, as in the compose profile `local-models`.
+    tag: "0.40.15@sha256:0e59999e0e8f9fd4e704bd788a89b7e4cad399367fb1365f8c102ac662288761"
     pullPolicy: IfNotPresent
   # Model pulled when the pod starts; also LLM_MODEL of Scribe.
   model: qwen2.5:7b-instruct
