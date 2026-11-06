@@ -2,6 +2,57 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## 0.3.1 - unreleased
+
+A patch for the first contact with the project: the published images run on arm64, the PyPI packages carry their license and links, a Scribe worker keeps all its slots when the database fails while it records a job and gets a liveness check, the console scripts answer `--help`, and the quickstart commands point at the Keeper they started. No migration and no breaking change. Three new settings, all optional: `scribe.worker.outcome_retry_delay_s`, `scribe.worker.liveness_file` and `scribe.worker.liveness_interval_s`. The lines link the documentation of each change: the work landed directly on `main`, without pull requests to link.
+
+### Added
+
+- Scribe liveness ([Scribe](docs/scribe.md#worker-loop)): with `scribe.worker.liveness_file` set, the job loop rewrites that file every `scribe.worker.liveness_interval_s` (10 s) with its live slots, the jobs running and the time it last reached the store, and `python -m lorebase_scribe.liveness FILE` reads it, with the standard library only, and exits 1 with the reason (no file, a stale file, no live slot or, with `--max-store-age`, a store not reached). The compose `scribe` service writes `/tmp/scribe-liveness.json` and runs that command as its healthcheck; the `scribe` values of the chart show the exec probe
+- Metric `lorebase.scribe.worker.slots` (gauge, `state` `live` or `lost`) and the status `unrecorded` of `lorebase.scribe.jobs` ([metrics](docs/metrics.md#scribe))
+- `lorebase-herald --help` prints the variables an MCP host sets (`LOREBASE_URL`, `LOREBASE_API_KEY`, `LOREBASE_DOMAIN`, `LOREBASE_BRANCH`, `LOREBASE__HERALD__TRANSPORT`) and the documentation link, `--version` the version; at start Herald logs the transport, the Keeper it calls and the default Domain to stderr, so a host pointed at the wrong Keeper sees it before the first call ([MCP](docs/mcp.md))
+- `make up` prints the `export LOREBASE_URL=... LOREBASE_DOMAIN=supply` line for the CLI and the `env` entry for an MCP host over stdio, with the port set in `.env`; `make shell-env` prints the export line again, for `eval "$(make shell-env)"` ([quickstart](docs/quickstart.md#23-start-postgres-keeper-and-the-web-app))
+- `make up` checks every host port the chosen profiles publish before it starts anything and names the variable to change, and refuses to start while a `*_BIND` value in `.env` would publish the Keeper of the stack, which runs with authentication off, beyond this machine; `KEEPER_PUBLISH_INSECURE=true`, in `.env` or the shell, starts it anyway with a warning ([quickstart](docs/quickstart.md#1-prerequisites))
+- `make env` sets `HERALD_DOMAIN=supply` while it is unset, so the first call of an MCP host against `make up PROFILES=mcp` needs no Domain of its own
+- `server.json` at the repository root describes Herald for the official MCP registry as `io.github.aantenore/lorebase-herald`, with the PyPI package `lorebase-herald` (run with `uvx`) and the image `ghcr.io/aantenore/lorebase`, which now carries the `io.modelcontextprotocol.server.name` label the registry checks; the entry is submitted after a release ([releasing](docs/release.md#10-mcp-registry))
+- [MCP server](docs/mcp.md#from-pypi-without-a-clone): host configurations that run Herald from PyPI with `uvx lorebase-herald`, as one `claude mcp add` command, a Cursor `.cursor/mcp.json` entry and a VS Code `code --add-mcp` command
+- [Comparison](docs/comparison.md): DataHub, the Fabric IQ ontology MCP server, Semantica, Doltgres with the Dolt MCP server, TypeDB, mnem and RDF triple stores, each with a linked source checked on 2026-11-06, and a Standards section: LinkML import and export are supported; RDF, OWL, SHACL and JSON-LD are not native and are reached through LinkML's generators
+- Images `ghcr.io/aantenore/lorebase`, `lorebase-ml` and `lorebase-web` for `linux/arm64` as well as `linux/amd64`: each platform is built on a runner of its own architecture, and the release joins them into one multi-arch index, which it signs and attests with the SBOM ([releasing](docs/release.md#what-the-workflow-does))
+- PyPI metadata of the ten packages: license `Apache-2.0` with the license text in every sdist and wheel, a README, author, keywords, classifiers and links to the repository, documentation, changelog and issues; `scripts/release_tool.py check` fails when a package lacks them, and also checks `server.json` (its versions, its name and the image label)
+
+### Changed
+
+- Scribe: an outcome the store refuses to take (a dropped connection, a statement timeout) is written once more after `scribe.worker.outcome_retry_delay_s` (1 s); when that fails too the run counts `unrecorded` and the job runs again once its lock goes stale, as a lost job does ([Scribe](docs/scribe.md#worker-loop))
+- README and the documentation home open with who Lorebase is for and one MCP call with the JSON answer and its Revision; the status note follows, and the 30-second demo stays the second screen
+- [Quickstart](docs/quickstart.md): the commands take the Keeper URL from the line `make up` prints (`eval "$(make shell-env)"`) instead of a fixed `http://localhost:8080`; the port table and the port troubleshooting row list `GUIDE_HOST_PORT` (8095), `HERALD_HOST_PORT` (8091) and the `scale-out` ports; the MCP section sets `HERALD_DOMAIN` next to `HERALD_ALLOW_ANONYMOUS`; the semantic search example writes `query.json` under `${TMPDIR:-/tmp}`
+- CONTRIBUTING.md, the README and the validation and demo pages state the CI policy as it is: the checks run on demand and for release tags, not on every pull request
+- [Kubernetes](docs/kubernetes.md) and [deployment](docs/deployment.md) say that the 0.3.0 images are `linux/amd64` only and that 0.3.1 and later are published for `linux/amd64` and `linux/arm64`
+- [Releasing](docs/release.md): a section is headed `## X.Y.Z - unreleased` until the tag, whose date then replaces `unreleased`; the page follows the workflow's jobs and adds the MCP registry step
+- The Release workflow runs the CI workflow on the tagged commit first; images, the GitHub release and PyPI wait for it, so a tag whose checks fail publishes nothing. After the release it publishes the documentation site built from the tag (the `github-pages` environment must allow `v*` tags to deploy)
+- The compose defaults of Postgres (`pgvector/pgvector:0.8.7-pg16`), Ollama, LiteLLM, the OpenTelemetry collector, Jaeger, Prometheus, Grafana and the OIDC mock, and the Helm default of Ollama, are pinned by version and digest instead of `latest`, `main-stable` or `pg16`; the `*_IMAGE` variables still override them, and `tests/tooling/test_dockerfile_pins.py` checks the pins
+- CI: the integration job may run 35 minutes instead of 20, and the BM25 integration job is part of the aggregate `CI` check
+- The release jobs no longer keep the checkout token on the runner
+- `.env.example` sets `POSTGRES_IMAGE`, `OLLAMA_IMAGE`, `LITELLM_IMAGE`, `OTEL_COLLECTOR_IMAGE`, `JAEGER_IMAGE`, `PROMETHEUS_IMAGE` and `GRAFANA_IMAGE` to the version and digest pins of `deploy/compose/docker-compose.yaml` instead of floating tags, so a `.env` created by `make env` keeps the pinned images.
+
+### Fixed
+
+- A Scribe worker slot ended for good, and nothing reported it, when the database failed while the worker recorded a job's outcome: with the default concurrency the process stayed up with one slot, or none, while the queue grew. The slot now stays on, a slot task that ends with an error is logged and started again after `scribe.worker.poll_interval_s`, and `lorebase.scribe.worker.slots` shows it ([Scribe](docs/scribe.md#worker-loop))
+- `lorebase` with no server configured said `pass base_url or set LOREBASE_URL`, an argument of the Python client the command line does not have; it now names the three ways a person has (`--url`, `LOREBASE_URL`, or `url` in a profile of the config file) and the path of that file
+- `lorebase-herald --help` and `--version` started the stdio server, printed nothing and exited 0 when the host closed the pipe
+- The audit chain heads and the merge attempts queries used a `DISTINCT ON` spelling that SQLAlchemy 2.1 deprecates (an `SADeprecationWarning` in every integration run); they use the dialect's `distinct_on`, and the test suite fails on any such warning from now on
+- The 30-second demo excerpts in the README, the documentation home and manual setup quoted Revision ids that `examples/merge_demo.py` no longer prints; they are regenerated, and `tests/tooling/test_merge_demo.py` now fails when a quoted line differs from the output
+- Stale documentation: the comparison listed LinkML import and export as roadmap work, the FAQ named the 1M-Record baseline as missing and left out the MySQL/MariaDB and SQL Server Sources, and `examples/README.md` linked a quickstart anchor that moved; `tests/tooling/test_docs_links.py` now checks the links and anchors of the README, CONTRIBUTING.md, SECURITY.md and `examples/README.md`
+- `scripts/quickstart.sh up` resolves the variables of its exposure and port checks the way docker compose does: a variable set in the shell wins over the environment file, then the default. `KEEPER_BIND=0.0.0.0 KEEPER_ALLOW_INSECURE=true make up` with a loopback `.env` no longer starts an exposed Keeper with authentication off, and `KEEPER_PUBLISH_INSECURE` set in the shell (true or false) wins over the file.
+
+### Not done yet
+
+- The chart wires no probe for Scribe by default; the `scribe` values show the exec probe to set.
+- The MCP registry entry (`server.json`) is submitted by hand after the release; the registry lists nothing until then.
+
+### Upgrade notes
+
+No migration. Rebuild or pull the images: the compose `scribe` service gains a healthcheck that reads the liveness file, with nothing to configure. The new settings have defaults; set `scribe.worker.liveness_file` and an exec probe to give another deployment the same check.
+
 ## 0.3.0 - 2026-10-30
 
 Knowledge that stays correct: a reconciliation queue for contradictions between Sources, corrections that survive Source syncs, document versions, ingestion modes and stewards, Traits and lenses in search and context packs, the merge of `text` values, and the resolution of words to schema and values with consolidation from use and coverage signals; the web app gains a Reconciliation screen and a passage-by-passage Conflict resolver. Pre-1.0: this minor version changes interfaces; read the breaking changes before upgrading.
