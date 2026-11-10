@@ -1,6 +1,6 @@
 # Schema inference from tables and data files
 
-Point Lorebase at the tables of a client, as CSV, JSON, JSON Lines or Parquet files or as a
+Point Lorebase at the tables of a company, as CSV, JSON, JSON Lines or Parquet files or as a
 Postgres schema, and get a proposed ontology to review: Kinds, typed Attributes with constraints, primary keys and
 Relations with cardinality. Inference is extraction tier 0 ([design 9.1 and 9.2](design.md#91-structured-sources)):
 rules only, deterministic, no model call. It never commits anything: the proposal is a draft

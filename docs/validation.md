@@ -61,7 +61,7 @@ The detail, with every table, plans and open issues, is in [performance](perform
 ### 100k Records
 
 - **Date:** 2026-10-22.
-- **Environment:** Apple M5 Pro, 15 cores, 24 GiB, Darwin 25.6.0 arm64; Python 3.12.13; Postgres 16.15 in Docker on the same machine with `shared_buffers` 128MB, `effective_cache_size` 4GB and `work_mem` 4MB. The laptop ran other work, and repeated runs differ by a few milliseconds at p95 (up to ten for typo-tolerant search).
+- **Environment:** arm64 laptop, 15 cores, 24 GiB; Python 3.12.13; Postgres 16.15 in Docker on the same machine with `shared_buffers` 128MB, `effective_cache_size` 4GB and `work_mem` 4MB. The laptop ran other workloads, and repeated runs differ by a few milliseconds at p95 (up to ten for typo-tolerant search).
 - **Method:** the `supply` Domain from the example generator at `--scale 540` plus four extra Links per Part: 99,900 Records and 302,940 Links on `main`, loaded through the commit pipeline in 45 commits (148 s). 300 timed calls per read after 30 warm-up calls, random keys. Each read is one transaction that scopes row-level security to the Domain and runs one store primitive. `owner` is a role that bypasses row-level security; `rls` is subject to the `domain_isolation` policies, like the production application role.
 
 p95 in milliseconds against the budgets of design 8.7:
@@ -159,7 +159,7 @@ remains is the heap read of the Records the neighborhood returns, about one page
 ### 10M Records
 
 - **Date:** 2026-10-22.
-- **Environment:** the same machine, shared with other test workloads throughout (load average
+- **Environment:** the same machine, running other workloads throughout (load average
   14 to 209 on 15 cores, median 116); Postgres of `tests/perf/compose.yaml` (`shared_buffers`
   2GB, `effective_cache_size` 6GB) in the 8 GiB Docker VM; database 64 GB.
 - **Method:** `make perf-10m`. 10,001,100 Records and 30,327,660 Links: the 1M fixture loaded
@@ -454,7 +454,7 @@ jobs had only run against the deterministic fake provider in tests.
 
 Everything ran in process against a scratch Postgres 16 with pgvector (the integration test
 harness: `LOREBASE_TEST_DATABASE_URL` pointing at a local `pgvector/pgvector:pg16`
-container), on an Apple M5 Pro laptop. The `supply` Domain was seeded like
+container), on an arm64 laptop. The `supply` Domain was seeded like
 `packages/scribe/tests/integration/test_extraction.py` does: Suppliers, Parts, Plants and
 Contracts without C-3025, no `supplied_by` or `stocked_at` Links. The five documents were the
 four of `examples/supply/documents/` and `examples/five_day_demo/documents/contract-c-3099-*`,
@@ -832,7 +832,7 @@ About 12.8 USD in all, at the prices above; refused requests (HTTP 400) are not 
 
 ## Fresh-clone quickstart check
 
-**Date:** 2026-10-22. **Environment:** Apple silicon laptop, macOS, Docker Desktop with Docker
+**Date:** 2026-10-22. **Environment:** arm64 laptop, Docker Desktop with Docker
 29.5.3 and compose 5.1.4 (15 CPUs, 7.7 GB of memory for Docker), uv 0.11, Node 24.15, pnpm
 11.13, Ollama on the host for one of the model options. Other compose stacks were running on
 the same machine, one of them holding `127.0.0.1:5432`.

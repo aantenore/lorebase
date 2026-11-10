@@ -243,7 +243,6 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 - **Platform teams** that need one governed place for company knowledge that many agents and applications read, with SSO, roles, audit and no new proprietary platform to buy.
 - **Data teams** that own the definitions (suppliers, parts, contracts) and want them modeled, reviewed and versioned like code, with structured sources mapped in.
 - **Agent builders** who are tired of agents answering from stale chunks, and want typed entities, provenance, a deterministic read API and a safe write path.
-- **Consultancies** that deliver the same kind of knowledge system to several clients and want an open, self-hostable base with a clean multi-Domain model, instead of reselling a closed suite.
 
 ## Status and roadmap
 
@@ -253,7 +252,7 @@ What runs on `main` is described above. The [validation record](docs/validation.
 
 Open:
 
-- Performance targets of design 6.14 on the 32 GB reference hardware. On a shared laptop with an 8 GiB Docker VM, 10M Records meet the budget for key, page, Link and attribute reads but not for the 2-hop neighborhood, full-text search, history and lineage.
+- Performance targets of design 6.14 on the 32 GB reference hardware. On a laptop with an 8 GiB Docker VM, 10M Records meet the budget for key, page, Link and attribute reads but not for the 2-hop neighborhood, full-text search, history and lineage.
 - API stability guarantees for `/api/v1`: the policy is written ([API stability](docs/api-stability.md)) and binds from 1.0.
 
 Next up: the benchmark run on reference hardware.

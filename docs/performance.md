@@ -2,7 +2,7 @@
 
 Latency of the agent read paths on a materialized head (design 8, "Agent read budgets"), measured by `tests/perf/bench.py`. Every read is one transaction that scopes row-level security to the Domain and runs one store primitive (`lorebase_store.reads`, `lorebase_store.traverse`); times are client side over a local socket, so they include the driver and the RLS scoping round trip.
 
-The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a shared laptop; the neighborhood, full-text search, history and lineage are over it. Focused comparisons of 2026-10-23 on datasets with realistic text follow it: [Search on very common terms](#search-on-very-common-terms), [BM25 search](#bm25-search) (optional `pg_search` backend), [Headers-only neighborhoods](#headers-only-neighborhoods) and [a narrower history index](#record-history-and-lineage-a-narrower-index).
+The sections from Dataset to Reading the results are the 100k-Record run of 2026-10-22, after the word lexicon of migration `0018` (typo-tolerant search); [Word lexicon: before and after](#word-lexicon-before-and-after-100k-records) compares it with the code before. The run on the 1M-Record fixture (M1) is in [1M Records](#1m-records): every read is within budget there except the 2-hop neighborhood on branches other than `main` and Record lineage against the budget proposed for it; typo-tolerant search, over budget in that run, is within it with the lexicon ([1M Records: word lexicon](#1m-records-word-lexicon)). The run at 10M Records is in [10M Records](#10m-records): get by key, pages, Links of a Record and attribute queries are at or near budget on a laptop; the neighborhood, full-text search, history and lineage are over it. Focused comparisons of 2026-10-23 on datasets with realistic text follow it: [Search on very common terms](#search-on-very-common-terms), [BM25 search](#bm25-search) (optional `pg_search` backend), [Headers-only neighborhoods](#headers-only-neighborhoods) and [a narrower history index](#record-history-and-lineage-a-narrower-index).
 
 ## Dataset
 
@@ -12,9 +12,8 @@ The sections from Dataset to Reading the results are the 100k-Record run of 2026
 
 ## Environment
 
-- machine: Darwin 25.6.0 arm64
+- machine: arm64 laptop
 - python: 3.12.13
-- cpu: Apple M5 Pro
 - cores: 15
 - memory: 24 GiB
 - postgres: 16.15 (Debian 16.15-1.pgdg12+2)
@@ -117,7 +116,7 @@ Scan nodes of the statements of one call of each read, statements run inside the
   queries a misspelled title word: the word is looked up in the branch's word lexicon
   (`mat_lexicon`, and the base's for an overlay), its closest words come from the trigram
   index on the lexicon, and the search runs with `(word | correction ...)`.
-- Times come from a laptop shared with other work; repeated runs differ by a few milliseconds
+- Times come from a laptop, not a dedicated benchmark host; repeated runs differ by a few milliseconds
   at p95, up to ten for typo-tolerant search.
 - Branch creation copies the Records, Links and history rows of `main` (about twice the Records
   and Links) and builds the new branch's per-Attribute indexes in the same transaction.
@@ -225,7 +224,7 @@ stop-word check of the terms, the OR query through `lb_search_corrected` and one
 read that counts the terms each candidate holds. Same 100k dataset, 2026-10-22, p50 / p95 in
 milliseconds.
 
-The laptop ran other work during these runs (load average 10 to 17 on 15 cores), so every
+The laptop ran other workloads during these runs (load average 10 to 17 on 15 cores), so every
 read measured slower than the baseline above, `full-text search` included, whose code path
 did not change. The comparison that matters was therefore measured call by call, alternating
 the code before (`search.partial.min_results: 0`, the full match alone) and after on the same
@@ -290,11 +289,11 @@ uv run python tests/perf/bench.py --scale 5406 --extra-links 4 --iterations 1000
 
 ### Environment
 
-Apple M5 Pro, 15 cores, 24 GiB, Darwin 25.6.0 arm64, Python 3.12.13. Postgres
+arm64 laptop, 15 cores, 24 GiB, Python 3.12.13. Postgres
 16.15 with pgvector (`pgvector/pgvector:pg16`) in Docker Desktop on the same machine; the
 Docker VM has 8 GiB of memory and the database is 13 GB after loading. Two runs: container
 defaults (`shared_buffers` 128MB), and `shared_buffers` 2GB with `effective_cache_size` 6GB
-(the tables below); `work_mem` 4MB in both. The laptop ran other work during both runs.
+(the tables below); `work_mem` 4MB in both. The laptop ran other workloads during both runs.
 
 ### Reads (milliseconds)
 
@@ -517,7 +516,7 @@ The M5 target: the harness at 10,001,100 Records and 30,327,660 Links on `main`,
 2026-10-22. Every read stays index-driven (plans as at 1M), but on this machine only the reads
 that touch one or two pages per call meet their budget; the neighborhood, full-text search and
 the history reads do not ([Reading the results](#10m-records-reading-the-results)). The
-machine was shared with other test workloads during the whole run (load average 14 to 209 on
+machine ran other workloads during the whole run (load average 14 to 209 on
 15 cores, median 116), so read every figure as an upper bound.
 
 ### Method
@@ -571,7 +570,7 @@ uv run python tests/perf/bench.py --scale 54060 --replicas 10 --extra-links 4 \
 
 ### Environment
 
-Apple M5 Pro, 15 cores, 24 GiB, Darwin 25.6.0 arm64, Python 3.12.13. Postgres 16.15 with
+arm64 laptop, 15 cores, 24 GiB, Python 3.12.13. Postgres 16.15 with
 pgvector (`pgvector/pgvector:pg16`) in Docker Desktop, VM of 8 GiB; `shared_buffers` 2GB,
 `effective_cache_size` 6GB, `work_mem` 4MB, `maintenance_work_mem` 512MB, `max_wal_size` 16GB
 (`tests/perf/compose.yaml`). The database is 64 GB: `mat_history` 23 GB, `mat_records` 20 GB, `mat_links` 13 GB with their indexes.
@@ -747,7 +746,7 @@ ranks at most `store.reads.search_candidates` (1,000) matches whatever the terms
 Keeper's lexical search calls it (all Kinds, typo corrections, partial matching), plain store
 calls as `owner`. "Truncated" counts the calls of 300 (100 at 10M) whose candidates were cut.
 
-The machine was shared with other workloads throughout (load average 21 to 29 on 15 cores
+The machine ran other workloads throughout (load average 21 to 29 on 15 cores
 during the 1M runs, 41 to 48 during the 10M run), so the absolute times vary by a factor of 2
 to 3 between runs: compare the two columns of one run, not runs with each other.
 
@@ -801,8 +800,8 @@ to 3 between runs: compare the two columns of one run, not runs with each other.
 Measured on 2026-10-23 with `tests/perf/bm25.py` on `perf_seed_1m_zipf` (1,000,110 Records,
 Zipf text as in [search on very common terms](#search-on-very-common-terms)), the perf Postgres
 on the ParadeDB image (`make perf-up PERF_VM=16g PERF_SEARCH=bm25`: Postgres 16.15,
-`pg_search` 0.26.3, `shared_buffers` 6GB) in a Docker VM of 16 GiB on an Apple M5 Pro shared
-with other work (load average about 9). Search as Keeper's lexical search calls it (typo
+`pg_search` 0.26.3, `shared_buffers` 6GB) in a Docker VM of 16 GiB on an arm64 laptop that
+ran other workloads (load average about 9). Search as Keeper's lexical search calls it (typo
 corrections, partial matching, ranking sized by the word lexicon for `postgres`), owner role,
 200 timed calls per case after 20, both backends called in turn with the same queries; cold: a
 new random query per call, warm: the same twenty queries in turn
@@ -975,7 +974,7 @@ uv run python tests/perf/working_set.py --database <copy> --iterations 200 --war
 - **Commits.** `--commits` times commits of 1,000 Part updates after the reads (the bench's
   `commit of 1000 changes`).
 
-The machine was shared with other workloads throughout: load average 45 to 105 on 15 cores
+The machine ran other workloads throughout: load average 45 to 105 on 15 cores
 during the 1M runs and 40 to 75 during the 10M runs. Latencies move by a factor of 2 between
 runs at the same load; compare sizes and pages, which do not depend on the load, and read the
 latencies as upper bounds.
@@ -1427,7 +1426,7 @@ after the per-Domain fence replaced the `SHARE` lock on `mat_records`).
   commits updating the color of 500 Products (500 statements) and 10 one-Record commits.
 - Fence: a 50-Record commit to a third Domain alone, and again while a `--rebuild` of the
   measured Domain holds that Domain's value lock.
-- Apple M5 Pro, Darwin 25.6.0 arm64, Python 3.12.13, Postgres 16.15 in Docker (testcontainers
+- arm64 laptop, Python 3.12.13, Postgres 16.15 in Docker (testcontainers
   defaults).
 
 | Resolution | Target p95 | p50 ms | p95 ms | p99 ms |

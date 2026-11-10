@@ -61,7 +61,7 @@ The transcripts below are condensed: repeated tables are cut, ids shortened, the
 
 ## Day 1: install and model from zero
 
-Priya has the stack up and creates the Domain; `main` is protected from the start. Marco does not start from a blank page: `schema:infer` reads the client's twelve CSV files and proposes an ontology without writing anything.
+Priya has the stack up and creates the Domain; `main` is protected from the start. Marco does not start from a blank page: `schema:infer` reads the company's twelve CSV files and proposes an ontology without writing anything.
 
 ```text
 $ lorebase domain create supply --name 'Lorebase five-day demo' --description '...'

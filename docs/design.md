@@ -123,7 +123,7 @@ A value has exactly one current home: the Record, Attribute and branch head that
 
 ### 3.2 The 5-day proof scenario
 
-The scenario is what a client team sees during a pilot once M4 is delivered. The fictional client is Corvane Industries, an industrial components distributor. The pilot Domain is `supply`: suppliers, parts, plants, purchase orders and supplier contracts. Success is judged on day 5 by an external agent answering supply-risk questions correctly, quickly, and with provenance, and performing one governed write.
+The scenario is what a team evaluating it over five days sees once M4 is delivered. The fictional company is Corvane Industries, an industrial components distributor. The pilot Domain is `supply`: suppliers, parts, plants, purchase orders and supplier contracts. Success is judged on day 5 by an external agent answering supply-risk questions correctly, quickly, and with provenance, and performing one governed write.
 
 **Day 1: install and model from zero.**
 - Priya runs `docker compose up` on a VM, connects the company OIDC provider, creates the Domain `supply`, assigns roles.
@@ -138,7 +138,7 @@ The scenario is what a client team sees during a pilot once M4 is delivered. The
 - The team sees: about 40k Records and 120k Links in Explorer, filtered list views, record pages with Lineage per attribute ("value from Source `erp.vendors`, row id 4411, sync run 7"), Canvas neighborhoods around a supplier.
 
 **Day 3: unstructured extraction.**
-- Sofia uploads 300 supplier contracts (PDF). Scribe runs a tiered extraction job against the `supply` schema: tier 0 rules read the contract header tables, tier 1 local models (GLiNER and GLiREL on CPU) find supplier, part and contract mentions and their relations, tier 2 asks the configured LLM for attribute values with JSON schema output. On the pilot VM the LLM is a small open model served by Ollama, at zero API cost; the client may point the same job at its hosted model endpoint by changing configuration only.
+- Sofia uploads 300 supplier contracts (PDF). Scribe runs a tiered extraction job against the `supply` schema: tier 0 rules read the contract header tables, tier 1 local models (GLiNER and GLiREL on CPU) find supplier, part and contract mentions and their relations, tier 2 asks the configured LLM for attribute values with JSON schema output. On the pilot VM the LLM is a small open model served by Ollama, at zero API cost; the company may point the same job at its hosted model endpoint by changing configuration only.
 - The job produces a Proposal: 280 new `Contract` Records linked to Suppliers, 1,100 attribute updates, 40 ambiguous entity matches, and a schema suggestion to add the attribute `penalty_clause` to `Contract`.
 - Review shows each proposed item with its evidence span highlighted in the document viewer, a confidence score and the matched Record. Sofia accepts in bulk above a threshold, inspects the ambiguous ones, rejects 12 items.
 - The team sees: no change reaches `main` without review; rejected items are kept in the Proposal history; a re-run of the job with the same documents and model costs nothing because outputs are cached by content hash.
