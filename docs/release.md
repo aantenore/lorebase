@@ -1,6 +1,6 @@
 # Releasing Lorebase
 
-The checklist for a release, what [`release.yaml`](../.github/workflows/release.yaml) does when the tag is pushed, and how to check what it published. A release is a tag `vMAJOR.MINOR.PATCH` (or `-alpha.N`, `-beta.N`, `-rc.N`) on a commit of `main` whose CI is green. The notes are written by hand in [CHANGELOG.md](../CHANGELOG.md) following [the style guide](launch/changelog-style.md).
+The checklist for a release, what [`release.yaml`](../.github/workflows/release.yaml) does when the tag is pushed, and how to check what it published. A release is a tag `vMAJOR.MINOR.PATCH` (or `-alpha.N`, `-beta.N`, `-rc.N`) on a commit of `main` whose CI is green. The notes are written by hand in [CHANGELOG.md](../CHANGELOG.md).
 
 The workflow never runs on a pull request and nobody creates the tag for you: pushing it is the decision to release.
 
@@ -70,7 +70,6 @@ The full suite is for releases; day to day, `make test-changed` is enough.
 ### 9. Announce
 
 - [ ] The GitHub release text is the changelog section; read it once in the browser.
-- [ ] The launch kit in [docs/launch](launch) has the posts: [blog post](launch/blog-post.md), [Hacker News](launch/hacker-news.md), [Reddit](launch/reddit.md), [LinkedIn](launch/linkedin.md), [awesome lists](launch/awesome-lists.md). Post the release link and the demo command (`make demo`), not a feature list.
 - [ ] Answer questions in the first days from the FAQ ([faq.md](faq.md)); anything asked twice becomes a line in the FAQ.
 
 ### 10. MCP registry

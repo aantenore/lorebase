@@ -1,6 +1,6 @@
 # Changelog
 
-What changed in each release, newest first. The notes are written for the person deciding whether to upgrade; the rules are in [docs/launch/changelog-style.md](docs/launch/changelog-style.md). Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
+What changed in each release, newest first. The notes are written for the person deciding whether to upgrade. Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
 ## 0.3.1 - 2026-11-06
 

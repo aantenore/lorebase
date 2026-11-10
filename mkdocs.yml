@@ -12,10 +12,6 @@ copyright: Copyright 2026 Antonio Antenore. Apache License 2.0.
 docs_dir: docs
 site_dir: build/site
 
-# The launch kit (posts for announcements) is not part of the documentation.
-exclude_docs: |
-  launch/
-
 # Built and linked from the roadmap, but not listed in the navigation (a planning record).
 not_in_nav: |
   plan/m1.md

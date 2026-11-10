@@ -20,7 +20,6 @@ QUOTING_PAGES = (
     "README.md",
     "docs/index.md",
     "docs/manual-setup.md",
-    "docs/launch/blog-post.md",
 )
 STEP_HEADING = re.compile(r"^== \d+\. ")
 ELISION = "..."

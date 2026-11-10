@@ -7,7 +7,7 @@ as breaking, and how a breaking change is announced and carried out.
 
 ## Status before 1.0
 
-Lorebase is pre-1.0 and follows semantic versioning ([release notes style](launch/changelog-style.md)).
+Lorebase is pre-1.0 and follows semantic versioning.
 Until 1.0, a minor release (`0.x`) may make a breaking change to any surface on this page. When
 it does, the [changelog](../CHANGELOG.md) names it under **Breaking changes**, in the first lines
 of the release section, with what to do. Patch releases (`0.x.y`) make no breaking change except
@@ -34,7 +34,7 @@ compatibility rules below.
 
 Configuration keys, metric names ([metrics](metrics.md)), the database schema and bundle files are
 not API, but a release that changes them says so in the first lines of its notes, like any
-breaking change ([release notes style](launch/changelog-style.md)). Database changes are
+breaking change. Database changes are
 applied by migrations; bundles carry a format version that import checks.
 
 ## Compatible and breaking changes
