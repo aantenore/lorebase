@@ -40,6 +40,25 @@ class LineageOut(BaseModel):
     at: datetime | None = None
 
 
+class ConflictInProgressOut(BaseModel):
+    """A Conflict about a Record that waits for a decision in an open Proposal into the branch
+    read: the value served is the one already merged, and a competing change is pending."""
+
+    proposal_id: str = Field(description="The open Proposal whose merge has the Conflict.")
+    conflict_id: str = Field(description="The Conflict id (its fingerprint) in that Proposal.")
+    code: str = Field(description="Conflict code, such as `DV1`.")
+    attribute: str | None = Field(
+        default=None,
+        description="Api name of the contested Attribute; null when the whole Record is "
+        "contested (deleted on one side and changed on the other).",
+    )
+    competing_hash: str | None = Field(
+        default=None,
+        description="Hash of the competing Record on the Proposal's source side; null when "
+        "the caller may not read the Attribute's values.",
+    )
+
+
 class RecordOut(BaseModel):
     """A Record with values keyed by Attribute api name."""
 
@@ -56,6 +75,12 @@ class RecordOut(BaseModel):
 
 class RecordResponse(Served):
     record: RecordOut
+    conflict_in_progress: list[ConflictInProgressOut] | None = Field(
+        default=None,
+        description="Open Conflicts about the Record in Proposals into the branch read; set "
+        "by `conflicts=true` on a read of one Record at the branch head (empty when nothing "
+        "is pending), null otherwise.",
+    )
 
 
 class RecordPage(Served):

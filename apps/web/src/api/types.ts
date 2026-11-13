@@ -601,6 +601,11 @@ export interface RecordPage {
 export interface RecordResponse {
   revision: RevisionId;
   record: RecordRow;
+  /**
+   * Keeper, with `conflicts=true`: the open Conflicts about the Record in open Proposals into
+   * the Branch read (empty when none); `null` when the read did not ask.
+   */
+  conflict_in_progress?: components['schemas']['ConflictInProgressOut'][] | null;
 }
 
 export interface LinkedRecord {

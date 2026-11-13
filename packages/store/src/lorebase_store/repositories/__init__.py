@@ -48,6 +48,7 @@ from lorebase_store.repositories.merges import (
     MergeAttemptRepository,
     MergeAttemptRow,
     PartitionFilter,
+    PendingConflictRow,
     ResolutionRepository,
     ResolutionRow,
 )
@@ -142,6 +143,7 @@ __all__ = [
     "MergeOutcome",
     "OutboxRepository",
     "PartitionFilter",
+    "PendingConflictRow",
     "PgRevisionGraph",
     "PreservedRow",
     "ProposalChecks",

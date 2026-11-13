@@ -1447,6 +1447,7 @@ Streamable_http: each caller sends its own key
 | `herald.output.max_items` | `50` |  |
 | `herald.output.max_value_chars` | `240` |  |
 | `herald.output.max_issues` | `20` |  |
+| `herald.output.pending_conflicts` | `true` | lorebase_get flags Attributes with an open Conflict |
 
 ### `herald.context`
 

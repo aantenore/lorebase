@@ -1125,6 +1125,7 @@ herald:
     max_items: 50
     max_value_chars: 240
     max_issues: 20
+    pending_conflicts: true      # lorebase_get flags Attributes with an open Conflict
   context:                       # lorebase_context packs
     token_budget: 3000
     max_token_budget: 20000

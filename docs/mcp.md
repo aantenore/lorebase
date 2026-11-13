@@ -224,7 +224,7 @@ example `Supplier/S-1001`.
 |------|-----------------------------------------|--------|--------------|
 | `lorebase_context` | `records?: [ref]` or `question?`, `depth?`, `relations?`, `traits?`, `lens?`, `token_budget?` | Keeper's context pack: seed Records, neighbors, Links, schema of the Kinds present, recent changes and lineage, trimmed to the budget (markdown for `text`) | `POST .../context` (`POST .../search` first for a question) |
 | `lorebase_schema` | `kinds?`, `detail?: summary or full` | Kinds with attribute types (`!` = required), key, title, built-in Operations; Relations; custom Operations with parameters and review policy | `GET .../schema` |
-| `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation | `GET .../kinds/{kind}/records/{key}` |
+| `lorebase_get` | `ref`, `links?`, `at?` | values and Link counts per Relation; a `conflict_in_progress` line per Attribute whose competing change waits for a decision in a Proposal ([pending Conflicts](#pending-conflicts)) | `GET .../kinds/{kind}/records/{key}` |
 | `lorebase_resolve` | `text`, `kinds?`, `levels?`, `query_vector?`, `limit?`, `at?` | ranked candidates the words may stand for: Kinds, Attributes (with type) and stored values with a ready-to-use `where` predicate and Record count, each with its level (`exact`, `synonym`, `trigram`, `embedding`) and the words matched; `unmatched` words; skipped levels; `coverage:` lines (phrases unknown in the Domain, Records missing the Attributes found) | `POST .../resolve` |
 | `lorebase_query` | `query` (DSL JSON), `cursor?`, `at?` | rows `ref "title" \| attr=value`, included neighbors, aggregate (`"aggregate": {"group_by": attr}` counts Records per value), `next_cursor`, `coverage:` lines (missing values of the Attributes used, Source freshness; `"coverage": false` in the query leaves them out) | `POST .../query` |
 | `lorebase_search` | `query?`, `kinds?`, `traits?`, `lens?`, `where?`, `query_vector?`, `limit?` | ranked hits with snippet and score; lexical unless a vector is given; `truncated_candidates` when every term was so common that only a sample of the matches was ranked, `truncated` when the vector list stopped short of its size while more Records match the filters | `POST .../search` |
@@ -300,6 +300,31 @@ A value that came from a document adds a line `extracted from document <id> [sta
 line per Proposal that brought a value to the branch. `lorebase_explain` gives the same per
 value in one call, plus the Links; use history for the sequence of changes and lineage for the
 evidence of one value.
+
+### Pending Conflicts
+
+While the merge of a Proposal is stuck on a Conflict nothing is committed: the branch keeps
+answering with the value merged before, and nothing in the value says that a competing change
+waits for a decision. `lorebase_get` therefore asks Keeper for the open Conflicts about the
+Record (`conflicts=true` on `GET .../kinds/{kind}/records/{key}`) when it reads a branch head.
+When there are none the output is the same as before. When there are, the text output ends
+with one line per Conflict:
+
+```text
+conflict_in_progress: risk_score is contested in Proposal prp_01J9X4M9 (DV1, competing 0123456789ab); the value shown is the merged one, not a settled one
+```
+
+and the `json` output carries `conflict_in_progress`, a list of `{proposal_id, conflict_id,
+code, attribute, competing_hash}`: the open Proposal into the branch read, the Conflict in it,
+its code, the api name of the contested Attribute (null when the whole Record is contested,
+deleted on one side and changed on the other) and the hash of the competing Record on the
+Proposal's source side (null when the caller may not read the Attribute's values). An agent
+should not act on a flagged value as settled: it can wait, or report the Proposal.
+
+Reads with `at` and the tools that return many Records (`lorebase_query`, `lorebase_search`,
+`lorebase_neighborhood`, `lorebase_context`) do not carry the marker. The lookup is one index
+probe per `lorebase_get`; `herald.output.pending_conflicts: false`
+(`LOREBASE__HERALD__OUTPUT__PENDING_CONFLICTS`) turns it off.
 
 ### Output size
 

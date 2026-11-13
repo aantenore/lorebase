@@ -590,6 +590,35 @@ RECORD = {
 }
 
 
+def test_a_record_read_can_ask_for_pending_conflicts(
+    http: respx.MockRouter, sleeps: Sleeps
+) -> None:
+    pending = {
+        "proposal_id": "prp_1",
+        "conflict_id": "ab" * 32,
+        "code": "DV1",
+        "attribute": "risk_score",
+        "competing_hash": "cd" * 32,
+    }
+    route = http.get("/domains/supply/kinds/Part/records/P-1").mock(
+        side_effect=lambda request: httpx.Response(
+            200,
+            json={**RECORD, "conflict_in_progress": [pending]}
+            if "conflicts" in request.url.params
+            else RECORD,
+        )
+    )
+    with make(sleeps) as client:
+        plain = client.records.get("supply", "Part", "P-1")
+        asked = client.records.get("supply", "Part", "P-1", conflicts=True)
+    assert "conflicts" not in route.calls[0].request.url.params
+    assert route.calls[1].request.url.params["conflicts"] == "true"
+    assert plain.conflict_in_progress is None
+    assert asked.conflict_in_progress is not None
+    [marker] = asked.conflict_in_progress
+    assert marker.model_dump() == pending
+
+
 def test_etag_cache_revalidates_and_serves_the_cached_body(
     http: respx.MockRouter, sleeps: Sleeps
 ) -> None:

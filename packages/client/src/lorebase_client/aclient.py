@@ -710,9 +710,21 @@ class Records(_Resource):
         at: str | None = None,
         links: bool = False,
         lineage: bool = False,
+        conflicts: bool = False,
     ) -> m.RecordResponse:
+        """One Record. `conflicts` adds `conflict_in_progress`: the open Conflicts about it
+        in Proposals into the branch read (branch head only)."""
         return await self._c.send(
-            ep.get_record(domain, kind, key, branch=branch, at=at, links=links, lineage=lineage)
+            ep.get_record(
+                domain,
+                kind,
+                key,
+                branch=branch,
+                at=at,
+                links=links,
+                lineage=lineage,
+                conflicts=conflicts,
+            )
         )
 
     async def history(

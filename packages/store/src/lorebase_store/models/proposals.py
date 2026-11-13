@@ -169,6 +169,14 @@ class Conflict(Base):
             ondelete="CASCADE",
         ),
         UniqueConstraint("domain_id", "attempt_id", "fingerprint"),
+        # Reads that ask whether a Record has a Conflict waiting for a decision (design 6.10).
+        Index(
+            "ix_conflicts_open_element",
+            "domain_id",
+            "partition",
+            "element_key",
+            postgresql_where=text("resolved_by IS NULL"),
+        ),
     )
 
     domain_id: Mapped[DomainKey]

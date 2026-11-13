@@ -166,9 +166,12 @@ class LorebaseTools:
                 branch=self.branch(branch),
                 at=at,
                 links=links and at is None,
+                conflicts=self.output.pending_conflicts and at is None,
             )
         view = views.record_view(found.record)
         view["revision"] = found.revision
+        if found.conflict_in_progress:
+            view["conflict_in_progress"] = views.pending_conflicts_view(found.conflict_in_progress)
         text = views.record_text(view, found.revision, self.output)
         return render(view, text, self.fmt(fmt), self.output)
 

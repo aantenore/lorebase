@@ -471,6 +471,7 @@ def get_record(
     at: str | None = None,
     links: bool = False,
     lineage: bool = False,
+    conflicts: bool = False,
 ) -> Call[m.RecordResponse]:
     return Call(
         "GET",
@@ -481,6 +482,7 @@ def get_record(
             "at": at,
             "links": links or None,
             "lineage": lineage or None,
+            "conflicts": conflicts or None,
         },
         safe=True,
         cacheable=True,

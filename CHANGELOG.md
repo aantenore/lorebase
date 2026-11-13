@@ -7,6 +7,11 @@ What changed in each release, newest first. The notes are written for the person
 ### Added
 
 - Open merge Conflicts say who changed each side and when ([operations](docs/operations.md), [tour](docs/tour.md#review)): an Attribute Conflict (`DV1`, `DV3`) carries `provenance` with, for `ours` and `theirs`, the `provenance_id`, the time `at`, the `actor`, the `origin` type, the `source` of a sync, the `principal` of an Operation and the origin `labels` of the last change of that Attribute, when the merge has a Lineage loader (Keeper always wires one). It is null on the other Conflict kinds and for a side of unknown Lineage, it is withheld with the values from a reader without clearance for a sensitive Attribute (and when it names something the reader's schema leaves out), and it is not part of the fingerprint. `GET .../proposals/{p}/conflicts`, the OpenAPI document (`ConflictOut.provenance`), the Python client (`ConflictItem.provenance`) and the Review resolver of the web app, which shows it under the Ours and Theirs headers, carry it
+- Readers can see that a Conflict is pending ([MCP](docs/mcp.md#pending-conflicts)): while a Proposal is stuck on a Conflict the target branch keeps the value merged before, and `GET .../kinds/{kind}/records/{key}?conflicts=true` now adds `conflict_in_progress`, a list of `{proposal_id, conflict_id, code, attribute, competing_hash}` for the open Conflicts about the Record in open Proposals into the branch read (empty when none; branch heads only). It is opt-in: without the parameter the member is null and the read, its cache entry and its `ETag` are as before; with it the pending Conflicts are looked up on every request (one probe of a new partial index) and are part of the `ETag`, since they change without a new Revision. Herald's `lorebase_get` asks for it by default and ends its output with a `conflict_in_progress:` line per contested Attribute (`herald.output.pending_conflicts`, default `true`); the Python client takes `records.get(..., conflicts=True)`. Listings, queries, search and neighborhoods do not carry the marker
+
+### Upgrade notes
+
+One migration (`0048`, additive): the partial index `ix_conflicts_open_element` on the unresolved rows of `conflicts`. One new optional setting, `herald.output.pending_conflicts`.
 
 ## 0.3.1 - 2026-11-06
 

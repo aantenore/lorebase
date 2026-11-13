@@ -97,8 +97,16 @@ def _mark(response: Response, point: ReadPoint, body: BaseModel) -> None:
 
 
 async def _answer(
-    request: Request, runtime: ReadRuntime, point: ReadPoint, produce: Any, session: AsyncSession
+    request: Request,
+    runtime: ReadRuntime,
+    point: ReadPoint,
+    produce: Any,
+    session: AsyncSession,
+    *,
+    state: str = "",
 ) -> Response:
+    """`state` names what the body depends on that the Revision does not fix (the open
+    Conflicts a read asked for): it joins the cache key and the ETag."""
     return await respond(
         request,
         runtime.cache,
@@ -107,7 +115,7 @@ async def _answer(
         produce=produce,
         time_travel=not point.materialized,
         headers={REVISION_HEADER: point.revision_hex},
-        variant=point.variant,
+        variant="|".join(part for part in (point.variant, state) if part),
         disclose=point.disclosure(session, runtime).send,
     )
 
@@ -263,22 +271,42 @@ async def get_record(
     at: At = None,
     links: Annotated[bool, Query(description="Add Link counts per Relation.")] = False,
     lineage: Annotated[bool, Query(description="Add the provenance of each value.")] = False,
+    conflicts: Annotated[
+        bool,
+        Query(
+            description="Add `conflict_in_progress`: the open Conflicts about the Record in "
+            "Proposals into the branch read. Branch head only (ignored with `at`)."
+        ),
+    ] = False,
 ) -> Response:
-    """One Record, optionally with its Link counts and the lineage of its values."""
-    if at is None and (
-        unchanged := await unchanged_head(session, runtime, access, request, branch=branch)
+    """One Record, optionally with its Link counts, the lineage of its values and the
+    Conflicts about it that wait for a decision.
+
+    While a merge is stuck on a Conflict nothing is committed, so the Record keeps the value
+    already merged. `conflicts=true` lists the Conflicts of open Proposals into the branch
+    that touch the Record (Proposal, Conflict, Attribute, hash of the competing Record). They
+    change without a new Revision, so such a read is not answered from the head Revision
+    alone: the pending Conflicts are looked up on every request and are part of its `ETag`.
+    """
+    watch = conflicts and at is None
+    if (
+        at is None
+        and not watch
+        and (unchanged := await unchanged_head(session, runtime, access, request, branch=branch))
     ):
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
+    pending = await records.conflicts_in_progress(session, point, found, key) if watch else None
 
     async def produce() -> RecordResponse:
         record, _ = await records.get_record(
             session, runtime, point, found, key, links=links, lineage=lineage
         )
-        return RecordResponse(**served(point), record=record)
+        return RecordResponse(**served(point), record=record, conflict_in_progress=pending)
 
-    return await _answer(request, runtime, point, produce, session)
+    state = fingerprint("conflicts", [p.model_dump() for p in pending]) if pending else ""
+    return await _answer(request, runtime, point, produce, session, state=state)
 
 
 @router.get(

@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.bulk import chunks
 from lorebase_store.models import metadata
-from lorebase_store.models.enums import MergeAttemptStatus
+from lorebase_store.models.enums import MergeAttemptStatus, ProposalStatus
 
+PROPOSALS: Table = metadata.tables["proposals"]
 ATTEMPTS: Table = metadata.tables["merge_attempts"]
 CONFLICTS: Table = metadata.tables["conflicts"]
 RESOLUTIONS: Table = metadata.tables["conflict_resolutions"]
@@ -67,6 +68,19 @@ class ConflictRow:
     @property
     def resolved(self) -> bool:
         return self.resolved_by is not None
+
+
+@dataclass(frozen=True, slots=True)
+class PendingConflictRow:
+    """An open Conflict about one element, as a reader of the target branch is told: the
+    Proposal it blocks, its id and code, the Attribute (None for a Conflict about the whole
+    element) and the hash of the competing element on the Proposal's source side."""
+
+    proposal_id: str
+    fingerprint: str
+    code: str
+    attribute_id: str | None
+    competing_hash: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +361,57 @@ class ConflictRepository:
             )
         )
         return frozenset((await self._session.execute(query)).scalars())
+
+    async def pending(
+        self, target: str, partition: str, element_key: str
+    ) -> list[PendingConflictRow]:
+        """The open Conflicts about one element in the open Proposals into `target`.
+
+        Only the current attempt of a Proposal counts (`conflicted`: a recomputation marks the
+        earlier ones `stale`, closing the Proposal `abandoned`). The lookup starts from the
+        partial index of unresolved Conflicts (`ix_conflicts_open_element`), so a Record
+        nobody contests costs one index probe.
+        """
+        query = (
+            select(
+                ATTEMPTS.c.proposal_id,
+                CONFLICTS.c.id,
+                CONFLICTS.c.code,
+                CONFLICTS.c.attribute_id,
+                CONFLICTS.c.payload["theirs_hash"].astext.label("competing_hash"),
+            )
+            .join(
+                ATTEMPTS,
+                (ATTEMPTS.c.domain_id == CONFLICTS.c.domain_id)
+                & (ATTEMPTS.c.id == CONFLICTS.c.attempt_id),
+            )
+            .join(
+                PROPOSALS,
+                (PROPOSALS.c.domain_id == ATTEMPTS.c.domain_id)
+                & (PROPOSALS.c.id == ATTEMPTS.c.proposal_id),
+            )
+            .where(
+                CONFLICTS.c.domain_id == self._domain,
+                CONFLICTS.c.partition == partition,
+                CONFLICTS.c.element_key == element_key,
+                CONFLICTS.c.resolved_by.is_(None),
+                ATTEMPTS.c.status == MergeAttemptStatus.CONFLICTED,
+                PROPOSALS.c.status == ProposalStatus.OPEN,
+                PROPOSALS.c.target_ref == target,
+            )
+            .order_by(ATTEMPTS.c.proposal_id, CONFLICTS.c.id)
+        )
+        result = await self._session.execute(query)
+        return [
+            PendingConflictRow(
+                proposal_id=row.proposal_id,
+                fingerprint=row.id,
+                code=row.code,
+                attribute_id=row.attribute_id,
+                competing_hash=row.competing_hash,
+            )
+            for row in result
+        ]
 
 
 class ResolutionRepository:

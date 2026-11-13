@@ -547,8 +547,22 @@ class Served(Model):
     served_from: ServedFrom
 
 
+class ConflictInProgress(Model):
+    """A Conflict about a Record that waits for a decision in an open Proposal into the
+    branch read; `attribute` is None when the whole Record is contested."""
+
+    proposal_id: str
+    conflict_id: str
+    code: str
+    attribute: str | None = None
+    competing_hash: str | None = None
+
+
 class RecordResponse(Served):
+    """A Record. `conflict_in_progress` is set when the read asked for it (`conflicts`)."""
+
     record: RecordItem
+    conflict_in_progress: list[ConflictInProgress] | None = None
 
 
 class RecordPage(Served):

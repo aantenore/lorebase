@@ -255,6 +255,12 @@ as a whole, and a GIN bitmap cannot stop at `LIMIT`. Revision `0018` drops
   trigger body during a rolling upgrade) and sets every limit. It also empties
   `resolve_misses.callers`: digests stored before keyed caller digests were plain hashes of
   principal ids (phrases and counts stay). The downgrade restores revision 0045's functions.
+- (Revision `0048`, design 6.10, 8.6.) `ix_conflicts_open_element` on `conflicts (domain_id,
+  partition, element_key) WHERE resolved_by IS NULL`: the unresolved Conflicts by element. A
+  read of one Record that asks for its pending Conflicts (`conflicts=true`) probes it, then
+  joins the attempt (`conflicted`, the current one of its Proposal) and the Proposal (`open`,
+  into the branch read) by primary key. Resolved rows, the bulk of a table that keeps merged
+  attempts, are not in the index.
 - `mat_lexicon(domain_id, branch, kind_id, word, records)`: per Kind, the lexemes of the
   branch's own search vectors and the number of its rows that hold each, without lexemes that
   have a digit or more than 64 characters (`lb_lexicon_word`; codes and keys are not

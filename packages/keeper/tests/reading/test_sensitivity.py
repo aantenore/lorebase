@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -29,6 +30,8 @@ from lorebase_core.types import TypeSpec
 from lorebase_core.validate import Issue, IssueCode, validate_record
 from lorebase_keeper.auth.permissions import Permission
 from lorebase_keeper.errors import ProblemError
+from lorebase_keeper.reading import records
+from lorebase_keeper.reading.points import ReadPoint
 from lorebase_keeper.reading.sensitivity import (
     _REFERENCE_MARK,
     Clearance,
@@ -44,6 +47,7 @@ from lorebase_keeper.reading.sensitivity import (
     require_comparable_plan,
     require_lowering,
 )
+from lorebase_keeper.reading.views import ServedFrom
 from lorebase_keeper.routes.proposal_items import _scrub, _shown
 from lorebase_keeper.routes.proposals import _conflict
 from lorebase_keeper.services.operations import (
@@ -55,7 +59,8 @@ from lorebase_keeper.services.operations import (
 )
 from lorebase_keeper.services.proposal_reads import ConflictVisibility
 from lorebase_keeper.settings import SensitivitySettings
-from lorebase_store.repositories import ConflictRow
+from lorebase_store.layout import BranchLayout
+from lorebase_store.repositories import ConflictRow, PendingConflictRow
 
 KIND = "knd_01JB8Z00000000000000000001"
 CODE, NAME, PHONE, EMAIL, SECRET = (f"att_01JB8Z0000000000000000000{n}" for n in range(1, 6))
@@ -308,6 +313,61 @@ def test_who_changed_a_sensitive_attribute_is_shown_to_cleared_readers_only() ->
     assert plain.provenance is not None
     assert plain.provenance.ours is not None
     assert plain.provenance.ours.provenance_id == "prv_1"
+
+
+def _pending(attribute: str | None) -> PendingConflictRow:
+    return PendingConflictRow(
+        proposal_id="prp_1",
+        fingerprint="ab" * 32,
+        code="DV1" if attribute else "DV2",
+        attribute_id=attribute,
+        competing_hash="cd" * 32,
+    )
+
+
+async def test_pending_conflicts_name_attributes_and_withhold_hashes_of_masked_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: list[tuple[str, str, str, str]] = []
+
+    class Stored:
+        def __init__(self, session: object, domain_id: str) -> None:
+            self.domain = domain_id
+
+        async def pending(
+            self, target: str, partition: str, element_key: str
+        ) -> list[PendingConflictRow]:
+            asked.append((self.domain, target, partition, element_key))
+            return [_pending(NAME), _pending(PHONE), _pending(None), _pending("att_gone")]
+
+    monkeypatch.setattr(records, "ConflictRepository", Stored)
+
+    def point(masking: Masking) -> ReadPoint:
+        return ReadPoint(
+            domain=cast(Any, SimpleNamespace(id="people")),
+            branch="main",
+            revision=cast(Any, None),
+            schema=SCHEMA,
+            served_from=ServedFrom.MATERIALIZED,
+            scope=cast(Any, None),
+            layout=BranchLayout("people", "main"),
+            masking=masking,
+        )
+
+    session = cast(Any, None)
+    seen = await records.conflicts_in_progress(session, point(Masking(Clearance())), PERSON, "P-1")
+    assert asked == [("people", "main", kind_partition(KIND), "P-1")]
+    # A Conflict about an Attribute the schema read does not have is not listed.
+    assert [(c.attribute, c.code, c.competing_hash) for c in seen] == [
+        ("name", "DV1", "cd" * 32),
+        ("phone", "DV1", None),
+        (None, "DV2", "cd" * 32),
+    ]
+    assert {(c.proposal_id, c.conflict_id) for c in seen} == {("prp_1", "ab" * 32)}
+    cleared = await records.conflicts_in_progress(
+        session, point(Masking(Clearance.full())), PERSON, "P-1"
+    )
+    assert [c.competing_hash for c in cleared] == ["cd" * 32] * 3
 
 
 class FakeAuthorizer:

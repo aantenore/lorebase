@@ -193,6 +193,63 @@ async def test_get_renders_values_and_link_counts(connect: Connect, fake: FakeKe
         "links: purchase_orders=2",
     ]
     assert fake.last().url.params["links"] == "true"
+    assert fake.last().url.params["conflicts"] == "true"
+
+
+PENDING = {
+    "proposal_id": "prp_01J9X4M9",
+    "conflict_id": "ab" * 32,
+    "code": "DV1",
+    "attribute": "tier",
+    "competing_hash": "0123456789abcdef" * 4,
+}
+
+
+async def test_get_flags_a_value_whose_conflict_waits_for_a_decision(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    contested = {**SUPPLIER_RECORD, "conflict_in_progress": [PENDING]}
+    fake.on("GET", f"{API}/kinds/Supplier/records/S-1001", contested)
+    async with connect() as client:
+        out = text(await client.call_tool("lorebase_get", {"ref": "Supplier/S-1001"}))
+        shaped = json.loads(
+            text(
+                await client.call_tool("lorebase_get", {"ref": "Supplier/S-1001", "format": "json"})
+            )
+        )
+    assert out.splitlines()[-1] == (
+        "conflict_in_progress: tier is contested in Proposal prp_01J9X4M9 "
+        "(DV1, competing 0123456789ab); the value shown is the merged one, not a settled one"
+    )
+    assert shaped["conflict_in_progress"] == [PENDING]
+
+
+async def test_get_is_unchanged_without_pending_conflicts(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on(
+        "GET",
+        f"{API}/kinds/Supplier/records/S-1001",
+        {**SUPPLIER_RECORD, "conflict_in_progress": []},
+    )
+    async with connect() as client:
+        out = text(await client.call_tool("lorebase_get", {"ref": "Supplier/S-1001"}))
+        shaped = json.loads(
+            text(
+                await client.call_tool("lorebase_get", {"ref": "Supplier/S-1001", "format": "json"})
+            )
+        )
+    assert "conflict_in_progress" not in out
+    assert "conflict_in_progress" not in shaped
+
+
+async def test_get_at_a_revision_does_not_ask_for_pending_conflicts(
+    connect: Connect, fake: FakeKeeper
+) -> None:
+    fake.on("GET", f"{API}/kinds/Supplier/records/S-1001", SUPPLIER_RECORD)
+    async with connect() as client:
+        await client.call_tool("lorebase_get", {"ref": "Supplier/S-1001", "at": "v1"})
+    assert "conflicts" not in fake.last().url.params
 
 
 async def test_get_encodes_keys_and_rejects_bad_refs(connect: Connect, fake: FakeKeeper) -> None:

@@ -149,7 +149,9 @@ def create_server(settings: HeraldSettings, clients: KeeperClients) -> MCPServer
     @server.tool(
         name="lorebase_get",
         description="One Record by `Kind/key`: its values and how many Links it has per "
-        "Relation. Use lorebase_neighborhood to see the linked Records.",
+        "Relation. Use lorebase_neighborhood to see the linked Records. A "
+        "`conflict_in_progress` line names an Attribute whose competing change waits for a "
+        "decision in a Proposal: do not treat that value as settled.",
         annotations=READ,
         structured_output=False,
     )

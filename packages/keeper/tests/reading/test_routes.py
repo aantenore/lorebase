@@ -31,6 +31,27 @@ def test_read_routes_are_documented(app: FastAPI) -> None:
     assert documented >= READ_PATHS
 
 
+def test_a_record_read_documents_the_pending_conflicts_option(app: FastAPI) -> None:
+    document = app.openapi()
+    read = document["paths"]["/api/v1/domains/{domain_id}/kinds/{kind}/records/{key}"]["get"]
+    option = next(p for p in read["parameters"] if p["name"] == "conflicts")
+    assert option["in"] == "query"
+    assert option["required"] is False
+    assert option["schema"]["default"] is False
+    schemas = document["components"]["schemas"]
+    assert "conflict_in_progress" in schemas["RecordResponse"]["properties"]
+    assert "conflict_in_progress" not in schemas["RecordResponse"].get("required", [])
+    assert set(schemas["ConflictInProgressOut"]["properties"]) == {
+        "proposal_id",
+        "conflict_id",
+        "code",
+        "attribute",
+        "competing_hash",
+    }
+    # The marker is on the answer of one Record, never on every Record of a listing.
+    assert "conflict_in_progress" not in schemas["RecordOut"]["properties"]
+
+
 async def test_reads_need_a_database(
     app: FastAPI, client_for: Callable[[FastAPI], AbstractAsyncContextManager[httpx.AsyncClient]]
 ) -> None:

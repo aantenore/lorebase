@@ -52,6 +52,7 @@ from lorebase_keeper.reading.tree import TreeReader
 from lorebase_keeper.reading.views import (
     AggregateCount,
     AggregateOut,
+    ConflictInProgressOut,
     LineageOut,
     LinkCountOut,
     LinkOut,
@@ -66,7 +67,7 @@ from lorebase_keeper.tracing.explain import explain
 from lorebase_store.indexes import plan_indexes
 from lorebase_store.materialize.rows import record_title, split_link_key
 from lorebase_store.reads import hydrate_records, links_to_record
-from lorebase_store.repositories import ProvenanceRepository
+from lorebase_store.repositories import ConflictRepository, ProvenanceRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +176,41 @@ async def get_record(
     if lineage:
         record.lineage = await lineage_summary(session, runtime, point, kind, fetched.row)
     return record, fetched
+
+
+async def conflicts_in_progress(
+    session: AsyncSession, point: ReadPoint, kind: Kind, key: str
+) -> list[ConflictInProgressOut]:
+    """The open Conflicts about the Record `(kind, key)` in the open Proposals into the branch
+    read (one lookup by element in the index of unresolved Conflicts).
+
+    A Conflict about an Attribute the caller's schema leaves out is not listed, and the
+    competing hash is withheld for an Attribute whose values the caller sees masked.
+    """
+    rows = await ConflictRepository(session, point.domain.id).pending(
+        point.branch, kind_partition(kind.id), key
+    )
+    pending: list[ConflictInProgressOut] = []
+    for row in rows:
+        name: str | None = None
+        competing = row.competing_hash
+        if row.attribute_id is not None:
+            attribute = kind.attributes.get(row.attribute_id)
+            if attribute is None:
+                continue
+            name = attribute.api_name
+            if point.masking.hidden(attribute, [kind.id]):
+                competing = None
+        pending.append(
+            ConflictInProgressOut(
+                proposal_id=row.proposal_id,
+                conflict_id=row.fingerprint,
+                code=row.code,
+                attribute=name,
+                competing_hash=competing,
+            )
+        )
+    return pending
 
 
 async def link_counts(

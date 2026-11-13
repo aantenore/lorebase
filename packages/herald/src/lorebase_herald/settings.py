@@ -121,6 +121,11 @@ class OutputSettings(SectionModel):
         default=240, ge=16, description="Longest single value rendered in text output."
     )
     max_issues: int = Field(default=20, ge=1, description="Issues listed in an error.")
+    pending_conflicts: bool = Field(
+        default=True,
+        description="lorebase_get asks Keeper for the open Conflicts about the Record and "
+        "flags the contested Attributes; false saves that lookup.",
+    )
 
 
 class ContextSettings(SectionModel):

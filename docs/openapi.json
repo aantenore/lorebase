@@ -3813,7 +3813,7 @@
           "read"
         ],
         "summary": "Get a Record by key",
-        "description": "One Record, optionally with its Link counts and the lineage of its values.",
+        "description": "One Record, optionally with its Link counts, the lineage of its values and the\nConflicts about it that wait for a decision.\n\nWhile a merge is stuck on a Conflict nothing is committed, so the Record keeps the value\nalready merged. `conflicts=true` lists the Conflicts of open Proposals into the branch\nthat touch the Record (Proposal, Conflict, Attribute, hash of the competing Record). They\nchange without a new Revision, so such a read is not answered from the head Revision\nalone: the pending Conflicts are looked up on every request and are part of its `ETag`.",
         "operationId": "get_record_api_v1_domains__domain_id__kinds__kind__records__key__get",
         "security": [
           {
@@ -3907,6 +3907,18 @@
               "title": "Lineage"
             },
             "description": "Add the provenance of each value."
+          },
+          {
+            "name": "conflicts",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Add `conflict_in_progress`: the open Conflicts about the Record in Proposals into the branch read. Branch head only (ignored with `at`).",
+              "default": false,
+              "title": "Conflicts"
+            },
+            "description": "Add `conflict_in_progress`: the open Conflicts about the Record in Proposals into the branch read. Branch head only (ignored with `at`)."
           }
         ],
         "responses": {
@@ -14033,6 +14045,57 @@
         "title": "CheckReport",
         "description": "Outcome of one dependency check."
       },
+      "ConflictInProgressOut": {
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "title": "Proposal Id",
+            "description": "The open Proposal whose merge has the Conflict."
+          },
+          "conflict_id": {
+            "type": "string",
+            "title": "Conflict Id",
+            "description": "The Conflict id (its fingerprint) in that Proposal."
+          },
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Conflict code, such as `DV1`."
+          },
+          "attribute": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute",
+            "description": "Api name of the contested Attribute; null when the whole Record is contested (deleted on one side and changed on the other)."
+          },
+          "competing_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competing Hash",
+            "description": "Hash of the competing Record on the Proposal's source side; null when the caller may not read the Attribute's values."
+          }
+        },
+        "type": "object",
+        "required": [
+          "proposal_id",
+          "conflict_id",
+          "code"
+        ],
+        "title": "ConflictInProgressOut",
+        "description": "A Conflict about a Record that waits for a decision in an open Proposal into the branch\nread: the value served is the one already merged, and a competing change is pending."
+      },
       "ConflictOut": {
         "properties": {
           "id": {
@@ -21928,6 +21991,21 @@
           },
           "record": {
             "$ref": "#/components/schemas/RecordOut"
+          },
+          "conflict_in_progress": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConflictInProgressOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict In Progress",
+            "description": "Open Conflicts about the Record in Proposals into the branch read; set by `conflicts=true` on a read of one Record at the branch head (empty when nothing is pending), null otherwise."
           }
         },
         "type": "object",

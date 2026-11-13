@@ -580,6 +580,90 @@ async def test_open_conflicts_say_who_changed_each_side_and_when(
         assert theirs["at"] > ours["at"]
 
 
+async def test_a_record_read_flags_a_conflict_waiting_for_a_decision(
+    keeper: Any, installation_admin: Any, loader: Loader
+) -> None:
+    """While a Proposal is stuck on a Conflict the target keeps the merged value; a read that
+    asks for it (`conflicts=true`) names the Proposal, the Attribute and the competing hash."""
+    admin = installation_admin.headers
+    record = f"{DOMAIN}/kinds/Supplier/records/S-1001"
+    watching = {"branch": "left", "conflicts": "true"}
+    async with keeper(proposals={"required_approvals": 0}) as http:
+        await setup_domain(http, admin, loader, "left", "right")
+        await loader.edit("left", "S-1001", city="Gdansk")
+        await loader.edit("right", "S-1001", city="Warsaw")
+
+        quiet = await http.get(record, params=watching, headers=admin)
+        assert quiet.status_code == 200, quiet.text
+        assert quiet.json()["conflict_in_progress"] == []
+
+        opened = await http.post(PROPOSALS, json=proposal_body("right", "left"), headers=admin)
+        assert opened.status_code == 201, opened.text
+        proposal = opened.json()
+        assert proposal["attempt"]["open_conflicts"] == 1
+        base = f"{PROPOSALS}/{proposal['id']}"
+        [conflict] = (await http.get(f"{base}/conflicts", headers=admin)).json()["conflicts"]
+
+        # The same Revision answers, now with the marker: the ETag of the earlier read is stale.
+        contested = await http.get(
+            record, params=watching, headers={**admin, "If-None-Match": quiet.headers["ETag"]}
+        )
+        assert contested.status_code == 200, contested.text
+        assert contested.headers["Lorebase-Revision"] == quiet.headers["Lorebase-Revision"]
+        assert contested.headers["ETag"] != quiet.headers["ETag"]
+        body = contested.json()
+        assert body["record"]["values"]["city"] == "Gdansk"
+        assert body["conflict_in_progress"] == [
+            {
+                "proposal_id": proposal["id"],
+                "conflict_id": conflict["id"],
+                "code": "DV1",
+                "attribute": "city",
+                "competing_hash": conflict["theirs_hash"],
+            }
+        ]
+        again = await http.get(
+            record, params=watching, headers={**admin, "If-None-Match": contested.headers["ETag"]}
+        )
+        assert again.status_code == 304
+
+        # Not asked for, not on the source branch, not about another Record: nothing changes.
+        plain = await http.get(record, params={"branch": "left"}, headers=admin)
+        assert plain.json()["conflict_in_progress"] is None
+        assert plain.json()["record"] == body["record"]
+        source = await http.get(
+            record, params={"branch": "right", "conflicts": "true"}, headers=admin
+        )
+        assert source.json()["conflict_in_progress"] == []
+        other = await http.get(
+            f"{DOMAIN}/kinds/Supplier/records/S-1002", params=watching, headers=admin
+        )
+        assert other.json()["conflict_in_progress"] == []
+
+        # The partial index of unresolved Conflicts serves the lookup.
+        assert (
+            await loader.scalar(
+                "SELECT count(*) FROM pg_indexes WHERE tablename = 'conflicts' "
+                "AND indexname = 'ix_conflicts_open_element' "
+                "AND indexdef LIKE '%resolved_by IS NULL%'"
+            )
+            == 1
+        )
+
+        resolved = await http.post(
+            f"{base}/conflicts/{conflict['id']}/resolution",
+            json={"choice": "theirs"},
+            headers=admin,
+        )
+        assert resolved.status_code == 200, resolved.text
+        merged = await http.post(f"{base}/merge", headers=admin)
+        assert merged.status_code == 200, merged.text
+        settled = await http.get(record, params=watching, headers=admin)
+        assert settled.json()["record"]["values"]["city"] == "Warsaw"
+        assert settled.json()["conflict_in_progress"] == []
+        await loader.verify("left")
+
+
 async def test_deleting_a_domain_removes_its_history_and_keeps_the_audit_log(
     keeper: Any, installation_admin: Any, loader: Loader
 ) -> None:

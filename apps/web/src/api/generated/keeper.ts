@@ -658,7 +658,14 @@ export interface paths {
         };
         /**
          * Get a Record by key
-         * @description One Record, optionally with its Link counts and the lineage of its values.
+         * @description One Record, optionally with its Link counts, the lineage of its values and the
+         *     Conflicts about it that wait for a decision.
+         *
+         *     While a merge is stuck on a Conflict nothing is committed, so the Record keeps the value
+         *     already merged. `conflicts=true` lists the Conflicts of open Proposals into the branch
+         *     that touch the Record (Proposal, Conflict, Attribute, hash of the competing Record). They
+         *     change without a new Revision, so such a read is not answered from the head Revision
+         *     alone: the pending Conflicts are looked up on every request and are part of its `ETag`.
          */
         get: operations["get_record_api_v1_domains__domain_id__kinds__kind__records__key__get"];
         put?: never;
@@ -2642,6 +2649,38 @@ export interface components {
             status: "ok" | "degraded" | "not_configured" | "failed";
             /** Detail */
             detail?: string | null;
+        };
+        /**
+         * ConflictInProgressOut
+         * @description A Conflict about a Record that waits for a decision in an open Proposal into the branch
+         *     read: the value served is the one already merged, and a competing change is pending.
+         */
+        ConflictInProgressOut: {
+            /**
+             * Proposal Id
+             * @description The open Proposal whose merge has the Conflict.
+             */
+            proposal_id: string;
+            /**
+             * Conflict Id
+             * @description The Conflict id (its fingerprint) in that Proposal.
+             */
+            conflict_id: string;
+            /**
+             * Code
+             * @description Conflict code, such as `DV1`.
+             */
+            code: string;
+            /**
+             * Attribute
+             * @description Api name of the contested Attribute; null when the whole Record is contested (deleted on one side and changed on the other).
+             */
+            attribute?: string | null;
+            /**
+             * Competing Hash
+             * @description Hash of the competing Record on the Proposal's source side; null when the caller may not read the Attribute's values.
+             */
+            competing_hash?: string | null;
         };
         /**
          * ConflictOut
@@ -5781,6 +5820,11 @@ export interface components {
             revision: string;
             served_from: components["schemas"]["ServedFrom"];
             record: components["schemas"]["RecordOut"];
+            /**
+             * Conflict In Progress
+             * @description Open Conflicts about the Record in Proposals into the branch read; set by `conflicts=true` on a read of one Record at the branch head (empty when nothing is pending), null otherwise.
+             */
+            conflict_in_progress?: components["schemas"]["ConflictInProgressOut"][] | null;
         };
         /**
          * RelationBacking
@@ -9827,6 +9871,8 @@ export interface operations {
                 links?: boolean;
                 /** @description Add the provenance of each value. */
                 lineage?: boolean;
+                /** @description Add `conflict_in_progress`: the open Conflicts about the Record in Proposals into the branch read. Branch head only (ignored with `at`). */
+                conflicts?: boolean;
             };
             header?: never;
             path: {

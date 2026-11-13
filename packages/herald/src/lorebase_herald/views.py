@@ -315,6 +315,30 @@ def record_view(record: m.RecordItem) -> View:
     return view
 
 
+def pending_conflicts_view(pending: Iterable[m.ConflictInProgress]) -> list[View]:
+    """The open Conflicts about a Record as `{proposal_id, conflict_id, code, attribute,
+    competing_hash}`."""
+    return [
+        {
+            "proposal_id": item.proposal_id,
+            "conflict_id": item.conflict_id,
+            "code": item.code,
+            "attribute": item.attribute,
+            "competing_hash": item.competing_hash,
+        }
+        for item in pending
+    ]
+
+
+def _pending_conflict_line(item: Mapping[str, Any]) -> str:
+    what = item["attribute"] or "the Record"
+    competing = f", competing {item['competing_hash'][:12]}" if item["competing_hash"] else ""
+    return (
+        f"conflict_in_progress: {what} is contested in Proposal {item['proposal_id']} "
+        f"({item['code']}{competing}); the value shown is the merged one, not a settled one"
+    )
+
+
 def record_text(view: Mapping[str, Any], revision: str | None, output: OutputSettings) -> str:
     served = f" rev {revision}" if revision else ""
     lines = [f"{titled(view['ref'], view.get('title'))}{served}"]
@@ -326,6 +350,7 @@ def record_text(view: Mapping[str, Any], revision: str | None, output: OutputSet
     if links is not None:
         counted = [f"{c['relation']}={c['count']}" for c in links if c["count"]]
         lines.append(f"links: {', '.join(counted)}" if counted else "links: none")
+    lines.extend(_pending_conflict_line(item) for item in view.get("conflict_in_progress", ()))
     return "\n".join(lines)
 
 

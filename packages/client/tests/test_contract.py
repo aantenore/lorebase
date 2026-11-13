@@ -64,6 +64,7 @@ RESPONSES: dict[type[m.Model], str] = {
     m.ExtractionEvidence: "ExtractionEvidenceOut",
     m.ValueLineage: "ValueLineageOut",
     m.RecordLineage: "RecordLineageOut",
+    m.ConflictInProgress: "ConflictInProgressOut",
     m.RecordResponse: "RecordResponse",
     m.RecordPage: "RecordPage",
     m.AggregateCount: "AggregateCount",
