@@ -140,7 +140,7 @@ def test_fast_forward_detection(world: World, allowed: bool) -> None:
     assert forward.root == repo.roots[descendant]
     if allowed:
         assert forward.result is MergeResult.FAST_FORWARD
-        assert forward.parents == ()
+        assert forward.parents == (ours,)
     else:
         assert forward.result is MergeResult.MERGED
         assert forward.parents == (ours, descendant)

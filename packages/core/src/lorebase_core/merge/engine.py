@@ -133,16 +133,22 @@ class MergeInput:
 
 class MergeResult(StrEnum):
     UP_TO_DATE = "up_to_date"
-    """Theirs is already contained in ours: the target does not change."""
+    """Theirs is already contained in ours: the target does not change. ``root`` is ours and
+    ``parents`` is ``(ours,)``."""
     FAST_FORWARD = "fast_forward"
-    """The target moves to theirs."""
+    """The target moves to theirs. ``root`` is theirs' tree. A caller that moves the ref to
+    ``theirs`` writes nothing; one that commits ``root`` as returned gets a Revision whose only
+    parent is ours, so history stays connected."""
     MERGED = "merged"
     """A merge Revision with parents ``(ours, theirs)`` is to be written."""
 
 
 @dataclass(frozen=True)
 class MergedTree:
-    """A clean merge: the new tree and its changeset against ours (the first parent)."""
+    """A clean merge: the new tree and its changeset against ours (the first parent).
+
+    ``parents`` is never empty: ``(ours, theirs)`` for a merge, ``(ours,)`` for a fast-forward
+    or an up-to-date result, so committing ``root`` with ``parents`` never writes a root."""
 
     result: MergeResult
     root: bytes
@@ -286,7 +292,7 @@ class _Engine:
             theirs=merge_input.theirs,
             base=base,
             virtual_base=False,
-            parents=(),
+            parents=(merge_input.ours,),
             changes=(),
             stats=changeset_stats(()),
         )
@@ -304,7 +310,7 @@ class _Engine:
             theirs=merge_input.theirs,
             base=base,
             virtual_base=False,
-            parents=(),
+            parents=(merge_input.ours,),
             changes=changes,
             stats=changeset_stats(changes),
         )

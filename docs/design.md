@@ -600,7 +600,7 @@ Every taken change keeps its original provenance.
 | Trait conformance | Trait changed on one side so that a Kind changed on the other no longer conforms | Trait conformance Conflict |
 | Broken reference | Operation, Derivation, Source or Trait mapping references an element removed or retyped on the other side | Broken reference Conflict |
 
-**Step 5. Outcome.** If there are no Conflicts, the engine writes a merge Revision with parents `[head(T), head(S)]` via the commit pipeline. Otherwise it stores a **merge attempt** with base, ours and theirs Revision ids and the Conflict list, attached to the Proposal.
+**Step 5. Outcome.** If there are no Conflicts, the engine writes a merge Revision with parents `[head(T), head(S)]` via the commit pipeline. A fast-forward or up-to-date result returns `parents = [head(T)]` (never empty), so a caller that commits the returned tree as is keeps the history connected; moving the ref to `head(S)` writes no Revision. Otherwise it stores a **merge attempt** with base, ours and theirs Revision ids and the Conflict list, attached to the Proposal.
 
 ### 6.9 Conflict taxonomy
 
