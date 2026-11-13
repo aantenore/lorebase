@@ -4,6 +4,15 @@ The public roadmap of Lorebase, by milestone. It is derived from [section 18 of 
 
 Lorebase is pre-alpha. [v0.3.1](https://github.com/aantenore/lorebase/releases/tag/v0.3.1) is the current pre-alpha release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)) ([CHANGELOG](../CHANGELOG.md)); interfaces may change.
 
+## Core and experimental
+
+The project commits first to a core, and marks the rest of what runs today so that nobody builds on it by accident.
+
+- **Core**: the versioning and merge engine (`lorebase-core`), the Postgres store (`lorebase-store`), the Keeper REST API (`lorebase-keeper`), the Herald MCP server (`lorebase-herald`), the Python client (`lorebase-client`) and the CLI (`lorebase-cli`). The API stability item of M5 is about these.
+- **Experimental**: the [Guide assistant](guide.md) (`lorebase-guide`), [agent trace](agent-trace.md), the [retrieval lab](retrieval-lab.md), [LinkML](linkml.md) import and export, the MySQL/MariaDB and SQL Server [Sources](scribe.md#sources), the [Helm chart](kubernetes.md), [read replicas](deployment.md) and [storage profiles](performance.md#working-set). A checked box below means they are merged and tested, not that they are stable: they may change or be dropped in any release.
+
+Scribe (the other Sources, document extraction, embeddings) and the web app are neither: they run and are tested, but interface stability comes to the core first.
+
 ## Next up
 
 1. The 10M-Record benchmark on the 32 GB reference hardware of design 6.14, and the 1M-Record neighborhood on branches other than `main`, which is just over budget on a laptop.
