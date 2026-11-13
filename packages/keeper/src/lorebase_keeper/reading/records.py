@@ -9,7 +9,7 @@ snapshot of the Revision (`reading.snapshots`) for everything else.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -179,35 +179,44 @@ async def get_record(
 
 
 async def conflicts_in_progress(
-    session: AsyncSession, point: ReadPoint, kind: Kind, key: str
+    session: AsyncSession,
+    point: ReadPoint,
+    kind: Kind,
+    key: str,
+    *,
+    may_read_source: Callable[[str], Awaitable[bool]],
 ) -> list[ConflictInProgressOut]:
     """The open Conflicts about the Record `(kind, key)` in the open Proposals into the branch
     read (one lookup by element in the index of unresolved Conflicts).
 
-    A Conflict about an Attribute the caller's schema leaves out is not listed, and the
-    competing hash is withheld for an Attribute whose values the caller sees masked.
+    An entry tells that a Proposal exists and what it contests, so it is listed only to a
+    caller who may read that Proposal (`may_read_source` tells for its source branch; the
+    target branch is the one read) and the Attribute's values: a Conflict about an Attribute
+    the caller's schema leaves out or whose values the caller sees masked is dropped.
     """
     rows = await ConflictRepository(session, point.domain.id).pending(
         point.branch, kind_partition(kind.id), key
     )
     pending: list[ConflictInProgressOut] = []
+    readable: dict[str, bool] = {}
     for row in rows:
         name: str | None = None
-        competing = row.competing_hash
         if row.attribute_id is not None:
             attribute = kind.attributes.get(row.attribute_id)
-            if attribute is None:
+            if attribute is None or point.masking.hidden(attribute, [kind.id]):
                 continue
             name = attribute.api_name
-            if point.masking.hidden(attribute, [kind.id]):
-                competing = None
+        if row.source_ref not in readable:
+            readable[row.source_ref] = await may_read_source(row.source_ref)
+        if not readable[row.source_ref]:
+            continue
         pending.append(
             ConflictInProgressOut(
                 proposal_id=row.proposal_id,
                 conflict_id=row.fingerprint,
                 code=row.code,
                 attribute=name,
-                competing_hash=competing,
+                competing_hash=row.competing_hash,
             )
         )
     return pending

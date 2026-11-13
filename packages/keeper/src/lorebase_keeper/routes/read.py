@@ -14,6 +14,7 @@ resolved. POST reads carry an `ETag` too.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -253,6 +254,16 @@ async def list_record_links(
     return await _answer(request, runtime, point, produce, session)
 
 
+def _may_read_proposal_source(access: ReadGuard) -> Callable[[str], Awaitable[bool]]:
+    """Whether the caller reads a Proposal whose target branch it reads: `data.read` on the
+    source branch too, or grants narrowed to Kinds (which cover every branch)."""
+
+    async def may(source_ref: str) -> bool:
+        return await access.may(source_ref) or bool(await access.granted_kinds())
+
+    return may
+
+
 @router.get(
     f"{BASE}/kinds/{{kind}}/records/{{key}}",
     summary="Get a Record by key",
@@ -297,7 +308,13 @@ async def get_record(
         return unchanged
     point = await resolve_point(session, runtime, access, branch=branch, at=at)
     found = records.require_kind(point, kind)
-    pending = await records.conflicts_in_progress(session, point, found, key) if watch else None
+    pending = (
+        await records.conflicts_in_progress(
+            session, point, found, key, may_read_source=_may_read_proposal_source(access)
+        )
+        if watch
+        else None
+    )
 
     async def produce() -> RecordResponse:
         record, _ = await records.get_record(

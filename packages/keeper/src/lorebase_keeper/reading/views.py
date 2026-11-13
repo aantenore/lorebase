@@ -54,8 +54,7 @@ class ConflictInProgressOut(BaseModel):
     )
     competing_hash: str | None = Field(
         default=None,
-        description="Hash of the competing Record on the Proposal's source side; null when "
-        "the caller may not read the Attribute's values.",
+        description="Hash of the competing Record on the Proposal's source side.",
     )
 
 

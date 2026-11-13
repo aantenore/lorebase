@@ -318,6 +318,7 @@ def test_who_changed_a_sensitive_attribute_is_shown_to_cleared_readers_only() ->
 def _pending(attribute: str | None) -> PendingConflictRow:
     return PendingConflictRow(
         proposal_id="prp_1",
+        source_ref="feature",
         fingerprint="ab" * 32,
         code="DV1" if attribute else "DV2",
         attribute_id=attribute,
@@ -325,7 +326,7 @@ def _pending(attribute: str | None) -> PendingConflictRow:
     )
 
 
-async def test_pending_conflicts_name_attributes_and_withhold_hashes_of_masked_ones(
+async def test_pending_conflicts_drop_what_the_reader_may_not_see(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     asked: list[tuple[str, str, str, str]] = []
@@ -355,19 +356,34 @@ async def test_pending_conflicts_name_attributes_and_withhold_hashes_of_masked_o
         )
 
     session = cast(Any, None)
-    seen = await records.conflicts_in_progress(session, point(Masking(Clearance())), PERSON, "P-1")
+
+    async def anywhere(ref: str) -> bool:
+        return True
+
+    seen = await records.conflicts_in_progress(
+        session, point(Masking(Clearance())), PERSON, "P-1", may_read_source=anywhere
+    )
     assert asked == [("people", "main", kind_partition(KIND), "P-1")]
-    # A Conflict about an Attribute the schema read does not have is not listed.
+    # A Conflict about an Attribute the schema read lacks, or whose values are masked, is
+    # dropped whole: it would tell that the Attribute is contested.
     assert [(c.attribute, c.code, c.competing_hash) for c in seen] == [
         ("name", "DV1", "cd" * 32),
-        ("phone", "DV1", None),
         (None, "DV2", "cd" * 32),
     ]
     assert {(c.proposal_id, c.conflict_id) for c in seen} == {("prp_1", "ab" * 32)}
     cleared = await records.conflicts_in_progress(
-        session, point(Masking(Clearance.full())), PERSON, "P-1"
+        session, point(Masking(Clearance.full())), PERSON, "P-1", may_read_source=anywhere
     )
-    assert [c.competing_hash for c in cleared] == ["cd" * 32] * 3
+    assert [c.attribute for c in cleared] == ["name", "phone", None]
+
+    # A caller who may not read the Proposal's source branch is not told that it exists.
+    async def nowhere(ref: str) -> bool:
+        return False
+
+    blind = await records.conflicts_in_progress(
+        session, point(Masking(Clearance.full())), PERSON, "P-1", may_read_source=nowhere
+    )
+    assert blind == []
 
 
 class FakeAuthorizer:

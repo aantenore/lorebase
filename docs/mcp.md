@@ -318,7 +318,8 @@ and the `json` output carries `conflict_in_progress`, a list of `{proposal_id, c
 code, attribute, competing_hash}`: the open Proposal into the branch read, the Conflict in it,
 its code, the api name of the contested Attribute (null when the whole Record is contested,
 deleted on one side and changed on the other) and the hash of the competing Record on the
-Proposal's source side (null when the caller may not read the Attribute's values). An agent
+Proposal's source side. A Conflict is listed only to a caller who may read the Proposal and the
+contested Attribute's values: for the others the entry is left out, not masked. An agent
 should not act on a flagged value as settled: it can wait, or report the Proposal.
 
 Reads with `at` and the tools that return many Records (`lorebase_query`, `lorebase_search`,

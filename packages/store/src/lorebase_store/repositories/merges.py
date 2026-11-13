@@ -77,6 +77,7 @@ class PendingConflictRow:
     element) and the hash of the competing element on the Proposal's source side."""
 
     proposal_id: str
+    source_ref: str
     fingerprint: str
     code: str
     attribute_id: str | None
@@ -375,6 +376,7 @@ class ConflictRepository:
         query = (
             select(
                 ATTEMPTS.c.proposal_id,
+                PROPOSALS.c.source_ref,
                 CONFLICTS.c.id,
                 CONFLICTS.c.code,
                 CONFLICTS.c.attribute_id,
@@ -405,6 +407,7 @@ class ConflictRepository:
         return [
             PendingConflictRow(
                 proposal_id=row.proposal_id,
+                source_ref=row.source_ref,
                 fingerprint=row.id,
                 code=row.code,
                 attribute_id=row.attribute_id,
