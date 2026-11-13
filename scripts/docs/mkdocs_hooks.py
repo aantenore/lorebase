@@ -4,8 +4,8 @@ Two jobs, so that the Markdown files stay exactly as they read on GitHub:
 
 * the changelog, the contributing guide and the security policy live in the repository root;
   they are added to the site as pages under `project/`
-* a relative link that leaves the docs tree (`../examples/README.md`, `LICENSE`) is pointed at the repository on GitHub,
-  and a link to one of the root pages above is pointed at its page on the site
+* a relative link that leaves the docs tree (`../examples/README.md`, `LICENSE`) is pointed at the
+  repository on GitHub, and a link to one of the root pages above is pointed at its page on the site
 """
 
 from __future__ import annotations
