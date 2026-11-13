@@ -7,7 +7,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab)
-![Node 24+](https://img.shields.io/badge/node-24%2B-5fa04e)
+![Node 24+ (web app dev)](https://img.shields.io/badge/node-24%2B%20(web%20app%20dev)-5fa04e)
 ![Postgres 16](https://img.shields.io/badge/Postgres-16-336791)
 
 - **For data and platform teams** who own company knowledge (suppliers, parts, contracts) and want it typed, reviewed and versioned, with Sources that disagree sent to a reconciliation queue instead of the newest write winning.
@@ -15,6 +15,8 @@
 - **Instead of** chunk retrieval over stale documents, agent memory engines that a model writes unreviewed, or a proprietary ontology platform: see the [comparison](docs/comparison.md).
 
 ## An agent call
+
+Start with the [quickstart](#quickstart) to get a Keeper running; this is what an agent then does.
 
 Herald, the MCP server, is on PyPI. Against a running Keeper with the sample Domain ([quickstart](#quickstart)):
 
@@ -151,7 +153,7 @@ Screens of the web app on a running demo stack with the supply sample: real data
 
 ## Quickstart
 
-Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), Docker with compose, `make`, `curl` and `openssl`; no Node.js needed (the web app runs in a container). Keeper uses port 8080, the web app port 8090 and Postgres port 5432 on `127.0.0.1`; change `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` and `POSTGRES_HOST_PORT` in `.env` if they are taken.
+Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), Docker with compose (the Docker daemon must be running), `make`, `curl` and `openssl`; no Node.js needed (the web app runs in a container). Keeper uses port 8080, the web app port 8090 and Postgres port 5432 on `127.0.0.1`; change `KEEPER_HOST_PORT`, `LOREBASE_WEB_PORT` and `POSTGRES_HOST_PORT` in `.env` if they are taken.
 
 ```bash
 git clone https://github.com/aantenore/lorebase.git && cd lorebase
