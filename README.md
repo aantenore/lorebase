@@ -115,7 +115,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Retrieval lab | Two search settings compared side by side, with the resulting context pack ([retrieval lab](docs/retrieval-lab.md)). |
 | Web app | Explorer, Canvas, Modeler, Review, Reconciliation, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](docs/tour.md)). |
 | Storage profiles | `compact`, `balanced` and `fast` decide which secondary indexes exist and how lineage is stored; `python -m lorebase_store.storage apply` switches a running install ([performance](docs/performance.md#working-set)). |
-| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL (run on demand and on every release tag, not on every pull request) and signed images ([operations](docs/operations.md), [Kubernetes](docs/kubernetes.md)). |
+| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI (run on demand and on every release tag, not on every pull request), CodeQL (run on demand) and signed images ([operations](docs/operations.md), [Kubernetes](docs/kubernetes.md)). |
 
 The milestone breakdown with checkboxes is in the [roadmap](docs/roadmap.md).
 
@@ -233,6 +233,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 | Palantir Foundry Ontology | Proprietary operational ontology inside a full data platform | Within the platform | You need the whole platform and a vendor to run it |
 | TerminusDB | Versioned document and graph database | Yes, on its own storage engine | You want a general versioned graph database to build on |
 | Dolt | SQL database with git semantics | Yes, on tables | Your data is tabular and you want versioned SQL |
+| Omnigraph | Typed graph database on Lance, with branches and review | Yes, according to its README, on its own storage | You want a graph database with its own storage engine |
 | Neo4j | Property graph database | No | You need graph algorithms and pattern queries at scale |
 | Cognee | Agent memory built by LLM pipelines | No | You want automated memory for a single agent |
 | Graphiti and Zep | Temporal knowledge graph for agent memory | No (facts carry validity time) | You need conversational memory with temporal reasoning |

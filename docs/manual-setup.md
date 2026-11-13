@@ -433,7 +433,7 @@ The web app talks to a `KeeperApi` interface with two adapters. In `mock` mode i
 its own sample Domains from memory and needs no backend; the `supply` Domain you created above
 is not shown there. In `live` mode it talks to Keeper, and the flows of the app (Explorer, the
 Canvas, the Modeler through a Proposal, Review with Conflicts, Settings) are tested against a
-real Keeper on every change.
+real Keeper by the Playwright suite, which runs on demand and as the `web-e2e` job of CI.
 
 ```bash
 cd apps/web

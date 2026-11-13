@@ -359,7 +359,7 @@ stop the container. Tests: `packages/keeper/tests/test_security_headers.py`,
 `tests/tooling/test_web_security_headers.py` (the entrypoint script and the rendered chart).
 **Dependency audit in CI** (`.github/workflows/audit.yaml`, `scripts/audit_check.py`,
 `.github/audit-allowlist.yaml`, `Makefile` targets `security-python` and `security-web`). On
-demand and before every release (on every pull request, on `main` and weekly until 2026-10-23), pip-audit (pinned version) checks the exported locked
+demand, started by a maintainer before a release, pip-audit (pinned version) checks the exported locked
 runtime dependencies and `pnpm audit --prod` the web app's. The check fails on any advisory not
 in the allowlist (matched by package and id or alias) and on expired entries; accepted ones are
 printed as warnings. Entries carry a reason, a review date and an expiry. The allowlist starts

@@ -117,7 +117,7 @@ The stack is the compose project `lorebase-demo` with Keeper on port 18080 and P
 | Retrieval lab | Two search settings compared side by side, with the resulting context pack ([retrieval lab](retrieval-lab.md)). |
 | Web app | Explorer, Canvas, Modeler, Review, Reconciliation, Documents, Sources, Explore, Agent activity, Retrieval lab and Admin basics, on a mock API or on Keeper ([tour](tour.md)). |
 | Storage profiles | `compact`, `balanced` and `fast` decide which secondary indexes exist and how lineage is stored; `python -m lorebase_store.storage apply` switches a running install ([performance](performance.md#working-set)). |
-| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI with CodeQL (run on demand and on every release tag, not on every pull request) and signed images ([operations](operations.md), [Kubernetes](kubernetes.md)). |
+| Operations | docker compose and a Helm chart, read replicas with a freshness guard, garbage collection, Domain backup and restore bundles, a Postgres job queue, metrics, Grafana dashboards and alert rules, CI (run on demand and on every release tag, not on every pull request), CodeQL (run on demand) and signed images ([operations](operations.md), [Kubernetes](kubernetes.md)). |
 
 The milestone breakdown with checkboxes is in the [roadmap](roadmap.md).
 

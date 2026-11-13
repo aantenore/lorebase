@@ -31,6 +31,7 @@ Many products now give agents a context layer over MCP. The combination below is
 | Doltgres (with the Dolt MCP server) | Postgres-compatible SQL database with git semantics | Branch, commit, merge with cell-level conflicts, on its own storage engine | Relational tables; no ontology layer | None built in | SQL over the Postgres wire protocol; MCP server (`MCP_DIALECT=doltgres`) | Apache-2.0, self-hosted or hosted offering |
 | TypeDB (with TypeDB MCP) | Strongly typed database with entities, relations and attributes | No branches or merges of content | TypeQL schema with types, inheritance and rules | None built in | TypeQL; official MCP server for read, write and schema queries | MPL-2.0, self-hosted or cloud |
 | mnem | Local, embedded knowledge graph for one project's agents | Commits, branches and three-way graph merge in a single-writer local store | No typed ontology | None built in | 22 MCP tools; `mnem integrate` wires it into desktop hosts | Apache-2.0, local files, no server |
+| Omnigraph | Typed graph database on Lance, with branches and review | Branches with a row-level three-way merge, according to its README | Typed schema | None built in | MCP, according to its README | Open source, self-hosted; does not reuse Postgres |
 | RDF triple stores (Stardog, GraphDB, Neptune) | Graph databases for RDF with SPARQL | Named graphs and store-specific versioning; no three-way merge of schema and data | RDFS/OWL ontologies, SHACL validation, reasoning (varies by product) | Store-specific connectors and virtualization | SPARQL endpoints and APIs | Commercial products, with free editions or as a managed cloud service |
 | LinkML | Modeling language and toolkit | Schemas versioned as files in git | YAML schemas, converters to JSON Schema, SQL, Pydantic, OWL and more | None (modeling only) | None (not a runtime) | Open source, a toolkit rather than a server |
 | Protégé | Ontology editor for OWL (desktop and web) | Files in version control; collaborative editing in the web version | OWL classes, properties, axioms, reasoners | None | None (editor, not a runtime) | Open source (BSD-style), desktop or self-hosted web |
@@ -139,6 +140,13 @@ Choose TypeDB when you need its type system and query language as the database o
 Lorebase differs by being a multi-user server: a typed ontology, grants, Proposals with approvals, row-level security and PII handling, and Sources that keep it current.
 
 Choose mnem for the memory of one project's agents on one machine.
+
+### Omnigraph
+[Omnigraph](https://github.com/ModernRelay/omnigraph), from ModernRelay, is an open-source graph database written in Rust on the Lance format. According to its own README it has a typed schema, branches with a row-level three-way merge, review of changes and an MCP interface. It keeps its own storage rather than reusing Postgres.
+
+Lorebase differs by running on stock Postgres, by adding Operations, grants, Proposals with approvals and PII handling around the ontology, and by reconciling Sources that disagree.
+
+Choose Omnigraph when you want a graph database with its own storage engine and branching; compare the two on your own workload, as this page does not.
 
 ### RDF triple stores
 Stardog, GraphDB and Amazon Neptune store RDF, answer SPARQL and, depending on the product, validate SHACL shapes and reason over OWL. They are the home of semantic-web ontologies.
