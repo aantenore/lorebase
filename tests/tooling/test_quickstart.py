@@ -404,6 +404,19 @@ def test_up_stops_before_compose_when_a_published_port_is_taken(
     assert compose_up(result)[:4] == ["up", "-d", "--build", "--wait"]
 
 
+def test_up_pulls_the_release_images_when_asked(tmp_path: Path) -> None:
+    env_file = stack_env(tmp_path)
+    result = run_with_docker(
+        tmp_path, "up", env_file=env_file, IMAGE_SOURCE="release", RELEASE_TAG="9.9.9"
+    )
+    assert result.returncode == 0, result.stderr
+    assert compose_up(result)[:4] == ["up", "-d", "--no-build", "--wait"]
+    assert "ghcr.io/aantenore/lorebase*:9.9.9" in result.stderr
+    result = run_with_docker(tmp_path, "up", env_file=env_file, IMAGE_SOURCE="registry")
+    assert result.returncode == 2
+    assert compose_up(result) == []
+
+
 def test_up_probes_the_configured_bind_address(tmp_path: Path, listener: int) -> None:
     # Published on every address, a port taken on 127.0.0.1 is taken (the exposure check is
     # opted out of first, or it would stop the run before the probe).

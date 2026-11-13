@@ -12,6 +12,8 @@ STRICT_SRC := packages/core/src packages/store/src packages/keeper/src packages/
 	packages/client/src packages/cli/src packages/scribe/src packages/guide/src
 OTHER_SRC := packages/platform/src packages/inference/src
 PROFILES ?=
+# build: `make up` builds the images from this checkout; release: it pulls the published ones.
+IMAGE_SOURCE ?= build
 # Extra compose files (space separated, from the repository root) for up, logs, down and
 # clean-stack, e.g. COMPOSE_OVERLAYS=deploy/compose/hosted-model.yaml; empty: the value in .env.
 COMPOSE_OVERLAYS ?=
@@ -136,11 +138,11 @@ demo-down: ## Stop the demo stack and delete its data
 env: ## Create .env from .env.example with generated passwords and webhook key (keeps an existing one)
 	@scripts/quickstart.sh env
 
-up: ## Build the images and start Postgres, migrations, Keeper and the web app (PROFILES=assistant adds Guide and Scribe, PROFILES=mcp Herald); waits until healthy, prints the web URL
-	@PROFILES="$(PROFILES)" scripts/quickstart.sh up
+up: ## Build the images and start Postgres, migrations, Keeper and the web app (PROFILES=assistant adds Guide and Scribe, PROFILES=mcp Herald; IMAGE_SOURCE=release pulls the published images instead of building); waits until healthy, prints the web URL
+	@IMAGE_SOURCE="$(IMAGE_SOURCE)" PROFILES="$(PROFILES)" scripts/quickstart.sh up
 
 up-assistant: ## Same as `make up PROFILES=assistant`: also Guide and Scribe on the backend-ml image (embeddings, semantic search)
-	@PROFILES=assistant scripts/quickstart.sh up
+	@IMAGE_SOURCE="$(IMAGE_SOURCE)" PROFILES=assistant scripts/quickstart.sh up
 
 shell-env: ## Print the export line that points the CLI at the running stack: eval "$$(make shell-env)"
 	@scripts/quickstart.sh shell-env

@@ -33,6 +33,10 @@
 #   PROFILES              compose profiles `up` starts besides the default services; only
 #                         `assistant` (Guide and Scribe) and `mcp` (Herald), several separated
 #                         by spaces or commas
+#   IMAGE_SOURCE          `build` (default): `up` builds the images from this checkout;
+#                         `release`: `up` pulls the published images of a release instead
+#                         (RELEASE_REGISTRY, default ghcr.io/aantenore; RELEASE_TAG, default
+#                         the version in pyproject.toml), so the stack runs that release
 #   COMPOSE_OVERLAYS      extra compose files added after the others by every command that
 #                         runs compose, separated by spaces, relative to the repository root
 #                         (for example `deploy/compose/hosted-model.yaml`, or a file of your
@@ -248,16 +252,42 @@ check_ports() {
   done
 }
 
+# IMAGE_SOURCE=release: name the published images of a release for this run of compose (the
+# shell wins over the environment file) and have compose pull them instead of building.
+use_release_images() {
+  local registry tag
+  registry="${RELEASE_REGISTRY:-ghcr.io/aantenore}"
+  tag="${RELEASE_TAG:-$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/pyproject.toml" | head -n 1)}"
+  export LOREBASE_IMAGE="$registry/lorebase" LOREBASE_ML_IMAGE="$registry/lorebase-ml"
+  export LOREBASE_WEB_IMAGE="$registry/lorebase-web" LOREBASE_TAG="$tag"
+  export LOREBASE_PULL_POLICY=missing
+  say "pulling the release images $registry/lorebase*:$tag instead of building this checkout"
+}
+
 up() {
   require_env
+  local build=--build
+  case "${IMAGE_SOURCE:-build}" in
+    build) ;;
+    release) build=--no-build ;;
+    *)
+      say "IMAGE_SOURCE=${IMAGE_SOURCE} is not supported (only: build, release)"
+      exit 2
+      ;;
+  esac
   local args=(postgres migrate keeper web)
   if has_profile assistant; then args+=(guide scribe); fi
   if has_profile mcp; then args+=(herald); fi
   check_exposure
   check_ports
-  say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
+  if [ "$build" = --no-build ]; then
+    use_release_images
+    say "starting project $(env_value COMPOSE_PROJECT_NAME)"
+  else
+    say "building the images and starting project $(env_value COMPOSE_PROJECT_NAME)"
+  fi
   if [ -n "$(overlays)" ]; then say "with the compose overlays: $(overlays)"; fi
-  compose up -d --build --wait "${args[@]}" >&2
+  compose up -d "$build" --wait "${args[@]}" >&2
   say "Keeper is ready at $(keeper_url)"
   say "Web app: $(web_url)"
   say "for the CLI, paste: $(shell_exports)   (or: eval \"\$(make shell-env)\")"

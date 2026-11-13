@@ -92,7 +92,18 @@ as (`db-roles`), runs the migrations once (`migrate` exits when done), starts th
 and the web app are healthy. It ends by printing the Keeper URL (`Keeper is ready at http://127.0.0.1:8080` with the
 default `KEEPER_HOST_PORT`), the web app URL (`http://127.0.0.1:8090`) and the `export` line that
 points the CLI at them (`make shell-env` prints it again). Point the commands of this page at that
-Keeper and check it:
+Keeper and check it.
+
+To skip the build, pull the images published with the release instead:
+
+```bash
+make up IMAGE_SOURCE=release
+```
+
+This starts the same services on `ghcr.io/aantenore/lorebase`, `lorebase-ml` and `lorebase-web` at the
+version in `pyproject.toml` (`RELEASE_TAG` and `RELEASE_REGISTRY` name another tag or registry), with
+`--no-build`. The stack then runs the code of that release, not of your checkout, so use the default
+`make up` when you change the code or work on a commit after the release.
 
 ```bash
 eval "$(make shell-env)"   # export LOREBASE_URL=http://127.0.0.1:<KEEPER_HOST_PORT> LOREBASE_DOMAIN=supply, the line `make up` printed
