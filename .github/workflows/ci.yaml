@@ -81,10 +81,13 @@ jobs:
         env:
           UV_NO_SYNC: "1"
         run: |
+          # Recent sudo implementations ignore -E and reset HOME to root's, so the variables the
+          # tests need are passed explicitly.
           isolated() {
             sudo -E unshare --net -- sh -c 'ip link set lo up && exec "$@"' sh \
               setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
-              env "PATH=$PATH" "$@"
+              env "PATH=$PATH" "HOME=$HOME" "UV_NO_SYNC=$UV_NO_SYNC" \
+              ${UV_CACHE_DIR:+"UV_CACHE_DIR=$UV_CACHE_DIR"} "$@"
           }
           if isolated uv run python -c \
             "import socket; socket.create_connection(('1.1.1.1', 53), timeout=3)" 2>/dev/null; then
