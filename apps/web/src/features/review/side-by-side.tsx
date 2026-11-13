@@ -3,7 +3,7 @@ import type { Conflict, JsonValue } from '@/api/types';
 import { review as reviewMessages } from '@/messages/review';
 import { cn } from '@/ui/cn';
 import { Table, TBody, TD, TH, THead, TR } from '@/ui/table';
-import { namePath, type Names } from './conflict-meta';
+import { namePath, sideChange, type Names } from './conflict-meta';
 import { wordDiff, type DiffPart } from './text-diff';
 
 const text = reviewMessages.sides;
@@ -85,6 +85,33 @@ function titleOf(side: Side, branches: SideBranches | undefined): string {
   return side === 'base' || branches === undefined
     ? SIDE_TITLE[side]
     : text.withBranch(SIDE_TITLE[side], branches[side]);
+}
+
+/**
+ * The column header of a side: its title and, for ours and theirs, who or which Source last
+ * changed the value and when (shown when the Conflict carries the provenance of that side).
+ */
+function SideHeader({
+  side,
+  conflict,
+  branches,
+}: {
+  side: Side;
+  conflict: Conflict;
+  branches: SideBranches | undefined;
+}) {
+  const change = side === 'base' ? null : sideChange(conflict, side);
+  return (
+    <TH>
+      {titleOf(side, branches)}
+      {change === null ? null : (
+        <span data-provenance={side} className="block font-normal normal-case">
+          {text.changedBy(change.who, change.origin, change.at)}
+          <span className="block font-mono">{text.provenance(change.provenanceId)}</span>
+        </span>
+      )}
+    </TH>
+  );
 }
 
 /** A string side read against the base word by word. */
@@ -222,7 +249,7 @@ export function SideBySide({
           <TR>
             <TH>{text.path}</TH>
             {SIDES.map((side) => (
-              <TH key={side}>{titleOf(side, branches)}</TH>
+              <SideHeader key={side} side={side} conflict={conflict} branches={branches} />
             ))}
           </TR>
         </THead>

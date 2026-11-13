@@ -273,4 +273,18 @@ def test_record_level_conflicts_lose_values_and_messages_left_out() -> None:
     assert scrubbed["theirs"] == {"values": {}}
     assert scrubbed["details"] == {}
     assert supplier.id not in scrubbed["message"]
+    assert "provenance" not in scrubbed
     assert ConflictVisibility(None, UNCLEARED).scrub(payload) == payload
+
+
+def test_provenance_naming_something_left_out_is_dropped() -> None:
+    hidden = "src_01JB8Z00000000000000000042"
+    stamp = {"provenance_id": "prv_1", "at": "2026-03-01T10:00:00+00:00", "source": hidden}
+    payload = {"ours": 1, "theirs": 2, "message": "m", "details": {}}
+    stamped = {**payload, "provenance": {"ours": stamp, "theirs": None}}
+    seen = ConflictVisibility(None, UNCLEARED, frozenset({hidden}))
+    scrubbed = seen.scrub(stamped)
+    assert "provenance" not in scrubbed
+    assert hidden not in str(scrubbed)
+    other = ConflictVisibility(None, UNCLEARED, frozenset({"knd_other"}))
+    assert other.scrub(stamped)["provenance"] == stamped["provenance"]

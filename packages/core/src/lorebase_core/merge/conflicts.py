@@ -24,10 +24,12 @@ __all__ = [
     "AutoResolution",
     "Conflict",
     "ConflictKind",
+    "ConflictProvenance",
     "Resolution",
     "ResolutionChoice",
     "ResolutionError",
     "Side",
+    "SideProvenance",
     "UnresolvedConflictsError",
     "conflict_fingerprint",
 ]
@@ -169,6 +171,32 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class SideProvenance(_Frozen):
+    """Who or what last changed the Attribute of a Conflict on one side, and when.
+
+    ``provenance_id`` names the provenance entry of that change and ``at`` its time (ISO 8601,
+    timezone aware). ``actor`` wrote the entry; ``origin`` is its origin type (``source_sync``,
+    ``operation``, ``extraction``, ...); ``source`` is the Source id of a Source sync and
+    ``principal`` the principal of an Operation. ``labels`` are the origin labels an
+    ``authority`` ranking matches, sorted.
+    """
+
+    provenance_id: str
+    at: str
+    actor: str | None = None
+    origin: str | None = None
+    source: str | None = None
+    principal: str | None = None
+    labels: tuple[str, ...] = ()
+
+
+class ConflictProvenance(_Frozen):
+    """The provenance of the two competing sides; a side whose Lineage is unknown is ``None``."""
+
+    ours: SideProvenance | None = None
+    theirs: SideProvenance | None = None
+
+
 class Conflict(_Frozen):
     """One Conflict of a merge attempt.
 
@@ -177,7 +205,10 @@ class Conflict(_Frozen):
     Conflicts and a dotted property path for schema Conflicts. ``base``, ``ours`` and
     ``theirs`` hold the competing values (``None`` means absent) and the ``*_hash`` fields the
     hashes of the elements they come from. Grouped Conflicts carry ``count`` members and a
-    ``sample`` of their keys.
+    ``sample`` of their keys. ``provenance`` says who or what changed each side and when: it is
+    set on open Attribute Conflicts (``DV1``, ``DV3``) when the merge has a Lineage loader and
+    knows the Lineage of at least one side, and ``None`` otherwise. It is not part of the
+    fingerprint.
     """
 
     kind: ConflictKind
@@ -197,6 +228,7 @@ class Conflict(_Frozen):
     details: dict[str, JsonValue] = Field(default_factory=dict)
     choices: tuple[ResolutionChoice, ...] = ()
     machine_resolvable: bool = False
+    provenance: ConflictProvenance | None = None
 
     @property
     def grouped(self) -> bool:

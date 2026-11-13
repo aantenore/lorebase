@@ -1155,14 +1155,35 @@ class Attempt(Model):
     auto_resolutions: list[dict[str, Any]]
 
 
+class SideProvenance(Model):
+    """Who or what last changed the Attribute of a Conflict on one side, and when."""
+
+    provenance_id: str
+    at: datetime
+    actor: str | None = None
+    origin: str | None = None
+    source: str | None = None
+    principal: str | None = None
+    labels: list[str] = Field(default_factory=list)
+
+
+class ConflictProvenance(Model):
+    """The provenance of the two competing sides; `None` for a side of unknown Lineage."""
+
+    ours: SideProvenance | None = None
+    theirs: SideProvenance | None = None
+
+
 class ConflictItem(Model):
-    """A Conflict: `id`, `status` and the members the merge engine reports."""
+    """A Conflict: `id`, `status` and the members the merge engine reports. `provenance` is
+    set on Attribute Conflicts whose merge knew who changed a side."""
 
     model_config = ConfigDict(extra="allow")
 
     id: str
     status: ConflictStatus
     resolution: dict[str, Any] | None = None
+    provenance: ConflictProvenance | None = None
 
 
 class Conflicts(Attempt):

@@ -5,6 +5,7 @@ import {
   messageOf,
   partitionName,
   policyReason,
+  sideChange,
   specOf,
 } from './conflict-meta';
 import { makeConflict } from '@/api/mock/conflicts';
@@ -69,6 +70,49 @@ describe('bulkChoiceLabel', () => {
 
   it('falls back to a general name when the kinds word the choice differently', () => {
     expect(bulkChoiceLabel([dropOn('XS9'), dropOn('XS1')], 'drop')).toBe('Drop');
+  });
+});
+
+describe('sideChange', () => {
+  const provenance = {
+    ours: {
+      provenance_id: 'prv_erp',
+      at: '2026-03-01T10:00:00Z',
+      actor: 'scribe',
+      origin: 'source_sync',
+      source: 'src_erp',
+      principal: null,
+      labels: ['actor:scribe', 'origin:source_sync', 'source:src_erp'],
+    },
+    theirs: {
+      provenance_id: 'prv_edit',
+      at: '2026-03-02T10:00:00Z',
+      actor: 'usr_analyst',
+      origin: 'operation',
+      principal: 'usr_analyst',
+    },
+  };
+
+  it('names the Source of a synced side and the principal of an edited one', () => {
+    expect(sideChange({ provenance }, 'ours')).toEqual({
+      who: 'source src_erp',
+      origin: 'source_sync',
+      at: '2026-03-01T10:00:00Z',
+      provenanceId: 'prv_erp',
+    });
+    expect(sideChange({ provenance }, 'theirs')).toMatchObject({
+      who: 'usr_analyst',
+      origin: 'operation',
+      provenanceId: 'prv_edit',
+    });
+  });
+
+  it('falls back to the actor, and is null without provenance for the side', () => {
+    const actorOnly = { ours: { provenance_id: 'prv_1', at: '2026-03-01T10:00:00Z', actor: 'a' } };
+    expect(sideChange({ provenance: actorOnly }, 'ours')?.who).toBe('a');
+    expect(sideChange({ provenance: actorOnly }, 'theirs')).toBeNull();
+    expect(sideChange({ provenance: null }, 'ours')).toBeNull();
+    expect(sideChange(conflict, 'ours')).toBeNull();
   });
 });
 

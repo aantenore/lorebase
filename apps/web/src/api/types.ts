@@ -861,6 +861,30 @@ export type ConflictCode =
 
 export type ResolutionChoice = 'ours' | 'theirs' | 'base' | 'custom' | 'drop' | 'restore' | 'relax';
 
+/** Who or what last changed the Attribute of a Conflict on one side, and when. */
+export interface SideProvenance {
+  /** The provenance entry of the change. */
+  provenance_id: string;
+  /** When the change was made (ISO 8601). */
+  at: string;
+  /** Who wrote the provenance entry. */
+  actor?: string | null;
+  /** Origin type: `source_sync`, `operation`, `extraction`, ... */
+  origin?: string | null;
+  /** Source id, for a Source sync. */
+  source?: string | null;
+  /** Principal, for an Operation. */
+  principal?: string | null;
+  /** Origin labels an `authority` ranking matches. */
+  labels?: string[];
+}
+
+/** The provenance of the two competing sides; `null` for a side of unknown Lineage. */
+export interface ConflictProvenance {
+  ours?: SideProvenance | null;
+  theirs?: SideProvenance | null;
+}
+
 /**
  * One Conflict of a merge attempt. `partition` and `key` locate the element (for schema
  * Conflicts the partition is `schema` and the key the element id); `attribute` is an
@@ -898,6 +922,11 @@ export interface Conflict {
    * kind without a person.
    */
   machine_resolvable: boolean;
+  /**
+   * Who or what changed each side and when; on Attribute Conflicts (`DV1`, `DV3`) whose merge
+   * knew the Lineage of a side, absent otherwise.
+   */
+  provenance?: ConflictProvenance | null;
   /** Keeper: the Conflict id, equal to `fingerprint`. */
   id?: string;
   /** Keeper: `resolved` when the attempt applied a stored Resolution. */

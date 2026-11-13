@@ -9,8 +9,10 @@ import httpx
 import pytest
 
 from lorebase_keeper.errors import ProblemError
-from lorebase_keeper.routes.proposals import _checks
+from lorebase_keeper.reading.sensitivity import Clearance, Masking
+from lorebase_keeper.routes.proposals import _checks, _conflict
 from lorebase_keeper.services.config import ProposalSettings
+from lorebase_keeper.services.proposal_reads import ConflictVisibility
 from lorebase_keeper.services.proposals import (
     RoleApproval,
     approval_of,
@@ -21,7 +23,7 @@ from lorebase_keeper.services.proposals import (
     role_approval,
 )
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
-from lorebase_store.repositories import DomainRow, ProposalRow, ReviewRow
+from lorebase_store.repositories import ConflictRow, DomainRow, ProposalRow, ReviewRow
 
 T0 = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 V = ReviewVerdict
@@ -190,3 +192,61 @@ def test_merge_check_states_no_count_for_partial_readers() -> None:
     assert hidden.status == "failed"
     assert hidden.message is not None
     assert "4" not in hidden.message
+
+
+def _stored_conflict(**extra: object) -> ConflictRow:
+    payload: dict[str, object] = {
+        "kind": "DV1",
+        "fingerprint": "ab" * 32,
+        "partition": "k/knd_supplier",
+        "key": "S-1001",
+        "attribute": "att_risk",
+        "base": 45,
+        "ours": 55,
+        "theirs": 80,
+        "details": {},
+        "members": [],
+        **extra,
+    }
+    return ConflictRow(
+        fingerprint="ab" * 32,
+        code="DV1",
+        partition="k/knd_supplier",
+        element_key="S-1001",
+        attribute_id="att_risk",
+        payload=payload,
+        member_count=1,
+    )
+
+
+def test_conflict_response_carries_who_and_when_of_each_side() -> None:
+    seen = ConflictVisibility(None, Masking(Clearance.full()))
+    provenance = {
+        "ours": {
+            "provenance_id": "prv_1",
+            "at": "2026-03-01T10:00:00+00:00",
+            "actor": "scribe",
+            "origin": "source_sync",
+            "source": "src_erp",
+            "principal": None,
+            "labels": ["actor:scribe", "origin:source_sync", "source:src_erp"],
+        },
+        "theirs": None,
+    }
+    out = _conflict(_stored_conflict(provenance=provenance), seen)
+    assert out.provenance is not None
+    assert out.provenance.ours is not None
+    assert out.provenance.ours.at == T0.replace(month=3, day=1, hour=10)
+    body = out.model_dump(mode="json")
+    assert body["provenance"] == {
+        "ours": {**provenance["ours"], "at": "2026-03-01T10:00:00Z"},
+        "theirs": None,
+    }
+    assert (body["ours"], body["theirs"], body["status"]) == (55, 80, "open")
+
+
+def test_conflict_response_without_known_lineage_has_null_provenance() -> None:
+    seen = ConflictVisibility(None, Masking(Clearance.full()))
+    out = _conflict(_stored_conflict(), seen)
+    assert out.provenance is None
+    assert out.model_dump(mode="json")["provenance"] is None

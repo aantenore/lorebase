@@ -822,6 +822,9 @@ def _summary(computation: AttemptComputation) -> dict[str, Any]:
 def _conflict_row(state: ConflictState, stored: Mapping[str, ResolutionRow]) -> ConflictRow:
     conflict = state.conflict
     payload = conflict.model_dump(mode="json")
+    if payload.get("provenance") is None:
+        # Stored only when the merge knew who changed a side: other payloads keep their shape.
+        payload.pop("provenance", None)
     payload["members"] = list(state.members)
     if state.rejected:
         payload["details"] = {**payload.get("details", {}), "rejected": REJECTED_DETAIL}

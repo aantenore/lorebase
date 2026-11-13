@@ -248,6 +248,11 @@ export const review = {
     added: 'added: ',
     removed: 'removed: ',
     withBranch: (side: string, branch: string) => `${side} (${branch})`,
+    source: (source: string) => `source ${source}`,
+    unknownAuthor: 'unknown author',
+    changedBy: (who: string, origin: string | null, at: string) =>
+      `changed by ${who}${origin === null ? '' : ` (${origin})`} at ${at}`,
+    provenance: (id: string) => `provenance ${id}`,
     path: 'Path',
     value: 'value',
     member: 'Member',

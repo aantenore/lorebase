@@ -178,7 +178,13 @@ What to expect and watch:
   resolutions.json` (a JSON array of `{fingerprint, choice}`, `ours` to keep the target's
   value, `theirs` to take upstream's) stores them all and re-runs the merge, as does
   `POST .../proposals/{p}/conflicts:resolve`; the Review screen of the web app offers the same
-  choices. Then merge the Proposal.
+  choices. An open Conflict on one Attribute (`DV1`, `DV3`) carries `provenance` with, for
+  `ours` and `theirs`, the last change of that Attribute on the side: `provenance_id`, `at`,
+  `actor`, `origin` (origin type), `source` (Source id of a sync), `principal` (of an
+  Operation) and the origin `labels`. A side whose Lineage is unknown is null, and
+  `provenance` is null on the other Conflict kinds, and for a reader who may not read the
+  Attribute's values (who changed a sensitive value, and from which Source, is masked with
+  it). Then merge the Proposal.
 - **Old behavior.** Set `local_edits: source_wins` on a Source (in the schema: the Modeler or
   `lorebase schema apply`) to let upstream values overwrite corrections again; `keep` lets a
   person's value win without review.

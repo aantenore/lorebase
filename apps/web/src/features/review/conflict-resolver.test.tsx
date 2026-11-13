@@ -78,6 +78,46 @@ describe('ConflictResolver choices', () => {
     expect(theirs).toHaveAttribute('data-changed', 'true');
   });
 
+  it('shows who changed ours and theirs, and when, next to the side titles', () => {
+    const conflict: Conflict = {
+      ...tier(),
+      provenance: {
+        ours: {
+          provenance_id: 'prv_erp',
+          at: '2026-03-01T10:00:00Z',
+          actor: 'scribe',
+          origin: 'source_sync',
+          source: 'src_erp',
+        },
+        theirs: {
+          provenance_id: 'prv_edit',
+          at: '2026-03-02T10:00:00Z',
+          actor: 'usr_analyst',
+          origin: 'operation',
+          principal: 'usr_analyst',
+        },
+      },
+    };
+    setup(conflict, { spec: tierSpec, branches: { ours: 'main', theirs: 'work' } });
+    const table = screen.getByRole('table', { name: 'Base, ours and theirs' });
+    const ours = within(table).getByRole('columnheader', { name: /^Ours \(main\)/ });
+    expect(ours).toHaveTextContent(
+      'changed by source src_erp (source_sync) at 2026-03-01T10:00:00Z',
+    );
+    expect(ours).toHaveTextContent('provenance prv_erp');
+    const theirs = within(table).getByRole('columnheader', { name: /^Theirs \(work\)/ });
+    expect(theirs).toHaveTextContent('changed by usr_analyst (operation) at 2026-03-02T10:00:00Z');
+    expect(theirs).toHaveTextContent('provenance prv_edit');
+    expect(table.querySelectorAll('[data-provenance]')).toHaveLength(2);
+  });
+
+  it('titles the sides alone when the Conflict carries no provenance', () => {
+    setup(tier(), { spec: tierSpec, branches: { ours: 'main', theirs: 'work' } });
+    const table = screen.getByRole('table', { name: 'Base, ours and theirs' });
+    expect(table.querySelector('[data-provenance]')).toBeNull();
+    expect(within(table).getByRole('columnheader', { name: 'Ours (main)' })).toBeInTheDocument();
+  });
+
   it('saves a picked side without a value', async () => {
     const conflict = tier();
     const { onSave, user } = setup(conflict, { spec: tierSpec });

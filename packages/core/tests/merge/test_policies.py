@@ -197,6 +197,67 @@ def test_schema_authority_ranks_the_attribute_source_first() -> None:
     assert result.auto_resolutions[0].choice is ResolutionChoice.THEIRS
 
 
+# provenance of open Conflicts ---------------------------------------------------------------
+
+
+def test_open_conflicts_carry_who_and_when_of_each_side() -> None:
+    scenario = _conflicting()
+    loader = lineage(scenario, *_both(edit(1, "alice", T2), sync(2, ERP, T1)))
+    result = attempt(scenario.merge(lineage=loader))
+    assert {c.attribute for c in result.conflicts} == {NAME, COUNTRY}
+    for conflict in result.conflicts:
+        provenance = conflict.provenance
+        assert provenance is not None
+        ours, theirs = provenance.ours, provenance.theirs
+        assert ours is not None
+        assert theirs is not None
+        assert (ours.provenance_id, ours.at) == (ident("prv", 1), "2026-03-02T10:00:00+00:00")
+        assert (ours.actor, ours.origin, ours.principal, ours.source) == (
+            "alice",
+            "operation",
+            "alice",
+            None,
+        )
+        assert (theirs.provenance_id, theirs.at) == (ident("prv", 2), "2026-03-01T10:00:00+00:00")
+        assert (theirs.actor, theirs.origin, theirs.principal, theirs.source) == (
+            "scribe",
+            "source_sync",
+            None,
+            ERP,
+        )
+        assert theirs.labels == tuple(sorted(origin_labels(sync(2, ERP, T1))))
+
+
+def test_open_conflicts_without_a_lineage_loader_carry_no_provenance() -> None:
+    scenario = _conflicting()
+    result = attempt(scenario.merge())
+    assert [c.provenance for c in result.conflicts] == [None, None]
+    assert "provenance" not in {
+        name for c in result.conflicts for name in c.model_dump(exclude_none=True)
+    }
+
+
+def test_a_side_of_unknown_lineage_is_left_out() -> None:
+    scenario = _conflicting()
+    one_sided = lineage(scenario, {}, {NAME: sync(2, ERP, T1)})
+    result = attempt(scenario.merge(lineage=one_sided))
+    by_attribute = {c.attribute: c.provenance for c in result.conflicts}
+    assert by_attribute[COUNTRY] is None
+    named = by_attribute[NAME]
+    assert named is not None
+    assert named.ours is None
+    assert named.theirs is not None
+    assert named.theirs.source == ERP
+
+
+def test_provenance_does_not_change_the_fingerprint() -> None:
+    scenario = _conflicting()
+    loader = lineage(scenario, *_both(edit(1, "alice", T2), sync(2, ERP, T1)))
+    plain = attempt(scenario.merge())
+    stamped = attempt(scenario.merge(lineage=loader))
+    assert [c.fingerprint for c in stamped.conflicts] == [c.fingerprint for c in plain.conflicts]
+
+
 # newest_wins ------------------------------------------------------------------------------
 
 

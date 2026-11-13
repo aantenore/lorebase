@@ -17,10 +17,12 @@ from lorebase_core.merge.conflicts import (
     AutoResolution,
     Conflict,
     ConflictKind,
+    ConflictProvenance,
     Resolution,
     ResolutionChoice,
     ResolutionError,
     Side,
+    SideProvenance,
     conflict_fingerprint,
 )
 from lorebase_core.merge.objects import ObjectStore, SchemaLoader, load_object
@@ -370,7 +372,25 @@ class Context:
 
     def report(self, conflict: Conflict) -> None:
         if not self.virtual:
-            self.conflicts.append(conflict)
+            self.conflicts.append(self.with_provenance(conflict))
+
+    def with_provenance(self, conflict: Conflict) -> Conflict:
+        """``conflict`` with who and when of each side, when a Lineage loader knows them.
+
+        Only Attribute Conflicts have a last change per side; without a loader, or when it
+        knows neither side, the Conflict is returned as it is.
+        """
+        if self.lineage is None or conflict.kind not in _ATTRIBUTE_KINDS:
+            return conflict
+        ours = self.lineage_entry(Side.OURS, conflict)
+        theirs = self.lineage_entry(Side.THEIRS, conflict)
+        if ours is None and theirs is None:
+            return conflict
+        provenance = ConflictProvenance(
+            ours=None if ours is None else _side_provenance(ours),
+            theirs=None if theirs is None else _side_provenance(theirs),
+        )
+        return conflict.model_copy(update={"provenance": provenance})
 
     def group(
         self,
@@ -429,6 +449,20 @@ class Context:
             else:
                 values.append(document.get("api_name"))
         return (values[0], values[1], values[2])
+
+
+def _side_provenance(stamp: ChangeStamp) -> SideProvenance:
+    labels = sorted(stamp.labels)
+    named = dict(label.split(":", 1) for label in labels)
+    return SideProvenance(
+        provenance_id=stamp.id,
+        at=stamp.at.isoformat(),
+        actor=named.get("actor"),
+        origin=named.get("origin"),
+        source=named.get("source"),
+        principal=named.get("principal"),
+        labels=tuple(labels),
+    )
 
 
 def other_side(side: Side) -> Side:

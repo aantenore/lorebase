@@ -175,6 +175,33 @@ export function specOf(conflict: Conflict, schema: Schema | undefined): ValueSpe
 const asText = (value: JsonValue | undefined) => (typeof value === 'string' ? value : null);
 const asCount = (value: JsonValue | undefined) => (typeof value === 'number' ? value : null);
 
+/** Who changed one side of a Conflict and when, as the resolver shows it. */
+export interface SideChange {
+  /** The Source, else the principal, else the actor of the change. */
+  who: string;
+  /** Origin type of the change, when known. */
+  origin: string | null;
+  at: string;
+  provenanceId: string;
+}
+
+/**
+ * The last change of the Conflict's Attribute on `side`, from the provenance Keeper attaches
+ * to open Attribute Conflicts. `null` when the Conflict carries none for that side.
+ */
+export function sideChange(
+  conflict: Pick<Conflict, 'provenance'>,
+  side: 'ours' | 'theirs',
+): SideChange | null {
+  const found = conflict.provenance?.[side];
+  if (found === undefined || found === null) return null;
+  const who =
+    found.source != null
+      ? reviewMessages.sides.source(found.source)
+      : (found.principal ?? found.actor ?? reviewMessages.sides.unknownAuthor);
+  return { who, origin: found.origin ?? null, at: found.at, provenanceId: found.provenance_id };
+}
+
 /**
  * Why a Lineage-based policy picked its side, from the details of the automatic resolution:
  * the winning and losing origins (`authority`), change times (`newest_wins`) or the changes

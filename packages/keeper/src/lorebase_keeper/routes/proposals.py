@@ -265,14 +265,45 @@ class AttemptOut(BaseModel):
     auto_resolutions: list[dict[str, Any]]
 
 
+class SideProvenanceOut(BaseModel):
+    """Who or what last changed the Attribute of a Conflict on one side, and when."""
+
+    provenance_id: str = Field(description="Provenance entry of the change.")
+    at: datetime = Field(description="When the change was made.")
+    actor: str | None = Field(default=None, description="Who wrote the provenance entry.")
+    origin: str | None = Field(
+        default=None, description="Origin type: `source_sync`, `operation`, `extraction`, ..."
+    )
+    source: str | None = Field(default=None, description="Source id, for a Source sync.")
+    principal: str | None = Field(default=None, description="Principal, for an Operation.")
+    labels: list[str] = Field(
+        default_factory=list, description="Origin labels an `authority` ranking matches."
+    )
+
+
+class ConflictProvenanceOut(BaseModel):
+    """The provenance of the two competing sides; null for a side of unknown Lineage."""
+
+    ours: SideProvenanceOut | None = None
+    theirs: SideProvenanceOut | None = None
+
+
 class ConflictOut(BaseModel):
-    """A Conflict (core `Conflict`) with its id, state and members."""
+    """A Conflict (core `Conflict`) with its id, state and members.
+
+    `provenance` is set on Attribute Conflicts (`DV1`, `DV3`) whose merge knew the Lineage of
+    at least one side, and null otherwise.
+    """
 
     model_config = {"extra": "allow"}
 
     id: str
     status: Literal["open", "resolved"]
     resolution: dict[str, Any] | None = None
+    provenance: ConflictProvenanceOut | None = Field(
+        default=None,
+        description="Who or what changed each side and when; null when the merge did not know it.",
+    )
 
 
 class ConflictsOut(AttemptOut):

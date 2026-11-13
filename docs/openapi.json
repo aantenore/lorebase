@@ -14058,6 +14058,17 @@
               }
             ],
             "title": "Resolution"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConflictProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who or what changed each side and when; null when the merge did not know it."
           }
         },
         "additionalProperties": true,
@@ -14067,7 +14078,34 @@
           "status"
         ],
         "title": "ConflictOut",
-        "description": "A Conflict (core `Conflict`) with its id, state and members."
+        "description": "A Conflict (core `Conflict`) with its id, state and members.\n\n`provenance` is set on Attribute Conflicts (`DV1`, `DV3`) whose merge knew the Lineage of\nat least one side, and null otherwise."
+      },
+      "ConflictProvenanceOut": {
+        "properties": {
+          "ours": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SideProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "theirs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SideProvenanceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "ConflictProvenanceOut",
+        "description": "The provenance of the two competing sides; null for a side of unknown Lineage."
       },
       "ConflictsOut": {
         "properties": {
@@ -23726,6 +23764,84 @@
         ],
         "title": "SessionInfo",
         "description": "The browser session of the caller."
+      },
+      "SideProvenanceOut": {
+        "properties": {
+          "provenance_id": {
+            "type": "string",
+            "title": "Provenance Id",
+            "description": "Provenance entry of the change."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At",
+            "description": "When the change was made."
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor",
+            "description": "Who wrote the provenance entry."
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin",
+            "description": "Origin type: `source_sync`, `operation`, `extraction`, ..."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Source id, for a Source sync."
+          },
+          "principal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal",
+            "description": "Principal, for an Operation."
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Labels",
+            "description": "Origin labels an `authority` ranking matches."
+          }
+        },
+        "type": "object",
+        "required": [
+          "provenance_id",
+          "at"
+        ],
+        "title": "SideProvenanceOut",
+        "description": "Who or what last changed the Attribute of a Conflict on one side, and when."
       },
       "SourceFreshness": {
         "properties": {

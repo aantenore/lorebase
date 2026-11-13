@@ -2646,6 +2646,9 @@ export interface components {
         /**
          * ConflictOut
          * @description A Conflict (core `Conflict`) with its id, state and members.
+         *
+         *     `provenance` is set on Attribute Conflicts (`DV1`, `DV3`) whose merge knew the Lineage of
+         *     at least one side, and null otherwise.
          */
         ConflictOut: {
             /** Id */
@@ -2659,8 +2662,18 @@ export interface components {
             resolution?: {
                 [key: string]: unknown;
             } | null;
+            /** @description Who or what changed each side and when; null when the merge did not know it. */
+            provenance?: components["schemas"]["ConflictProvenanceOut"] | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * ConflictProvenanceOut
+         * @description The provenance of the two competing sides; null for a side of unknown Lineage.
+         */
+        ConflictProvenanceOut: {
+            ours?: components["schemas"]["SideProvenanceOut"] | null;
+            theirs?: components["schemas"]["SideProvenanceOut"] | null;
         };
         /**
          * ConflictsOut
@@ -6518,6 +6531,48 @@ export interface components {
              * @description The session ends after this long without use.
              */
             idle_timeout_s: number;
+        };
+        /**
+         * SideProvenanceOut
+         * @description Who or what last changed the Attribute of a Conflict on one side, and when.
+         */
+        SideProvenanceOut: {
+            /**
+             * Provenance Id
+             * @description Provenance entry of the change.
+             */
+            provenance_id: string;
+            /**
+             * At
+             * Format: date-time
+             * @description When the change was made.
+             */
+            at: string;
+            /**
+             * Actor
+             * @description Who wrote the provenance entry.
+             */
+            actor?: string | null;
+            /**
+             * Origin
+             * @description Origin type: `source_sync`, `operation`, `extraction`, ...
+             */
+            origin?: string | null;
+            /**
+             * Source
+             * @description Source id, for a Source sync.
+             */
+            source?: string | null;
+            /**
+             * Principal
+             * @description Principal, for an Operation.
+             */
+            principal?: string | null;
+            /**
+             * Labels
+             * @description Origin labels an `authority` ranking matches.
+             */
+            labels?: string[];
         };
         /**
          * SourceFreshness

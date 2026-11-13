@@ -2,6 +2,12 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade. Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## Unreleased
+
+### Added
+
+- Open merge Conflicts say who changed each side and when ([operations](docs/operations.md), [tour](docs/tour.md#review)): an Attribute Conflict (`DV1`, `DV3`) carries `provenance` with, for `ours` and `theirs`, the `provenance_id`, the time `at`, the `actor`, the `origin` type, the `source` of a sync, the `principal` of an Operation and the origin `labels` of the last change of that Attribute, when the merge has a Lineage loader (Keeper always wires one). It is null on the other Conflict kinds and for a side of unknown Lineage, it is withheld with the values from a reader without clearance for a sensitive Attribute (and when it names something the reader's schema leaves out), and it is not part of the fingerprint. `GET .../proposals/{p}/conflicts`, the OpenAPI document (`ConflictOut.provenance`), the Python client (`ConflictItem.provenance`) and the Review resolver of the web app, which shows it under the Ours and Theirs headers, carry it
+
 ## 0.3.1 - 2026-11-06
 
 A patch for the first contact with the project: the published images run on arm64, the PyPI packages carry their license and links, a Scribe worker keeps all its slots when the database fails while it records a job and gets a liveness check, the console scripts answer `--help`, and the quickstart commands point at the Keeper they started. No migration and no breaking change. Three new settings, all optional: `scribe.worker.outcome_retry_delay_s`, `scribe.worker.liveness_file` and `scribe.worker.liveness_interval_s`. The lines link the documentation of each change: the work landed directly on `main`, without pull requests to link.

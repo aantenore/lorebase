@@ -45,6 +45,7 @@ from lorebase_keeper.reading.sensitivity import (
     require_lowering,
 )
 from lorebase_keeper.routes.proposal_items import _scrub, _shown
+from lorebase_keeper.routes.proposals import _conflict
 from lorebase_keeper.services.operations import (
     REDACTED_ERROR,
     _expression_finding,
@@ -52,7 +53,9 @@ from lorebase_keeper.services.operations import (
     recorded_parameters,
     resolve,
 )
+from lorebase_keeper.services.proposal_reads import ConflictVisibility
 from lorebase_keeper.settings import SensitivitySettings
+from lorebase_store.repositories import ConflictRow
 
 KIND = "knd_01JB8Z00000000000000000001"
 CODE, NAME, PHONE, EMAIL, SECRET = (f"att_01JB8Z0000000000000000000{n}" for n in range(1, 6))
@@ -243,6 +246,68 @@ def test_conflicts_over_masked_values_are_masked() -> None:
     assert shown["ours"] == {"values": {NAME: "Ada", PHONE: "***"}}
     unknown = {**payload, "attribute": "att_01JB8Z00000000000000000099"}
     assert mask_conflict(unknown, SCHEMA, Masking(Clearance()))["ours"] == "***"
+
+
+_PROVENANCE = {
+    "ours": {
+        "provenance_id": "prv_1",
+        "at": "2026-03-01T10:00:00+00:00",
+        "actor": "scribe",
+        "origin": "source_sync",
+        "source": "src_hr",
+        "principal": None,
+        "labels": ["actor:scribe", "origin:source_sync", "source:src_hr"],
+    },
+    "theirs": None,
+}
+
+
+def _attribute_conflict(attribute: str) -> ConflictRow:
+    payload = {
+        "kind": "DV1",
+        "fingerprint": "ab" * 32,
+        "partition": kind_partition(KIND),
+        "key": "E-1",
+        "attribute": attribute,
+        "base": "1",
+        "ours": "2",
+        "theirs": "3",
+        "message": "2 against 3",
+        "details": {},
+        "provenance": _PROVENANCE,
+        "members": [],
+    }
+    return ConflictRow(
+        fingerprint="ab" * 32,
+        code="DV1",
+        partition=kind_partition(KIND),
+        element_key="E-1",
+        attribute_id=attribute,
+        payload=payload,
+        member_count=1,
+    )
+
+
+def test_who_changed_a_sensitive_attribute_is_shown_to_cleared_readers_only() -> None:
+    sensitive = _attribute_conflict(PHONE)
+    uncleared = ConflictVisibility(SCHEMA, Masking(Clearance()))
+    cleared = ConflictVisibility(SCHEMA, Masking(Clearance.full()))
+    masked = mask_conflict(sensitive.payload, SCHEMA, Masking(Clearance()))
+    assert "provenance" not in masked
+    hidden = _conflict(sensitive, uncleared)
+    assert hidden.provenance is None
+    body = hidden.model_dump_json()
+    assert "src_hr" not in body
+    assert "prv_1" not in body
+    shown = _conflict(sensitive, cleared)
+    assert shown.provenance is not None
+    assert shown.provenance.ours is not None
+    assert shown.provenance.ours.source == "src_hr"
+    # An Attribute anyone may read keeps its provenance for every reader.
+    plain = _conflict(_attribute_conflict(NAME), uncleared)
+    assert plain.provenance is not None
+    assert plain.provenance.ours is not None
+    assert plain.provenance.ours.provenance_id == "prv_1"
 
 
 class FakeAuthorizer:

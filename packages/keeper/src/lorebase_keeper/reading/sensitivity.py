@@ -862,8 +862,9 @@ def mask_conflict(
     payload: Mapping[str, Any], schema: Schema | None, masking: Masking
 ) -> dict[str, Any]:
     """A stored Conflict with the values the caller may not read masked: the three versions
-    of a sensitive Attribute (with the message and details, which may quote them), or the
-    sensitive entries of whole value maps."""
+    of a sensitive Attribute (with the message and details, which may quote them, and the
+    provenance of the sides, which says who changed the value, from which Source and when),
+    or the sensitive entries of whole value maps."""
     out = dict(payload)
     located = _element_attributes(schema, str(payload.get("partition", "")))
     if located is None:
@@ -874,6 +875,7 @@ def mask_conflict(
                 out[name] = masking.masked
         out["message"] = "The versions of a sensitive Attribute differ."
         out["details"] = {}
+        out.pop("provenance", None)
         return out
     if payload.get("attribute") is None:
         attributes, kinds = located

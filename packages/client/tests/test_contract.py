@@ -117,6 +117,8 @@ RESPONSES: dict[type[m.Model], str] = {
     m.Approval: "ApprovalOut",
     m.Resolution: "ResolutionOut",
     m.Attempt: "AttemptOut",
+    m.SideProvenance: "SideProvenanceOut",
+    m.ConflictProvenance: "ConflictProvenanceOut",
     m.ConflictItem: "ConflictOut",
     m.Conflicts: "ConflictsOut",
     m.Proposal: "lorebase_keeper__routes__proposals__ProposalOut",

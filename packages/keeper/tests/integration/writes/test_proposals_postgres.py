@@ -551,6 +551,35 @@ async def test_lineage_policies_resolve_conflicts_from_provenance(
         assert city["provenance"]["origin"]["resolver"] == "policy:newest_wins"
 
 
+async def test_open_conflicts_say_who_changed_each_side_and_when(
+    keeper: Any, installation_admin: Any, loader: Loader
+) -> None:
+    """An open Attribute Conflict carries the provenance of ours and theirs, read from the
+    Lineage of both branches in Postgres."""
+    admin = installation_admin.headers
+    async with keeper(proposals={"required_approvals": 0}) as http:
+        await setup_domain(http, admin, loader, "left", "right")
+        await loader.edit("left", "S-1001", city="Gdansk")
+        await loader.edit("right", "S-1001", city="Warsaw")  # the later change
+
+        opened = await http.post(PROPOSALS, json=proposal_body("right", "left"), headers=admin)
+        assert opened.status_code == 201, opened.text
+        proposal = opened.json()
+        assert proposal["attempt"]["open_conflicts"] == 1
+        listed = await http.get(f"{PROPOSALS}/{proposal['id']}/conflicts", headers=admin)
+        assert listed.status_code == 200, listed.text
+        [conflict] = listed.json()["conflicts"]
+        assert (conflict["kind"], conflict["key"], conflict["attribute"]) == ("DV1", "S-1001", CITY)
+        ours, theirs = conflict["provenance"]["ours"], conflict["provenance"]["theirs"]
+        for side in (ours, theirs):
+            assert side["provenance_id"]
+            assert side["actor"]
+            assert side["origin"]
+            assert {f"actor:{side['actor']}", f"origin:{side['origin']}"} <= set(side["labels"])
+        assert ours["provenance_id"] != theirs["provenance_id"]
+        assert theirs["at"] > ours["at"]
+
+
 async def test_deleting_a_domain_removes_its_history_and_keeps_the_audit_log(
     keeper: Any, installation_admin: Any, loader: Loader
 ) -> None:

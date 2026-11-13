@@ -206,16 +206,17 @@ class ConflictVisibility:
         return any(i in text for i in self.left_out)
 
     def scrub(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """`payload` without the values of Attributes left out, and without a message or
-        details naming something left out."""
+        """`payload` without the values of Attributes left out, and without a message,
+        details or provenance naming something left out."""
         if not self.left_out:
             return payload
         out = dict(payload)
         for name in (*_CONFLICT_SIDES, "values"):
             out[name] = _without(out.get(name), self.left_out)
-        if self.names_left_out([out.get("message"), out.get("details")]):
+        if self.names_left_out([out.get("message"), out.get("details"), out.get("provenance")]):
             out["message"] = "The versions differ."
             out["details"] = {}
+            out.pop("provenance", None)
         return out
 
 
