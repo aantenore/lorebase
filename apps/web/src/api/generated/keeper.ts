@@ -2678,7 +2678,7 @@ export interface components {
             attribute?: string | null;
             /**
              * Competing Hash
-             * @description Hash of the competing Record on the Proposal's source side; null when the caller may not read the Attribute's values.
+             * @description Hash of the competing Record on the Proposal's source side.
              */
             competing_hash?: string | null;
         };
