@@ -276,6 +276,21 @@ A typed field of a Kind, or of a Relation as a link Attribute
   the reconciliation queue tells a superseded value from a contradiction
   ([Scribe](scribe.md#reconciliation)).
 
+### One Attribute, one meaning
+
+The merge engine reports a value Conflict when the same Attribute id changed differently on
+both sides. It compares values, not meanings. If two sources measure different things, say a
+financial risk score from payment history and an overall risk score that includes audits,
+and both write `risk_score`, the engine reports a Conflict that is not a real disagreement
+and cannot tell. Model each measure as its own Attribute (`risk_financial`, `risk_overall`)
+so each one conflicts only with other changes of the same measure.
+
+Where several sources do measure the same thing, declare who may speak for it with
+`authority: SOURCE` and let the merge policies rank by it
+([merge policies](governance.md#merge-policies), [lineage the policies read](governance.md#lineage-the-policies-read)).
+A Conflict left open shows the base, ours and theirs values and their hashes, not who wrote
+them or when; the Lineage is read only by the policies.
+
 ## Relations
 
 A typed, directional connection between two Kinds ([design 5.5](design.md#55-relation)), keyed

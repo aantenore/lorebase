@@ -101,6 +101,40 @@ Rules are tried from the most specific to the least: per Attribute `prefer`, `au
 `policy:{name}`; when none decides, a person does. A resolution a person stored always comes
 first.
 
+### Lineage the policies read
+
+`authority` and `newest_wins` decide from the provenance entry of the last change of the
+Attribute on each side, not from the values. What they record in the resolution `details`:
+
+| Policy | Resolver | `details` |
+|--------|----------|-----------|
+| `authority` | `policy:authority` | `ours_origin`, `theirs_origin` (the ranked label each side matched, or null), `ours_provenance`, `theirs_provenance` |
+| `newest_wins` | `policy:newest_wins` | `ours_at`, `theirs_at`, `ours_provenance`, `theirs_provenance`, and `tie_break: provenance_id` when the times are equal (the greater id wins) |
+
+Neither policy decides on `DV2` or schema Conflicts, when a side has no stamp, when both sides
+rank the same (`authority`) or when the entries are the same (`newest_wins`). A Conflict that
+no rule decides stays open and shows the competing values and their hashes only: it does not
+say which policy was tried or why it did not decide.
+
+Keeper reads the stamps from the materialized heads of both branches and from the provenance
+table. A custom loader (`MergeInput.lineage`) must return a stamp per Attribute built with
+`ChangeStamp.from_stored`, which gives the origin labels only if the stored entry is a valid
+provenance entry:
+
+- the entry id looks like `prv_<ULID>`, and a Source's id like `src_<ULID>` (ULID: 26
+  characters of Crockford base32);
+- an `operation` origin has an `invocation_id`, an `operation` and a `principal`; a
+  `source_sync` origin has a `source_id` and a `run_id`;
+- `at` is a timestamp (a naive one is read as UTC).
+
+When the entry does not validate, `from_stored` does not fail: the stamp keeps its id and time
+but only the `origin:{type}` and `actor:{actor}` labels. A ranking on `source:`, `principal:`
+or `operation:` then never matches, `authority` does not decide, and the Conflict stays open
+with no hint of the reason (`newest_wins` still compares the times). The same holds for the
+entry of a whole commit or merge, which is not a Lineage origin. If the provenance id of an
+Attribute is not found in the provenance table, there is no stamp at all and no policy decides.
+Rank on `actor:` or `origin:` labels, or fix the stored entries, when a ranking never fires.
+
 ### Text merge
 
 Two different values of a `text` Attribute that both started from the same base value are
