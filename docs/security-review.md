@@ -77,8 +77,8 @@ or the reference only. Test: `test_source_connections.py`.
 **F3. Anonymous mode is refused off loopback** (`packages/keeper/src/lorebase_keeper/settings.py`).
 `auth.mode: none` accepts every request as an installation administrator. Keeper now refuses to
 start with that mode and a `keeper.host` that is not loopback unless `keeper.auth.allow_insecure`
-is true. The compose stack sets the flag through `KEEPER_ALLOW_INSECURE`, since it publishes the
-port on `127.0.0.1`. Test: `packages/keeper/tests/test_settings.py`.
+is true. The compose stack leaves the flag false unless `KEEPER_ALLOW_INSECURE` is set; `.env.example`
+sets it for the local quickstart, which publishes the port on `127.0.0.1`. Test: `packages/keeper/tests/test_settings.py`.
 
 The pepper (at least 32 characters) is required with `api_key` and `api_key+oidc`, and
 `oidc.issuer` with `oidc.audience` with `oidc` and `api_key+oidc` (`auth/config.py`,

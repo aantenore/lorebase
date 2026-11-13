@@ -124,10 +124,11 @@ x-keeper: &keeper
     LOREBASE_CONFIG: /etc/lorebase/lorebase.yaml
     LOREBASE__KEEPER__HOST: 0.0.0.0
     # The container listens on all its interfaces so that the published port works; with the
-    # example configuration (auth.mode none) Keeper refuses that unless this flag is set. Only
-    # safe while KEEPER_BIND keeps the port on 127.0.0.1: set it to false and choose an auth
-    # mode before publishing Keeper anywhere else.
-    LOREBASE__KEEPER__AUTH__ALLOW_INSECURE: ${KEEPER_ALLOW_INSECURE:-true}
+    # example configuration (auth.mode none) Keeper refuses that unless this flag is set. Off
+    # unless the environment file turns it on: .env.example does, for the local quickstart
+    # only, which is safe while KEEPER_BIND keeps the port on 127.0.0.1. Leave it false and
+    # choose an auth mode for anything else.
+    LOREBASE__KEEPER__AUTH__ALLOW_INSECURE: ${KEEPER_ALLOW_INSECURE:-false}
     LOREBASE__KEEPER__PORT: ${KEEPER_PORT:-8080}
     LOREBASE__KEEPER__READS__PREFER_REPLICA: ${KEEPER_PREFER_REPLICA:-false}
     # Rate limit buckets: local (per Keeper) or postgres (shared; set it with scale-out).

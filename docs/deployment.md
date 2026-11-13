@@ -293,6 +293,11 @@ LOREBASE__KEEPER__OPERATIONS__DIRECT_COMMIT_ON_PROTECTED=true
 Any other setting goes into a copy of `config/lorebase.example.yaml` named by
 `LOREBASE_CONFIG_FILE`, or into an overlay compose file (`COMPOSE_OVERLAYS`).
 
+`KEEPER_ALLOW_INSECURE` (`keeper.auth.allow_insecure`) defaults to false in the compose file.
+`.env.example` sets it to true for the local quickstart, where Keeper runs with `auth.mode: none`
+on `127.0.0.1`. In production leave it false (or remove the line from `.env`) and set an `api_key`
+or `oidc` mode: Keeper then refuses to start with authentication off.
+
 ## Docker compose profile `scale-out`
 
 Adds a second Keeper (`keeper-2`), a Postgres streaming replica (`postgres-replica`), a one-shot

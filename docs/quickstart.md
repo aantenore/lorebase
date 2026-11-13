@@ -75,7 +75,9 @@ with random values (`openssl rand -hex 24`), and `LOREBASE_WEBHOOK_KEY`, the key
 webhook signing keys, with `openssl rand -hex 32`; an existing `.env` keeps its values. Without
 make: `cp .env.example .env`, then set the three yourself (URL-safe characters only for the
 passwords: they are embedded in connection strings). The other values have working defaults; this is where you
-change ports and `COMPOSE_PROJECT_NAME`.
+change ports and `COMPOSE_PROJECT_NAME`. One of them, `KEEPER_ALLOW_INSECURE=true`, is what lets this
+local stack run with authentication off: it is for local use only, and the compose file defaults to
+false without it.
 
 ### 2.3 Start Postgres, Keeper and the web app
 
