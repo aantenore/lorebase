@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-client"
-version = "0.3.1"
+version = "0.4.0"
 description = "Lorebase client: typed sync and async HTTP client for the Keeper API"
 requires-python = ">=3.12"
 readme = "README.md"

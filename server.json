@@ -3,7 +3,7 @@
   "name": "io.github.aantenore/lorebase-herald",
   "title": "Lorebase",
   "description": "Read and change a governed, versioned knowledge graph on Postgres through typed tools.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "websiteUrl": "https://aantenore.github.io/lorebase/mcp/",
   "repository": {
     "url": "https://github.com/aantenore/lorebase",
@@ -15,7 +15,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "lorebase-herald",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -42,7 +42,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/aantenore/lorebase:0.3.1",
+      "identifier": "ghcr.io/aantenore/lorebase:0.4.0",
       "transport": {
         "type": "stdio"
       },

@@ -1,6 +1,6 @@
 [project]
 name = "lorebase-cli"
-version = "0.3.1"
+version = "0.4.0"
 description = "Lorebase CLI"
 requires-python = ">=3.12"
 readme = "README.md"
@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: Database",
 ]
 dependencies = [
-  "lorebase-client>=0.3,<0.4",
+  "lorebase-client>=0.4,<0.5",
   # Command line framework with shell completion.
   "typer>=0.27",
 ]

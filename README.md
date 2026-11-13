@@ -33,7 +33,7 @@ The agent then calls `lorebase_search` with `{"query": "bearing", "kinds": ["Par
 
 No model ran to answer it. Cursor, VS Code and other hosts take the same `uvx lorebase-herald` command ([MCP host configuration](docs/mcp.md#mcp-host-configuration)); a Keeper with authentication on also needs `LOREBASE_API_KEY`.
 
-> **Pre-alpha, v0.3.1.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](docs/quickstart.md) is the place to start and the [validation record](docs/validation.md) the place to check the claims.
+> **Pre-alpha, v0.4.0.** The versioning and merge engine, the Keeper REST API, the MCP server (Herald), the Python client, the `lorebase` CLI, Scribe (Sources, document extraction, embeddings) and the web app run today, and interfaces may change before 1.0. [Status and roadmap](#status-and-roadmap) lists what is open. The [quickstart](docs/quickstart.md) is the place to start and the [validation record](docs/validation.md) the place to check the claims.
 
 ## 30-second demo
 
@@ -105,7 +105,7 @@ Lorebase sits between proprietary ontology platforms, versioned databases, graph
 
 ## Status and roadmap
 
-Pre-alpha. [v0.3.1](https://github.com/aantenore/lorebase/releases/tag/v0.3.1) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](CHANGELOG.md) and the [release process](docs/release.md). Interfaces may change, and before 1.0 any minor version may change them. Open: the performance targets of design 6.14 at 10M Records on the 32 GB reference hardware, and the API stability guarantees for `/api/v1`, which bind from 1.0 ([API stability](docs/api-stability.md)). The [roadmap](docs/roadmap.md) tracks every item and the [validation record](docs/validation.md) lists the runs behind what is described here.
+Pre-alpha. [v0.4.0](https://github.com/aantenore/lorebase/releases/tag/v0.4.0) is the current release (the first was [v0.1.0](https://github.com/aantenore/lorebase/releases/tag/v0.1.0)); see the [CHANGELOG](CHANGELOG.md) and the [release process](docs/release.md). Interfaces may change, and before 1.0 any minor version may change them. Open: the performance targets of design 6.14 at 10M Records on the 32 GB reference hardware, and the API stability guarantees for `/api/v1`, which bind from 1.0 ([API stability](docs/api-stability.md)). The [roadmap](docs/roadmap.md) tracks every item and the [validation record](docs/validation.md) lists the runs behind what is described here.
 
 ## Documentation
 
