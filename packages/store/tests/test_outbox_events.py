@@ -15,6 +15,7 @@ from lorebase_store.outbox_events import (
     sensitive_value,
     subscribed,
 )
+from lorebase_store.review_events import REVIEW_EVENT_TYPES
 from lorebase_store.vault import VaultState, VaultValue
 
 TOKEN = "vlt_" + "a" * 32
@@ -32,6 +33,21 @@ def test_event_types() -> None:
     assert subscribed("operation.x", ["operation.x"])
     assert not subscribed("operation.x", ["operation.y", "revision.committed"])
     assert not subscribed("revision.committed", ["operation.*"])
+
+
+def test_proposal_and_conflict_events_are_opt_in() -> None:
+    names = (*REVIEW_EVENT_TYPES, "proposal.*", "conflict.*")
+    for name in names:
+        assert event_type_problem(name) is None
+    for name in ("proposal.reviewed", "conflict.*.x", "proposal", "conflict.opened.x"):
+        assert event_type_problem(name) is not None
+    assert not set(REVIEW_EVENT_TYPES) & set(EVENT_TYPES)
+    for name in REVIEW_EVENT_TYPES:
+        assert not subscribed(name, EVENT_TYPES)  # the default subscription
+    assert subscribed("proposal.merged", ["proposal.*"])
+    assert subscribed("conflict.opened", ["conflict.*"])
+    assert not subscribed("conflict.opened", ["proposal.*", "operation.*"])
+    assert not subscribed("operation.x", ["proposal.*", "conflict.*"])
 
 
 def payload() -> dict[str, Any]:
