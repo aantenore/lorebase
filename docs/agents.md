@@ -674,7 +674,10 @@ webhook created later starts with the next change. Each merge attempt writes at 
 `webhooks.conflict_events_max` (200) events of each Conflict type; past it, one more event of
 that type carries `count` (the total) and `truncated: true` instead of a `conflict`, so read the
 rest with `GET .../proposals/{p}/conflicts`. That event counts every Conflict of the type, so
-only a webhook that may read all of them receives it.
+only a webhook that may read all of them receives it. The cap is applied before the audience
+filter: a webhook not cleared for some of the first events of a large attempt receives fewer
+of them, none of the later ones and no summary. A receiver that needs every Conflict reads the
+Proposal's conflicts endpoint after a Proposal event instead of counting events.
 
 ```json
 {"type": "conflict.opened", "sequence": 913, "domain": "supply", "branch": "main",
@@ -709,8 +712,10 @@ old one).
 resolutions are re-applied by fingerprint ([design 6.10](design.md)). Only Conflicts that are
 new, whose fingerprint changed, or that are open again write `conflict.opened`; a resolution
 carried over writes nothing again, and a recompute that leaves the Conflicts as they were
-writes no event. Concurrent recomputes of one Proposal are serialized on its row, so each
-Conflict is announced once. Closing a Proposal writes only `proposal.closed`: no event for its
+writes no event. Concurrent recomputes and merges of one Proposal are serialized on its row
+(`FOR NO KEY UPDATE`, waiting at most `commit.lock_timeout_ms`, then `503 branch-busy`), so
+each Conflict is announced once; a recompute that waited reads the Proposal and the heads again
+and does nothing on a Proposal merged or closed meanwhile. Closing a Proposal writes only `proposal.closed`: no event for its
 Conflicts. A Source sync that met local edits (design 9.1) decides some Conflicts itself in the
 attempt after the one that reported them, so such a sync can write a `conflict.opened` followed
 by its `conflict.resolved`.
