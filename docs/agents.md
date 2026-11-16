@@ -657,7 +657,7 @@ moves, instead of inferring it from commits or polling the Proposals:
 | Event | When |
 |-------|------|
 | `proposal.opened` | A Proposal is created (by a person, an agent write, a Source sync or an extraction) |
-| `proposal.updated` | Its title or description changes; `changed` names which, never the text |
+| `proposal.updated` | Its title, description or policies change (an update with the same values is not one); `changed` names which, never the text |
 | `proposal.merged` | It merges; `revision` is the new head of the target |
 | `proposal.closed` | It is closed unmerged |
 | `conflict.opened` | A merge attempt reports a Conflict the previous attempt did not report open |
@@ -667,6 +667,14 @@ Each is written in the transaction of the change, so it exists only if the chang
 and is delivered like any other event (signed, at least once, `Idempotency-Key`, retries). In a
 merge the order of `sequence` is: the `conflict.resolved` the merge applied, then
 `revision.committed`, the deferred Operation events and `proposal.merged`.
+
+Conflict events are written only while some webhook of the Domain subscribes to them (one
+lookup per merge attempt). A webhook never receives events written before it was created, so a
+webhook created later starts with the next change. Each merge attempt writes at most
+`webhooks.conflict_events_max` (200) events of each Conflict type; past it, one more event of
+that type carries `count` (the total) and `truncated: true` instead of a `conflict`, so read the
+rest with `GET .../proposals/{p}/conflicts`. That event counts every Conflict of the type, so
+only a webhook that may read all of them receives it.
 
 ```json
 {"type": "conflict.opened", "sequence": 913, "domain": "supply", "branch": "main",
@@ -688,14 +696,24 @@ Conflict about an Attribute only to a webhook cleared for every tag of that Attr
 on the target, source and default branches, carried through Derivations; an Attribute none of
 them knows needs every tag). Otherwise the event is not delivered at all: no masked entry tells
 that the Proposal or the Conflict exists, the rule `conflict_in_progress` applies to readers.
-A webhook limited to `branches: ["main"]` therefore receives no event about a Proposal from a
-task branch; leave `branches` unset or list the source branches too.
+A webhook limited to `branches: ["main"]` therefore never receives an event about a Proposal
+from another branch; leave `branches` unset or list the source branches too. The check is made
+again when a delivery is sent (retries included): a delivery whose branches or tags the webhook
+no longer covers, after its clearances were narrowed, is marked `dead` without being sent.
+
+**Existing webhooks.** The event list of a webhook is fixed when it is created; an existing
+webhook opts in by being created again with `events` naming the new types (and deleting the
+old one).
 
 **Recomputed attempts.** When a head moves, the attempt is recomputed and the stored
 resolutions are re-applied by fingerprint ([design 6.10](design.md)). Only Conflicts that are
 new, whose fingerprint changed, or that are open again write `conflict.opened`; a resolution
 carried over writes nothing again, and a recompute that leaves the Conflicts as they were
-writes no event. Closing a Proposal writes `proposal.closed` and no event for its Conflicts.
+writes no event. Concurrent recomputes of one Proposal are serialized on its row, so each
+Conflict is announced once. Closing a Proposal writes only `proposal.closed`: no event for its
+Conflicts. A Source sync that met local edits (design 9.1) decides some Conflicts itself in the
+attempt after the one that reported them, so such a sync can write a `conflict.opened` followed
+by its `conflict.resolved`.
 
 ## 6. Check the health of the data
 
