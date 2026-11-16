@@ -21,6 +21,8 @@ A pass, safe to run concurrently in several workers (rows are claimed with `SKIP
    second lookup (DNS rebinding) cannot redirect the request to an internal service. The body
    is rendered for the webhook when it is claimed (`outbox_events.disclose`): sensitive values
    are masked unless the webhook is cleared for their tags, vault values are opened then.
+   The event's `$audience` is checked again against the webhook's current branches and
+   clearances and removed; a delivery it no longer covers is marked dead without sending.
    Every attempt of an event carries the same `idempotency_header` (`evt_<sequence>`):
    delivery is at least once (a pass that dies after sending and before recording sends
    again), so receivers drop repeats by it. Deliveries are not ordered: retries interleave
@@ -89,6 +91,8 @@ _OUTCOMES = {DELIVERED: "delivered", PENDING: "retrying", DEAD: "dead"}
 """Metric outcome of an attempt by the status it leaves the delivery in."""
 ERROR_LENGTH = 500
 """Characters of an error message kept on a delivery."""
+WITHDRAWN = "withdrawn: the webhook no longer reads the event's branches or Attribute"
+"""Error of a delivery whose `$audience` the webhook no longer covers when it is claimed."""
 
 
 class Sender(Protocol):
@@ -260,7 +264,8 @@ async def _payload(
     writes: WriteSettings,
 ) -> dict[str, Any]:
     if event.event_type != COMMITTED_EVENT:
-        return {**without_audience(event.payload), "type": event.event_type, "sequence": event.id}
+        # `$audience` stays in the stored delivery: the claim checks it again.
+        return {**event.payload, "type": event.event_type, "sequence": event.id}
     branch = str(event.payload.get("branch", ""))
     if (event.domain_id, branch) not in schemas:
         schemas[(event.domain_id, branch)] = await branch_schema(
@@ -364,6 +369,7 @@ async def _claim(
                 w.c.secret_hash,
                 w.c.sealed_key,
                 w.c.clearances,
+                w.c.branches,
                 d.c.event_type,
                 d.c.event_id,
                 d.c.payload,
@@ -374,12 +380,29 @@ async def _claim(
             .order_by(d.c.id)
         )
         rows = list(result)
+        withdrawn = {
+            (row.domain_id, row.id)
+            for row in rows
+            if not admitted(
+                row.payload,
+                branches=None if row.branches is None else tuple(row.branches),
+                clearances=tuple(row.clearances or ()),
+            )
+        }
+        if withdrawn:
+            # The webhook's branches or clearances narrowed since the fan-out.
+            await session.execute(
+                update(d)
+                .where(tuple_(d.c.domain_id, d.c.id).in_(sorted(withdrawn)))
+                .values(status=DEAD, last_error=WITHDRAWN, updated_at=now)
+            )
+            rows = [row for row in rows if (row.domain_id, row.id) not in withdrawn]
         values = await _vault_values(session, rows, vault)
         claimed = []
         for row in rows:
             opened = signing_keys.open(StoredKey(row.secret_hash, row.sealed_key))
             payload = disclose(
-                row.payload,
+                without_audience(row.payload),
                 tuple(row.clearances or ()),
                 values.get(row.domain_id, {}),
                 masked=settings.masked_value,
