@@ -2,8 +2,9 @@
 
 Changes of a Proposal write their outbox events in the caller's transaction
 (`lorebase_store.review_events`): `insert` of an open Proposal `proposal.opened`, `update`
-`proposal.updated` (title, description or policies), `proposal.merged` and `proposal.closed`
-(a status change). Every writer goes through this repository, so no path skips them.
+`proposal.updated` (when the title, description or policies really change; `changed` names
+those), `proposal.merged` and `proposal.closed` (a status change). Every writer goes
+through this repository, so no path skips them.
 """
 
 from __future__ import annotations
@@ -191,7 +192,8 @@ class ProposalRepository:
             raise ValueError(f"cannot update {sorted(unknown)}")
         if values.get("kinds") is not None:
             values["kinds"] = sorted(values["kinds"])
-        before = await self.get(proposal_id) if "status" in values else None
+        watched = UPDATED_FIELDS & values.keys()
+        before = await self.get(proposal_id) if watched or "status" in values else None
         await self._session.execute(
             update(PROPOSALS)
             .where(PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id == proposal_id)
@@ -200,7 +202,11 @@ class ProposalRepository:
         found = await self.get(proposal_id)
         if found is None:
             return None
-        changed = UPDATED_FIELDS & values.keys()
+        changed = {
+            name
+            for name in watched
+            if before is None or getattr(before, name) != getattr(found, name)
+        }
         if changed:
             await self._event(PROPOSAL_UPDATED, found, at=at, changed=changed)
         status = values.get("status")

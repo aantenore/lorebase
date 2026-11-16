@@ -132,7 +132,10 @@ async def test_csv_source_proposal_flow(
 
     branch_head = await head(sessions, BRANCH)
     attempts = await scalar(sessions, "SELECT count(*) FROM merge_attempts")
+    events = await scalar(sessions, "SELECT count(*) FROM outbox")
     second = await sync.run(DOMAIN, SUPPLIERS)
+    # A re-run with nothing new writes no event (no `proposal.updated` either).
+    assert await scalar(sessions, "SELECT count(*) FROM outbox") == events
     assert second.counts["unchanged"] == 30
     assert sum(v for k, v in second.counts.items() if k != "unchanged") == 0
     assert second.revisions == []
@@ -154,6 +157,12 @@ async def test_csv_source_proposal_flow(
     assert len(third.revisions) == 1
     title = await scalar(sessions, "SELECT title FROM proposals WHERE id = :p", p=first.proposal_id)
     assert title == "Sync approved.suppliers: 0 added, 1 changed, 0 removed"
+    changed = await scalar(
+        sessions,
+        "SELECT payload->'changed' FROM outbox WHERE event_type = 'proposal.updated' "
+        "ORDER BY id DESC LIMIT 1",
+    )
+    assert changed == ["description", "title"]  # the policies stayed the same
     assert await scalar(sessions, "SELECT count(*) FROM proposals") == 1
 
     runs = await fetch(sessions, "SELECT status, proposal_id FROM source_runs ORDER BY started_at")
