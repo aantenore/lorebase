@@ -22,9 +22,15 @@ from lorebase_store.commit import SchemaUpsert, commit, create_domain
 from lorebase_store.commit.errors import StaleHeadError
 from lorebase_store.materialize import create_branch
 from lorebase_store.merging import MergeRequest, MergeService
-from lorebase_store.models.enums import ProposalOrigin, ProposalStatus
+from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.outbox_events import EVENT_TYPES
-from lorebase_store.repositories import ProposalRepository, ProposalRow, scope_to_domain
+from lorebase_store.repositories import (
+    ProposalRepository,
+    ProposalRow,
+    ReviewRepository,
+    ReviewRow,
+    scope_to_domain,
+)
 from lorebase_store.repositories.merges import ResolutionRepository, ResolutionRow
 from lorebase_store.repositories.refs import RefMovedError, RefRepository
 from lorebase_store.runtime import StoreRuntime
@@ -547,3 +553,111 @@ async def test_a_clearance_narrowed_before_the_claim_withholds_the_event(
     assert statuses["notes"][1].startswith("withdrawn")
     for _, body in send.sent:
         assert "$audience" not in body
+
+
+async def attempts_of(sessions: Sessions, proposal: ProposalRow) -> list[tuple[str, bytes]]:
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        found = await session.execute(
+            text("SELECT status, theirs FROM merge_attempts WHERE proposal_id = :p"),
+            {"p": proposal.id},
+        )
+        return [(str(status), bytes(theirs)) for status, theirs in found]
+
+
+async def source_head(sessions: Sessions, branch: str) -> bytes:
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        found = await session.scalar(
+            text("SELECT head FROM refs WHERE domain_id = :d AND name = :b"),
+            {"d": DOMAIN, "b": branch},
+        )
+        return bytes(found)
+
+
+async def queued_current(
+    sessions: Sessions, runtime: StoreRuntime, clock: Clock, proposal: ProposalRow
+) -> Any:
+    async with sessions() as session, session.begin():
+        service = MergeService(session, DOMAIN, runtime=runtime, clock=clock)
+        return await service.current(MergeRequest(proposal=proposal, actor=AUTHOR.principal))
+
+
+async def test_a_read_queued_behind_a_merge_adds_nothing(
+    sessions: Sessions, runtime: StoreRuntime, engine: AsyncEngine
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    async with sessions() as session:
+        await create_branch(
+            session, DOMAIN, "ahead", created_by=AUTHOR.principal, runtime=runtime, clock=clock
+        )
+    await write(sessions, runtime, clock, "ahead", [supplier("S-3", country="NL")])
+    proposal = await open_proposal(sessions, clock, "ahead")
+    async with sessions() as merging:
+        await merging.begin()
+        service = MergeService(merging, DOMAIN, runtime=runtime, clock=clock)
+        merged = await service.merge(MergeRequest(proposal=proposal, actor=AUTHOR.principal))
+        assert merged.merged
+        reading = asyncio.create_task(queued_current(sessions, runtime, clock, proposal))
+        await wait_for_lock_waiter(engine, reading, locktype="transactionid", what="the read")
+        await merging.commit()
+    mark = await latest(sessions)
+    found = await reading
+    assert found.computation is None  # nothing recomputed on the merged Proposal
+    assert found.attempt.id == merged.attempt.id
+    assert [status for status, _ in await attempts_of(sessions, proposal)] == ["merged"]
+    assert await events(sessions, mark) == []
+
+
+async def test_a_head_moved_while_waiting_is_the_one_computed(
+    sessions: Sessions, runtime: StoreRuntime, engine: AsyncEngine
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    proposal = await open_proposal(sessions, clock)
+    await attempt(sessions, runtime, clock, proposal, merge=False)
+    await write(sessions, runtime, clock, SIDE, [supplier("S-2", country="ES")])  # stale now
+    mark = await latest(sessions)
+    async with sessions() as holder:
+        await holder.begin()
+        await scope_to_domain(holder, DOMAIN)
+        # Keeper's `FOR UPDATE` excludes the run's `FOR NO KEY UPDATE`.
+        await ProposalRepository(holder, DOMAIN).get(proposal.id, for_update=True)
+        reading = asyncio.create_task(queued_current(sessions, runtime, clock, proposal))
+        await wait_for_lock_waiter(engine, reading, locktype="transactionid", what="the read")
+        await write(sessions, runtime, clock, SIDE, [supplier("S-2", country="PT")])
+        await holder.commit()
+    found = await reading
+    moved = await source_head(sessions, SIDE)
+    assert found.computation is not None
+    assert found.attempt.theirs == moved
+    heads = {theirs for status, theirs in await attempts_of(sessions, proposal)}
+    assert moved in heads
+    assert len(heads) == 2  # the first attempt and the one at the new head, none between
+    announced = [kind for kind, _ in await events(sessions, mark) if kind.startswith("conflict.")]
+    assert announced == []  # same Conflicts at the new head: nothing to announce
+
+
+async def test_the_run_lock_lets_reviews_in(sessions: Sessions, runtime: StoreRuntime) -> None:
+    clock = Clock()
+    proposal = await open_proposal(sessions, clock)
+    async with sessions() as running:
+        await running.begin()
+        service = MergeService(running, DOMAIN, runtime=runtime, clock=clock)
+        await service.recompute(MergeRequest(proposal=proposal, actor=AUTHOR.principal))
+
+        async def review() -> None:
+            async with sessions() as session, session.begin():
+                await scope_to_domain(session, DOMAIN)
+                await ReviewRepository(session, DOMAIN).insert(
+                    ReviewRow(
+                        id=f"rvw_{new_ulid()}",
+                        proposal_id=proposal.id,
+                        reviewer="usr_reviewer",
+                        verdict=ReviewVerdict.COMMENT,
+                        comment=None,
+                        at=clock(),
+                    )
+                )
+
+        await asyncio.wait_for(review(), timeout=10)  # not queued behind the run
+        await running.commit()
