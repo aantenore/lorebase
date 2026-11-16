@@ -14,12 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Table, and_, insert, or_, select, update
+from sqlalchemy import Table, and_, insert, or_, select, text, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
 from lorebase_store.repositories.events import OutboxRepository
+from lorebase_store.repositories.refs import LOCK_NOT_AVAILABLE, LockTimeoutError, sqlstate
 from lorebase_store.review_events import (
     PROPOSAL_CLOSED,
     PROPOSAL_MERGED,
@@ -122,6 +124,41 @@ class ProposalRepository:
         found = (await self._session.execute(query)).mappings().one_or_none()
         return None if found is None else _proposal(found)
 
+    async def lock(self, proposal_id: str, *, timeout_ms: int) -> ProposalRow | None:
+        """The Proposal, its row locked `FOR NO KEY UPDATE` until the transaction ends.
+
+        That mode conflicts with itself and with `FOR UPDATE` (so it serializes with the
+        callers locking with `get(for_update=True)`), not with the key-share locks that inserts
+        referencing the Proposal take (reviews, items). Waits at most `timeout_ms` (0: without
+        limit), then raises `LockTimeoutError`; the transaction is then aborted.
+        """
+        query = (
+            select(PROPOSALS)
+            .where(PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id == proposal_id)
+            .with_for_update(key_share=True)
+        )
+        if timeout_ms <= 0:
+            found = (await self._session.execute(query)).mappings().one_or_none()
+            return None if found is None else _proposal(found)
+        previous = await self._session.scalar(text("SELECT current_setting('lock_timeout')"))
+        await self._lock_timeout(f"{timeout_ms}ms")
+        try:
+            found = (await self._session.execute(query)).mappings().one_or_none()
+        except DBAPIError as error:
+            if sqlstate(error) == LOCK_NOT_AVAILABLE:
+                raise LockTimeoutError(
+                    f"Proposal {proposal_id!r} of Domain {self._domain!r} stayed locked for "
+                    f"{timeout_ms} ms"
+                ) from error
+            raise
+        await self._lock_timeout(str(previous))
+        return None if found is None else _proposal(found)
+
+    async def _lock_timeout(self, value: str) -> None:
+        await self._session.execute(
+            text("SELECT set_config('lock_timeout', :value, true)"), {"value": value}
+        )
+
     async def statuses(self, proposal_ids: Iterable[str]) -> dict[str, ProposalStatus]:
         """The status of each of `proposal_ids` that exists, in one query."""
         wanted = sorted(set(proposal_ids))
@@ -193,7 +230,10 @@ class ProposalRepository:
         if values.get("kinds") is not None:
             values["kinds"] = sorted(values["kinds"])
         watched = UPDATED_FIELDS & values.keys()
-        before = await self.get(proposal_id) if watched or "status" in values else None
+        before = None
+        if watched or "status" in values:
+            # Locked like the UPDATE below would lock it, so the comparison cannot race.
+            before = await self.lock(proposal_id, timeout_ms=0)
         await self._session.execute(
             update(PROPOSALS)
             .where(PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id == proposal_id)
