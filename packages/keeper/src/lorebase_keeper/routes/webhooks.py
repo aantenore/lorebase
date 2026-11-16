@@ -9,7 +9,12 @@ secret or the full URL. Deliveries are made by `lorebase_store.webhooks.deliver_
 a worker.
 
 A webhook subscribes to `revision.committed`, to `operation.<side effect>` events or to every
-Operation event (`operation.*`). Sensitive values in Operation events reach it masked unless it
+Operation event (`operation.*`), and to the Proposal and Conflict events (`proposal.opened`,
+`proposal.updated`, `proposal.merged`, `proposal.closed`, `conflict.opened`,
+`conflict.resolved`, or `proposal.*` and `conflict.*`), which it gets only when it names them.
+Those reach it only when its `branches` cover the Proposal's target and source branches and,
+for a Conflict about an Attribute, its clearances cover the Attribute's tags
+(`lorebase_store.review_events`). Sensitive values in Operation events reach it masked unless it
 holds `clearances` for their tags; granting one needs the matching clearance permission
 (`pii.read`, `confidential.read`, `restricted.read`) on the whole Domain, so an administrator
 cannot route values to a webhook that they could not read themselves. `PATCH` replaces the
@@ -96,8 +101,10 @@ class CreateWebhook(BaseModel):
     events: list[str] | None = Field(
         default=None,
         min_length=1,
-        description="Event types delivered: revision.committed, operation.<side effect>, or "
-        "operation.* for every Operation event; default: revision.committed and operation.*.",
+        description="Event types delivered: revision.committed, operation.<side effect>, "
+        "operation.* for every Operation event, proposal.opened, proposal.updated, "
+        "proposal.merged, proposal.closed, conflict.opened, conflict.resolved, proposal.* or "
+        "conflict.*; default: revision.committed and operation.*.",
     )
     branches: list[str] | None = Field(
         default=None, min_length=1, description="Only events of these branches; default: all."

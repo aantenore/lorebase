@@ -3,8 +3,9 @@
 A pass, safe to run concurrently in several workers (rows are claimed with `SKIP LOCKED`):
 
 1. fan out: the oldest outbox events pending for the `webhooks` consumer become one delivery
-   per matching webhook (event type or `operation.*`, branch, created before the event), and
-   stop being pending for it, in one transaction (`repositories.events`: other consumers of the
+   per matching webhook (event type or wildcard, branch, created before the event, and the
+   event's `$audience` covered by the webhook's branches and clearances, `review_events`),
+   and stop being pending for it, in one transaction (`repositories.events`: other consumers of the
    outbox keep their own pending rows);
 2. claim the due deliveries, leasing them for `lease_s`;
 3. send each one as an HMAC-signed JSON POST (`webhooks.signing`) through the injected
@@ -64,6 +65,7 @@ from lorebase_store.commit.pipeline import COMMITTED_EVENT
 from lorebase_store.outbox_events import cleared_tokens, disclose, subscribed
 from lorebase_store.repositories.deferred_events import expire as expire_deferred
 from lorebase_store.repositories.events import OutboxRepository, OutboxRow
+from lorebase_store.review_events import admitted, without_audience
 from lorebase_store.settings import OutboxSettings, WriteSettings
 from lorebase_store.telemetry import (
     OUTBOX_HANDOFFS,
@@ -258,7 +260,7 @@ async def _payload(
     writes: WriteSettings,
 ) -> dict[str, Any]:
     if event.event_type != COMMITTED_EVENT:
-        return {**event.payload, "type": event.event_type, "sequence": event.id}
+        return {**without_audience(event.payload), "type": event.event_type, "sequence": event.id}
     branch = str(event.payload.get("branch", ""))
     if (event.domain_id, branch) not in schemas:
         schemas[(event.domain_id, branch)] = await branch_schema(
@@ -304,6 +306,7 @@ async def _fan_out(
                 if subscribed(event.event_type, hook.event_types)
                 and (hook.branches is None or branch in hook.branches)
                 and hook.created_at <= event.created_at
+                and admitted(event.payload, branches=hook.branches, clearances=hook.clearances)
             ]
             if not targets:
                 continue

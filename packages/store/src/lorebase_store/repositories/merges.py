@@ -311,6 +311,15 @@ class ConflictRepository:
         found = result.mappings().one_or_none()
         return None if found is None else _conflict(found)
 
+    async def of_attempt(self, attempt_id: str) -> list[ConflictRow]:
+        """Every Conflict of an attempt, ordered by fingerprint."""
+        result = await self._session.execute(
+            select(CONFLICTS)
+            .where(CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id)
+            .order_by(CONFLICTS.c.id)
+        )
+        return [_conflict(row) for row in result.mappings()]
+
     async def page(
         self,
         attempt_id: str,

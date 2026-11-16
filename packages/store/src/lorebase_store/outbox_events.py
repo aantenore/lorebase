@@ -1,8 +1,10 @@
 """Event types of the outbox and the sensitive values their payloads carry (design 10.2, 10.5).
 
 **Types.** A commit writes `revision.committed`; an Operation that declares side effects writes
-one `operation.<name>` event per name, in its commit transaction. Webhooks subscribe to exact
-types or to `operation.*`, every Operation event.
+one `operation.<name>` event per name, in its commit transaction. Proposals and their merge
+attempts write `proposal.*` and `conflict.*` events (`review_events`). Webhooks subscribe to
+exact types or to `operation.*`, `proposal.*` and `conflict.*`; without a choice they get
+`revision.committed` and `operation.*` (`EVENT_TYPES`), so the review events are opt-in.
 
 **Sensitive values.** A payload never holds a value that needs a clearance as such: the writer
 wraps it as `{"$sensitive": {"tags": [...], "value": ...}}`, the value of a vault Attribute
@@ -26,6 +28,7 @@ from typing import Any
 from lorebase_core.model import VAULT_KEY, Sensitivity, vault_token
 from lorebase_core.model.operation import SIDE_EFFECT_MAX_LENGTH
 from lorebase_store.commit.pipeline import COMMITTED_EVENT
+from lorebase_store.review_events import REVIEW_EVENT_TYPES, REVIEW_WILDCARDS
 from lorebase_store.vault import VaultState, VaultValue
 
 OPERATION_EVENT_PREFIX = "operation."
@@ -33,6 +36,9 @@ OPERATION_EVENTS = "operation.*"
 """Subscribes to the events of every Operation side effect."""
 EVENT_TYPES: tuple[str, ...] = (COMMITTED_EVENT, OPERATION_EVENTS)
 """Event types a webhook subscribes to when it names none."""
+NAMED_EVENT_TYPES: tuple[str, ...] = (*EVENT_TYPES, *REVIEW_EVENT_TYPES, *REVIEW_WILDCARDS)
+"""Every event type or wildcard a webhook may name, besides `operation.<side effect>`."""
+_WILDCARDS: dict[str, str] = {OPERATION_EVENTS: OPERATION_EVENT_PREFIX, **REVIEW_WILDCARDS}
 SENSITIVE_KEY = "$sensitive"
 
 _OPERATION_EVENT = re.compile(r"operation\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
@@ -45,7 +51,7 @@ def operation_event_type(side_effect: str) -> str:
 
 def event_type_problem(name: str) -> str | None:
     """Why `name` is not an event type a webhook may subscribe to; None when it is."""
-    if name in EVENT_TYPES:
+    if name in NAMED_EVENT_TYPES:
         return None
     if (
         _OPERATION_EVENT.fullmatch(name)
@@ -53,7 +59,7 @@ def event_type_problem(name: str) -> str | None:
     ):
         return None
     return (
-        f"unknown event type {name!r}: expected {COMMITTED_EVENT}, {OPERATION_EVENTS} or "
+        f"unknown event type {name!r}: expected one of {', '.join(NAMED_EVENT_TYPES)} or "
         "operation.<side effect>"
     )
 
@@ -62,7 +68,10 @@ def subscribed(event_type: str, subscriptions: Collection[str]) -> bool:
     """Whether a subscription to `subscriptions` receives events of `event_type`."""
     if event_type in subscriptions:
         return True
-    return event_type.startswith(OPERATION_EVENT_PREFIX) and OPERATION_EVENTS in subscriptions
+    return any(
+        wildcard in subscriptions and event_type.startswith(prefix)
+        for wildcard, prefix in _WILDCARDS.items()
+    )
 
 
 def sensitive_value(tags: Iterable[Sensitivity], value: Any) -> dict[str, Any]:

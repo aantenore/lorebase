@@ -3009,7 +3009,7 @@ export interface components {
             url: string;
             /**
              * Events
-             * @description Event types delivered: revision.committed, operation.<side effect>, or operation.* for every Operation event; default: revision.committed and operation.*.
+             * @description Event types delivered: revision.committed, operation.<side effect>, operation.* for every Operation event, proposal.opened, proposal.updated, proposal.merged, proposal.closed, conflict.opened, conflict.resolved, proposal.* or conflict.*; default: revision.committed and operation.*.
              */
             events?: string[] | null;
             /**

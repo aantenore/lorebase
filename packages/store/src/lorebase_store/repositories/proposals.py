@@ -1,4 +1,10 @@
-"""Proposals and their reviews (design 7.3, 10.3)."""
+"""Proposals and their reviews (design 7.3, 10.3).
+
+Changes of a Proposal write their outbox events in the caller's transaction
+(`lorebase_store.review_events`): `insert` of an open Proposal `proposal.opened`, `update`
+`proposal.updated` (title, description or policies), `proposal.merged` and `proposal.closed`
+(a status change). Every writer goes through this repository, so no path skips them.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_store.models import metadata
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus, ReviewVerdict
+from lorebase_store.repositories.events import OutboxRepository
+from lorebase_store.review_events import (
+    PROPOSAL_CLOSED,
+    PROPOSAL_MERGED,
+    PROPOSAL_OPENED,
+    PROPOSAL_UPDATED,
+    UPDATED_FIELDS,
+    proposal_payload,
+)
 
 PROPOSALS: Table = metadata.tables["proposals"]
 REVIEWS: Table = metadata.tables["proposal_reviews"]
@@ -94,6 +109,8 @@ class ProposalRepository:
                 kinds=None if row.kinds is None else list(row.kinds),
             )
         )
+        if row.status is ProposalStatus.OPEN:
+            await self._event(PROPOSAL_OPENED, row, at=row.created_at)
 
     async def get(self, proposal_id: str, *, for_update: bool = False) -> ProposalRow | None:
         query = select(PROPOSALS).where(
@@ -174,12 +191,48 @@ class ProposalRepository:
             raise ValueError(f"cannot update {sorted(unknown)}")
         if values.get("kinds") is not None:
             values["kinds"] = sorted(values["kinds"])
+        before = await self.get(proposal_id) if "status" in values else None
         await self._session.execute(
             update(PROPOSALS)
             .where(PROPOSALS.c.domain_id == self._domain, PROPOSALS.c.id == proposal_id)
             .values(updated_at=at, **values)
         )
-        return await self.get(proposal_id)
+        found = await self.get(proposal_id)
+        if found is None:
+            return None
+        changed = UPDATED_FIELDS & values.keys()
+        if changed:
+            await self._event(PROPOSAL_UPDATED, found, at=at, changed=changed)
+        status = values.get("status")
+        if status is not None and (before is None or before.status != status):
+            if status == ProposalStatus.MERGED:
+                await self._event(PROPOSAL_MERGED, found, at=at)
+            elif status == ProposalStatus.CLOSED:
+                await self._event(PROPOSAL_CLOSED, found, at=at)
+        return found
+
+    async def _event(
+        self,
+        event_type: str,
+        row: ProposalRow,
+        *,
+        at: datetime | None,
+        changed: Iterable[str] = (),
+    ) -> int:
+        """Write a Proposal event to the outbox in the caller's transaction."""
+        payload = proposal_payload(
+            self._domain,
+            proposal_id=row.id,
+            source=row.source_ref,
+            target=row.target_ref,
+            origin=ProposalOrigin(row.origin).value,
+            status=ProposalStatus(row.status).value,
+            author=row.author,
+            at=at,
+            merged_revision=None if row.merged_revision is None else bytes(row.merged_revision),
+            changed=tuple(changed),
+        )
+        return await OutboxRepository(self._session).enqueue(self._domain, event_type, payload)
 
 
 class ReviewRepository:

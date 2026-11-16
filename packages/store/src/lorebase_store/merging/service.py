@@ -16,7 +16,9 @@ last-written state it carries advances in the same transaction
 like the commit pipeline (design 6.6): objects, nodes, the merge Revision with parents
 `[target head, source head]`, changeset and provenance, materialization of the changeset on the
 target branch, compare-and-swap of the ref, audit entry and outbox events (`revision.committed`
-and the Operation events deferred on the source branch, `repositories.deferred_events`). A
+and the Operation events deferred on the source branch, `repositories.deferred_events`).
+Every run also writes the Conflict events of its attempt against the previous one
+(`merging.events`), and the Proposal repository writes `proposal.merged` with the status. A
 fast-forward moves the ref to the source head and materializes the difference; an up-to-date
 merge writes no Revision. Everything runs in the caller's transaction.
 
@@ -95,6 +97,7 @@ from lorebase_store.merging.attempts import (
     decisions_of,
     taken_provenance,
 )
+from lorebase_store.merging.events import conflict_changes, write_conflict_events
 from lorebase_store.merging.lineage import BranchLineage, MergeLineage
 from lorebase_store.merging.preserved import base_overrides
 from lorebase_store.models.enums import (
@@ -420,6 +423,27 @@ class MergeService:
 
         computed = await session.run_sync(compute)
         computation = computed.computation
+        attempts = MergeAttemptRepository(session, domain_id)
+        previous = await attempts.latest(request.proposal.id)
+        by_fingerprint = {row.fingerprint: row for row in stored}
+        conflicts = [_conflict_row(state, by_fingerprint) for state in computation.conflicts]
+        earlier = (
+            []
+            if previous is None
+            else await ConflictRepository(session, domain_id).of_attempt(previous.id)
+        )
+        # Before the commit: the resolutions come before the merge they allow, and the
+        # source branch still exists to name its Attributes.
+        await write_conflict_events(
+            session,
+            domain_id,
+            conflict_changes(earlier, conflicts),
+            proposal_id=request.proposal.id,
+            target=target.name,
+            source=source.name,
+            attempt_id=attempt_id,
+            runtime=self._runtime,
+        )
         head: bytes | None = None
         source_deleted = False
         events: list[int] = []
@@ -454,8 +478,6 @@ class MergeService:
             if computation.clean
             else MergeAttemptStatus.CONFLICTED
         )
-        attempts = MergeAttemptRepository(session, domain_id)
-        previous = await attempts.latest(request.proposal.id)
         await attempts.supersede(request.proposal.id, status=MergeAttemptStatus.STALE)
         outcome = computation.outcome
         attempt = MergeAttemptRow(
@@ -475,10 +497,7 @@ class MergeService:
             idempotency_key=request.idempotency_key if commit else None,
         )
         await attempts.insert(attempt)
-        by_fingerprint = {row.fingerprint: row for row in stored}
-        await ConflictRepository(session, domain_id).insert_many(
-            attempt_id, [_conflict_row(state, by_fingerprint) for state in computation.conflicts]
-        )
+        await ConflictRepository(session, domain_id).insert_many(attempt_id, conflicts)
         await attempts.prune(request.proposal.id, keep=self._retention)
         changes: dict[str, Any] = {
             "checks": _checks(
