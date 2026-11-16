@@ -62,9 +62,11 @@ def test_cast_rules_hold_for_random_values(data: st.DataObject) -> None:
 @given(st.data())
 def test_safe_casts_never_fail(data: st.DataObject) -> None:
     source = data.draw(type_specs(), label="source")
-    target = data.draw(
-        type_specs().filter(lambda t: cast_rule(source, t) is CastRule.SAFE), label="target"
-    )
+    # Pick among drawn candidates instead of filtering: SAFE targets are rare for some sources,
+    # and the source itself is always a SAFE (or element-wise) target, so the pool is never empty.
+    pool = [source, *data.draw(st.lists(type_specs(), max_size=10), label="pool")]
+    safe = [t for t in pool if cast_rule(source, t) is CastRule.SAFE]
+    target = data.draw(st.sampled_from(safe), label="target")
     value = encode_value(source, data.draw(values_of(source), label="value"))
     assert is_canonical(target, cast(source, target, value))
 
