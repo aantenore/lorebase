@@ -1383,6 +1383,7 @@ Webhooks (design 10.5): managed through Keeper, delivered from the outbox by lor
 | `webhooks.concurrency` | `8` | attempts of one pass in flight at the same time |
 | `webhooks.pass_timeout_s` | `60.0` | no attempt starts after this; the rest go to the next pass |
 | `webhooks.changed_keys_max` | `100` | changed Record keys listed per event payload |
+| `webhooks.conflict_events_max` | `200` | conflict.opened / conflict.resolved events of one merge attempt; past it one more event per type: total `count`, `truncated: true` |
 | `webhooks.retention_s` | `604800.0` | finished deliveries kept (7 days; events: store.outbox) |
 
 ## `vault`

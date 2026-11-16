@@ -116,6 +116,7 @@ from lorebase_store.repositories.materialized import MERGE_ORIGIN_TYPE, Material
 from lorebase_store.repositories.merges import (
     ConflictRepository,
     ConflictRow,
+    ConflictSummary,
     MergeAttemptRepository,
     MergeAttemptRow,
     ResolutionRepository,
@@ -270,26 +271,36 @@ class MergeService:
         self._retention = retention
 
     async def current(self, request: MergeRequest) -> AttemptResult:
-        """The latest attempt, recomputed when there is none or a head moved since."""
+        """The latest attempt, recomputed when there is none or a head moved since. Only a
+        recompute locks the Proposal (`_lock`); the check is repeated under the lock."""
         await scope_to_domain(self._session, self._domain)
         refs = RefRepository(self._session, self._domain)
         target = await _branch(refs, request.proposal.target_ref, "target")
         source = await _branch(refs, request.proposal.source_ref, "source")
-        latest = await MergeAttemptRepository(self._session, self._domain).latest(
-            request.proposal.id
-        )
-        if (
-            latest is not None
-            and latest.status in (MergeAttemptStatus.CONFLICTED, MergeAttemptStatus.RESOLVED)
-            and latest.ours == target.head
-            and latest.theirs == source.head
-        ):
+        attempts = MergeAttemptRepository(self._session, self._domain)
+        latest = await attempts.latest(request.proposal.id)
+        if _current(latest, target, source):
+            assert latest is not None
             return AttemptResult(attempt=latest)
+        await self._lock(request)
+        latest = await attempts.latest(request.proposal.id)
+        if _current(latest, target, source):
+            assert latest is not None
+            return AttemptResult(attempt=latest)  # another transaction recomputed it
         return await self._run(request, target, source, commit=False)
+
+    async def _lock(self, request: MergeRequest) -> None:
+        """Lock the Proposal's row until the transaction ends, before reading its previous
+        attempt: concurrent runs of one Proposal then compare with each other's attempt and
+        write each Conflict event once. Taken before the target branch lock, as Keeper does."""
+        await ProposalRepository(self._session, self._domain).get(
+            request.proposal.id, for_update=True
+        )
 
     async def recompute(self, request: MergeRequest) -> AttemptResult:
         """Run the merge with the stored resolutions and store the attempt (no commit)."""
         await scope_to_domain(self._session, self._domain)
+        await self._lock(request)
         refs = RefRepository(self._session, self._domain)
         target = await _branch(refs, request.proposal.target_ref, "target")
         source = await _branch(refs, request.proposal.source_ref, "source")
@@ -301,6 +312,7 @@ class MergeService:
         Raises `BranchLockTimeoutError`, `ProposalBranchMissingError` or `StaleHeadError`.
         """
         await scope_to_domain(self._session, self._domain)
+        await self._lock(request)
         refs = RefRepository(self._session, self._domain)
         timeout = self._runtime.settings.commit.lock_timeout_ms
         try:
@@ -430,14 +442,14 @@ class MergeService:
         earlier = (
             []
             if previous is None
-            else await ConflictRepository(session, domain_id).of_attempt(previous.id)
+            else await ConflictRepository(session, domain_id).summaries(previous.id)
         )
         # Before the commit: the resolutions come before the merge they allow, and the
         # source branch still exists to name its Attributes.
         await write_conflict_events(
             session,
             domain_id,
-            conflict_changes(earlier, conflicts),
+            conflict_changes(earlier, [ConflictSummary.of(row) for row in conflicts]),
             proposal_id=request.proposal.id,
             target=target.name,
             source=source.name,
@@ -656,6 +668,16 @@ class MergeService:
                 session, domain_id, target.name, stored, prepared.changeset, message
             )
         return new_head
+
+
+def _current(latest: MergeAttemptRow | None, target: RefRow, source: RefRow) -> bool:
+    """Whether `latest` is an open attempt computed at the current heads."""
+    return (
+        latest is not None
+        and latest.status in (MergeAttemptStatus.CONFLICTED, MergeAttemptStatus.RESOLVED)
+        and latest.ours == target.head
+        and latest.theirs == source.head
+    )
 
 
 async def _branch(refs: RefRepository, name: str, side: str) -> RefRow:

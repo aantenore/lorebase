@@ -10,6 +10,13 @@ An attempt is compared with the previous attempt of its Proposal (`conflict_chan
 - anything else writes nothing: a Conflict open in both, and a resolution carried over by
   fingerprint to a recomputed (stale) attempt, are not events again.
 
+Nothing is written when no webhook of the Domain subscribes to the type (a webhook created
+later never receives earlier events anyway). Each type writes at most
+`webhooks.conflict_events_max` events per attempt, in one multi-row insert; past it one more
+event of the type carries the total `count` and `truncated: true` (its audience needs every
+branch and tag of the Conflicts it counts), so a large attempt delays the events written after
+it, `revision.committed` included, by a bounded number of rows.
+
 The payload names the Proposal, both branches, the attempt and the Conflict (id, code, Kind or
 Relation, element key, Attribute api name, member count), never its values, and for a
 resolution its choice and resolver, never a custom value. A Conflict about an Attribute
@@ -22,20 +29,23 @@ applies the same rule to readers).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lorebase_core.expr.limits import ExprLimits
 from lorebase_core.expr.sensitivity import Tags, effective_tags, schema_tags
 from lorebase_core.model import Schema, Sensitivity
 from lorebase_store.materialize.rows import PartitionType, parse_partition
+from lorebase_store.models import metadata
+from lorebase_store.outbox_events import subscribed
 from lorebase_store.reads import head_schema
 from lorebase_store.repositories.domains import DomainRepository
 from lorebase_store.repositories.events import OutboxRepository
-from lorebase_store.repositories.merges import ConflictRow
+from lorebase_store.repositories.merges import ConflictSummary
 from lorebase_store.review_events import (
     AUDIENCE_KEY,
     CONFLICT_OPENED,
@@ -47,6 +57,7 @@ from lorebase_store.runtime import StoreRuntime
 RESOLVED_BY_RESOLUTION = "resolution"
 RESOLVED_AS_OBSOLETE = "obsolete"
 EVERY_TAG: Tags = frozenset(Sensitivity)
+WEBHOOKS: Table = metadata.tables["webhooks"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +65,12 @@ class ConflictChange:
     """A Conflict event to write: its type, the Conflict and, when resolved, why."""
 
     event_type: str
-    conflict: ConflictRow
+    conflict: ConflictSummary
     reason: str | None = None
 
 
 def conflict_changes(
-    previous: Sequence[ConflictRow], current: Sequence[ConflictRow]
+    previous: Sequence[ConflictSummary], current: Sequence[ConflictSummary]
 ) -> list[ConflictChange]:
     """The Conflict events of an attempt with Conflicts `current`, after one with `previous`
     (empty for the first attempt); see the module doc."""
@@ -180,12 +191,64 @@ def conflict_payload(
     if change.event_type == CONFLICT_RESOLVED:
         payload["reason"] = change.reason
         if change.reason == RESOLVED_BY_RESOLUTION:
-            payload["choice"] = (row.resolution or {}).get("choice")
+            payload["choice"] = row.choice
             payload["resolved_by"] = row.resolved_by
     payload[AUDIENCE_KEY] = audience(
         branches=(target, source), tags=view.required_tags(row.partition, row.attribute_id)
     )
     return payload
+
+
+def truncation_payload(
+    domain_id: str,
+    changes: Sequence[ConflictChange],
+    view: SchemaView,
+    *,
+    proposal_id: str,
+    target: str,
+    source: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """The event that follows the first `conflict_events_max` events of a type: how many
+    there are in all; only a webhook that may read every one of them receives it."""
+    tags: set[Sensitivity] = set()
+    for change in changes:
+        tags |= view.required_tags(change.conflict.partition, change.conflict.attribute_id)
+    return {
+        "domain": domain_id,
+        "branch": target,
+        "source_branch": source,
+        "proposal": proposal_id,
+        "attempt": attempt_id,
+        "count": len(changes),
+        "truncated": True,
+        AUDIENCE_KEY: audience(branches=(target, source), tags=tags),
+    }
+
+
+def capped(
+    changes: Sequence[ConflictChange], limit: int
+) -> list[tuple[str, list[ConflictChange], list[ConflictChange]]]:
+    """Per event type, in order of first appearance: the changes written one by one (the
+    first `limit`) and every change of the type when some are left out (else empty)."""
+    by_type: dict[str, list[ConflictChange]] = {}
+    for change in changes:
+        by_type.setdefault(change.event_type, []).append(change)
+    return [
+        (kind, found[:limit], found if len(found) > limit else [])
+        for kind, found in by_type.items()
+    ]
+
+
+async def subscribed_types(
+    session: AsyncSession, domain_id: str, event_types: Collection[str]
+) -> set[str]:
+    """The `event_types` some webhook of the Domain subscribes to (one query)."""
+    result = await session.execute(
+        select(WEBHOOKS.c.event_types).where(WEBHOOKS.c.domain_id == domain_id)
+    )
+    subscriptions = [tuple(found) for found in result.scalars()]
+    return {kind for kind in event_types if any(subscribed(kind, s) for s in subscriptions)}
 
 
 async def write_conflict_events(
@@ -199,10 +262,18 @@ async def write_conflict_events(
     attempt_id: str,
     runtime: StoreRuntime,
 ) -> list[int]:
-    """Write `changes` to the outbox in the caller's transaction; the event ids. The schemas
-    are read only when there is something to write."""
+    """Write `changes` to the outbox in the caller's transaction (module doc); the event ids.
+    The webhooks and the schemas are read only when there is something to write."""
     if not changes:
         return []
+    wanted = await subscribed_types(session, domain_id, {c.event_type for c in changes})
+    changes = [change for change in changes if change.event_type in wanted]
+    if not changes:
+        return []
+    # Imported here: the webhooks package reads the store through modules importing this one.
+    from lorebase_store.webhooks.settings import WebhookSettings
+
+    limit = (runtime.webhooks or WebhookSettings()).conflict_events_max
     found = [await head_schema(session, domain_id, b, runtime=runtime) for b in (target, source)]
     domain = await DomainRepository(session).get(domain_id)
     reference = (
@@ -215,20 +286,17 @@ async def write_conflict_events(
         None if reference is None else reference.schema,
         runtime.schema.expression_limits,
     )
-    outbox = OutboxRepository(session)
-    return [
-        await outbox.enqueue(
-            domain_id,
-            change.event_type,
-            conflict_payload(
-                domain_id,
-                change,
-                view,
-                proposal_id=proposal_id,
-                target=target,
-                source=source,
-                attempt_id=attempt_id,
-            ),
+    names = {
+        "proposal_id": proposal_id,
+        "target": target,
+        "source": source,
+        "attempt_id": attempt_id,
+    }
+    events: list[tuple[str, dict[str, Any]]] = []
+    for event_type, written, counted in capped(changes, limit):
+        events.extend(
+            (event_type, conflict_payload(domain_id, change, view, **names)) for change in written
         )
-        for change in changes
-    ]
+        if counted:
+            events.append((event_type, truncation_payload(domain_id, counted, view, **names)))
+    return await OutboxRepository(session).enqueue_many(domain_id, events)

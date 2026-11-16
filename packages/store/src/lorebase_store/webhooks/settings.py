@@ -102,6 +102,13 @@ class WebhookSettings(SectionModel):
     changed_keys_max: int = Field(
         default=100, ge=0, description="Changed Record keys listed per event payload."
     )
+    conflict_events_max: int = Field(
+        default=200,
+        ge=1,
+        description="Conflict events of each type (conflict.opened, conflict.resolved) one "
+        "merge attempt writes; past it one more event of that type carries the total `count` "
+        "and `truncated: true`, and receivers read the rest from the Proposal.",
+    )
     retention_s: float = Field(
         default=7 * 24 * 3600.0,
         gt=0,

@@ -68,6 +68,27 @@ class OutboxRepository:
         )
         return int(result.scalar_one())
 
+    async def enqueue_many(
+        self, domain_id: str, events: Sequence[tuple[str, dict[str, Any]]], *, batch: int = 500
+    ) -> list[int]:
+        """Write `(event_type, payload)` events with multi-row inserts of `batch` rows; the
+        ids, in the order of `events` (ids are taken in row order)."""
+        ids: list[int] = []
+        for start in range(0, len(events), batch):
+            chunk = events[start : start + batch]
+            result = await self._session.execute(
+                insert(OUTBOX)
+                .values(
+                    [
+                        {"domain_id": domain_id, "event_type": kind, "payload": payload}
+                        for kind, payload in chunk
+                    ]
+                )
+                .returning(OUTBOX.c.id)
+            )
+            ids.extend(sorted(int(found) for found in result.scalars()))
+        return ids
+
     async def latest(self, domain_id: str) -> int:
         """Id of the newest event of the Domain (0 when there is none)."""
         found = await self._session.scalar(

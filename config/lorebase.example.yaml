@@ -1077,6 +1077,8 @@ webhooks:
   concurrency: 8                 # attempts of one pass in flight at the same time
   pass_timeout_s: 60.0           # no attempt starts after this; the rest go to the next pass
   changed_keys_max: 100          # changed Record keys listed per event payload
+  conflict_events_max: 200       # conflict.opened / conflict.resolved events of one merge attempt;
+                                 # past it one more event per type: total `count`, `truncated: true`
   retention_s: 604800.0          # finished deliveries kept (7 days; events: store.outbox)
 
 # Personal data vault (design 13.5; docs/threat-model.md): values of `pii` Attributes with

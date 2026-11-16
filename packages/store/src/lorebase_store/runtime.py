@@ -4,6 +4,7 @@ schema cache."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from lorebase_platform.settings import Settings, load_settings
 from lorebase_store.digests import DigestKeys
@@ -20,6 +21,9 @@ from lorebase_store.settings import (
 from lorebase_store.vault.keys import VaultKeys
 from lorebase_store.vault.settings import VaultSettings, vault_settings
 
+if TYPE_CHECKING:
+    from lorebase_store.webhooks.settings import WebhookSettings
+
 
 @dataclass(frozen=True, slots=True)
 class StoreRuntime:
@@ -30,7 +34,8 @@ class StoreRuntime:
     (`lorebase_store.digests`). `index_maintenance` is true when `database.maintenance_dsn` is
     set: commits by a role that does not own `mat_records` then queue their per-Attribute index
     changes for the job worker, which runs them as the maintenance role
-    (`lorebase_store.indexes`).
+    (`lorebase_store.indexes`). `webhooks` is the `webhooks` section (code defaults when
+    None), read where events are written.
     """
 
     settings: StoreSettings
@@ -41,6 +46,7 @@ class StoreRuntime:
     vault: VaultKeys | None = None
     vault_settings: VaultSettings = field(default_factory=VaultSettings)
     digests: DigestKeys = field(default_factory=DigestKeys)
+    webhooks: WebhookSettings | None = None
 
     @classmethod
     def from_settings(
@@ -50,6 +56,7 @@ class StoreRuntime:
         *,
         database: DatabaseSettings | None = None,
         vault: VaultSettings | None = None,
+        webhooks: WebhookSettings | None = None,
     ) -> StoreRuntime:
         keys = None if vault is None else VaultKeys.from_settings(vault)
         vault = vault or VaultSettings()
@@ -62,17 +69,22 @@ class StoreRuntime:
             vault=keys,
             vault_settings=vault,
             digests=DigestKeys.from_settings(vault, keys),
+            webhooks=webhooks,
         )
 
     @classmethod
     def from_loaded(cls, settings: Settings) -> StoreRuntime:
-        """Runtime of loaded settings: the `store`, `schema`, `database` and `vault`
-        sections."""
+        """Runtime of loaded settings: the `store`, `schema`, `database`, `vault` and
+        `webhooks` sections."""
+        # Imported here: the webhooks package reads the store through modules that import this.
+        from lorebase_store.webhooks.settings import webhook_settings
+
         return cls.from_settings(
             store_settings(settings),
             schema_settings(settings),
             database=database_settings(settings),
             vault=vault_settings(settings),
+            webhooks=webhook_settings(settings),
         )
 
 

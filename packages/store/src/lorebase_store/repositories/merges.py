@@ -71,6 +71,37 @@ class ConflictRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ConflictSummary:
+    """What Conflict events need of a stored Conflict: no values, no payload."""
+
+    fingerprint: str
+    code: str
+    partition: str
+    element_key: str | None
+    attribute_id: str | None
+    member_count: int
+    resolved_by: str | None = None
+    choice: str | None = None
+
+    @property
+    def resolved(self) -> bool:
+        return self.resolved_by is not None
+
+    @classmethod
+    def of(cls, row: ConflictRow) -> ConflictSummary:
+        return cls(
+            fingerprint=row.fingerprint,
+            code=row.code,
+            partition=row.partition,
+            element_key=row.element_key,
+            attribute_id=row.attribute_id,
+            member_count=row.member_count,
+            resolved_by=row.resolved_by,
+            choice=None if row.resolution is None else row.resolution.get("choice"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PendingConflictRow:
     """An open Conflict about one element, as a reader of the target branch is told: the
     Proposal it blocks, its id and code, the Attribute (None for a Conflict about the whole
@@ -311,14 +342,36 @@ class ConflictRepository:
         found = result.mappings().one_or_none()
         return None if found is None else _conflict(found)
 
-    async def of_attempt(self, attempt_id: str) -> list[ConflictRow]:
-        """Every Conflict of an attempt, ordered by fingerprint."""
+    async def summaries(self, attempt_id: str) -> list[ConflictSummary]:
+        """Every Conflict of an attempt without its values, ordered by fingerprint."""
+        c = CONFLICTS
         result = await self._session.execute(
-            select(CONFLICTS)
-            .where(CONFLICTS.c.domain_id == self._domain, CONFLICTS.c.attempt_id == attempt_id)
-            .order_by(CONFLICTS.c.id)
+            select(
+                c.c.id,
+                c.c.code,
+                c.c.partition,
+                c.c.element_key,
+                c.c.attribute_id,
+                c.c.member_count,
+                c.c.resolved_by,
+                c.c.resolution["choice"].astext.label("choice"),
+            )
+            .where(c.c.domain_id == self._domain, c.c.attempt_id == attempt_id)
+            .order_by(c.c.id)
         )
-        return [_conflict(row) for row in result.mappings()]
+        return [
+            ConflictSummary(
+                fingerprint=row.id,
+                code=row.code,
+                partition=row.partition,
+                element_key=row.element_key,
+                attribute_id=row.attribute_id,
+                member_count=row.member_count,
+                resolved_by=row.resolved_by,
+                choice=row.choice,
+            )
+            for row in result
+        ]
 
     async def page(
         self,
