@@ -271,8 +271,12 @@ class MergeService:
         self._retention = retention
 
     async def current(self, request: MergeRequest) -> AttemptResult:
-        """The latest attempt, recomputed when there is none or a head moved since. Only a
-        recompute locks the Proposal (`_lock`); the check is repeated under the lock."""
+        """The latest attempt, recomputed when there is none or a head moved since.
+
+        Only a recompute locks the Proposal (`_lock`). Under the lock everything is read
+        again: a Proposal merged or closed meanwhile keeps its latest attempt, and a head
+        moved meanwhile is the one the attempt is computed at.
+        """
         await scope_to_domain(self._session, self._domain)
         refs = RefRepository(self._session, self._domain)
         target = await _branch(refs, request.proposal.target_ref, "target")
@@ -282,20 +286,34 @@ class MergeService:
         if _current(latest, target, source):
             assert latest is not None
             return AttemptResult(attempt=latest)
-        await self._lock(request)
+        proposal = await self._lock(request)
         latest = await attempts.latest(request.proposal.id)
+        if proposal.status is not ProposalStatus.OPEN and latest is not None:
+            return AttemptResult(attempt=latest)  # merged or closed while this waited
+        target = await _branch(refs, proposal.target_ref, "target")
+        source = await _branch(refs, proposal.source_ref, "source")
         if _current(latest, target, source):
             assert latest is not None
             return AttemptResult(attempt=latest)  # another transaction recomputed it
-        return await self._run(request, target, source, commit=False)
+        return await self._run(replace(request, proposal=proposal), target, source, commit=False)
 
-    async def _lock(self, request: MergeRequest) -> None:
-        """Lock the Proposal's row until the transaction ends, before reading its previous
-        attempt: concurrent runs of one Proposal then compare with each other's attempt and
-        write each Conflict event once. Taken before the target branch lock, as Keeper does."""
-        await ProposalRepository(self._session, self._domain).get(
-            request.proposal.id, for_update=True
-        )
+    async def _lock(self, request: MergeRequest) -> ProposalRow:
+        """Lock the Proposal's row until the transaction ends and return it as it is now.
+
+        Taken before reading the previous attempt, so concurrent runs of one Proposal compare
+        with each other's attempt and write each Conflict event once, and before the target
+        branch lock, as Keeper does. `FOR NO KEY UPDATE` (`ProposalRepository.lock`): it
+        excludes other runs and Keeper's `FOR UPDATE`, not the inserts of reviews. Waits at
+        most `commit.lock_timeout_ms`, then raises `BranchLockTimeoutError` (busy, retry).
+        """
+        timeout = self._runtime.settings.commit.lock_timeout_ms
+        try:
+            found = await ProposalRepository(self._session, self._domain).lock(
+                request.proposal.id, timeout_ms=timeout
+            )
+        except LockTimeoutError as error:
+            raise BranchLockTimeoutError(str(error)) from error
+        return request.proposal if found is None else found
 
     async def recompute(self, request: MergeRequest) -> AttemptResult:
         """Run the merge with the stored resolutions and store the attempt (no commit)."""
