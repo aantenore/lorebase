@@ -4,8 +4,10 @@ events), and delivered only to webhooks that may read the Attribute and both bra
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -17,12 +19,14 @@ from lorebase_core.types import TypeSpec
 from lorebase_core.validate import RecordUpsert
 from lorebase_store.auth.scope import rls_scope
 from lorebase_store.commit import SchemaUpsert, commit, create_domain
+from lorebase_store.commit.errors import StaleHeadError
 from lorebase_store.materialize import create_branch
 from lorebase_store.merging import MergeRequest, MergeService
 from lorebase_store.models.enums import ProposalOrigin, ProposalStatus
 from lorebase_store.outbox_events import EVENT_TYPES
 from lorebase_store.repositories import ProposalRepository, ProposalRow, scope_to_domain
 from lorebase_store.repositories.merges import ResolutionRepository, ResolutionRow
+from lorebase_store.repositories.refs import RefMovedError, RefRepository
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import StoreSettings
 from lorebase_store.webhooks import (
@@ -46,6 +50,7 @@ from .support import (
     domain,
     ident,
     supplier_kind,
+    wait_for_lock_waiter,
 )
 
 pytestmark = pytest.mark.integration
@@ -128,13 +133,13 @@ async def events(sessions: Sessions, after: int) -> list[tuple[str, dict[str, An
         return [(str(kind), dict(payload)) for kind, payload in rows]
 
 
-def new_proposal(clock: Clock) -> ProposalRow:
+def new_proposal(clock: Clock, source: str = SIDE) -> ProposalRow:
     now = clock()
     return ProposalRow(
         id=f"prp_{new_ulid()}",
         title="Merge side",
         description=None,
-        source_ref=SIDE,
+        source_ref=source,
         target_ref="main",
         origin=ProposalOrigin.MANUAL,
         status=ProposalStatus.OPEN,
@@ -146,8 +151,8 @@ def new_proposal(clock: Clock) -> ProposalRow:
     )
 
 
-async def open_proposal(sessions: Sessions, clock: Clock) -> ProposalRow:
-    proposal = new_proposal(clock)
+async def open_proposal(sessions: Sessions, clock: Clock, source: str = SIDE) -> ProposalRow:
+    proposal = new_proposal(clock, source)
     async with sessions() as session, session.begin():
         await scope_to_domain(session, DOMAIN)
         await ProposalRepository(session, DOMAIN).insert(proposal)
@@ -189,6 +194,7 @@ async def test_the_lifecycle_of_a_proposal_and_its_conflicts(
     sessions: Sessions, runtime: StoreRuntime
 ) -> None:
     clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
     mark = await latest(sessions)
     proposal = await open_proposal(sessions, clock)
     [(kind, opened)] = await events(sessions, mark)
@@ -250,6 +256,7 @@ async def test_the_lifecycle_of_a_proposal_and_its_conflicts(
 
 async def test_rolled_back_work_writes_no_event(sessions: Sessions, runtime: StoreRuntime) -> None:
     clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
     mark = await latest(sessions)
     proposal = new_proposal(clock)
 
@@ -276,7 +283,13 @@ async def test_updates_and_close(sessions: Sessions) -> None:
     async with sessions() as session, session.begin():
         repository = ProposalRepository(session, DOMAIN)
         await scope_to_domain(session, DOMAIN)
-        await repository.update(proposal.id, at=clock(), title="New title")
+        # The same values again (a Source sync re-run with nothing new): not an update.
+        await repository.update(
+            proposal.id, at=clock(), title="Merge side", description=None, policies={}
+        )
+        await repository.update(
+            proposal.id, at=clock(), title="New title", description=None, policies={}
+        )
         await repository.update(proposal.id, at=clock(), checks={"x": 1})  # not an update
         await repository.update(proposal.id, at=clock(), status=ProposalStatus.CLOSED)
         await repository.update(proposal.id, at=clock(), status=ProposalStatus.CLOSED)  # again
@@ -377,3 +390,160 @@ async def test_webhooks_receive_only_what_they_may_read(
         assert NOTES not in text_sent
     for bodies in got.values():
         assert all("$audience" not in body and "sequence" in body for body in bodies)
+
+
+async def test_no_conflict_event_without_a_subscriber(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "proposals.example.com", ["proposal.*"])
+    proposal = await open_proposal(sessions, clock)
+    mark = await latest(sessions)
+    result = await attempt(sessions, runtime, clock, proposal, merge=False)
+    assert result.computation.open_count == 2
+    assert await events(sessions, mark) == []
+
+
+async def test_events_past_the_cap_are_summarized(sessions: Sessions, store: StoreSettings) -> None:
+    capped = StoreRuntime.from_settings(store, webhooks=WebhookSettings(conflict_events_max=1))
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    proposal = await open_proposal(sessions, clock)
+    mark = await latest(sessions)
+    await attempt(sessions, capped, clock, proposal, merge=False)
+    found = await events(sessions, mark)
+    assert [kind for kind, _ in found] == ["conflict.opened", "conflict.opened"]
+    first, summary = (payload for _, payload in found)
+    assert "conflict" in first
+    assert (summary["count"], summary["truncated"]) == (2, True)
+    assert "conflict" not in summary
+    assert summary["$audience"]["tags"] == ["pii"]  # it counts the Conflict on `notes`
+
+
+async def test_concurrent_recomputes_write_one_set_of_events(
+    sessions: Sessions, runtime: StoreRuntime, engine: AsyncEngine
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    proposal = await open_proposal(sessions, clock)
+    mark = await latest(sessions)
+    request = MergeRequest(proposal=proposal, actor=AUTHOR.principal)
+    async with sessions() as first:
+        await first.begin()
+        await MergeService(first, DOMAIN, runtime=runtime, clock=clock).current(request)
+
+        async def second() -> Any:
+            async with sessions() as session, session.begin():
+                service = MergeService(session, DOMAIN, runtime=runtime, clock=clock)
+                return await service.current(request)
+
+        waiting = asyncio.create_task(second())
+        await wait_for_lock_waiter(
+            engine, waiting, locktype="transactionid", what="the second recompute"
+        )
+        await first.commit()
+    other = await waiting
+    assert other.computation is None  # it found the attempt the first one stored
+    found = await events(sessions, mark)
+    assert sorted(kind for kind, _ in found) == ["conflict.opened", "conflict.opened"]
+
+
+async def test_a_failed_merge_commit_leaves_no_event(
+    sessions: Sessions, runtime: StoreRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    proposal = await open_proposal(sessions, clock)
+    first = await attempt(sessions, runtime, clock, proposal, merge=False)
+    assert first.computation is not None
+    for state in first.computation.conflicts:
+        await resolve(sessions, clock, proposal, state.conflict.fingerprint, "ours")
+    mark = await latest(sessions)
+
+    async def moved(self: RefRepository, name: str, **_: Any) -> int:
+        raise RefMovedError(DOMAIN, name, b"\0", 0)
+
+    monkeypatch.setattr(RefRepository, "compare_and_swap", moved)
+    with pytest.raises(StaleHeadError):
+        await attempt(sessions, runtime, clock, proposal, merge=True)
+    assert await events(sessions, mark) == []  # the conflict.resolved rolled back too
+
+
+async def test_fast_forward_and_up_to_date_merges(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "review.example.com", REVIEW)
+    async with sessions() as session:
+        for name in ("ahead", "same"):
+            await create_branch(
+                session, DOMAIN, name, created_by=AUTHOR.principal, runtime=runtime, clock=clock
+            )
+    await write(sessions, runtime, clock, "ahead", [supplier("S-3", country="NL")])
+    for source, expected in (
+        ("ahead", ["revision.committed", "proposal.merged"]),
+        ("same", ["proposal.merged"]),
+    ):
+        proposal = await open_proposal(sessions, clock, source)
+        mark = await latest(sessions)
+        merged = await attempt(sessions, runtime, clock, proposal, merge=True)
+        assert merged.merged
+        found = await events(sessions, mark)
+        assert [kind for kind, _ in found] == expected, source
+        assert found[-1][1]["revision"] == merged.head.hex()
+
+
+class Flaky(Sender):
+    """Answers 500 to every request about `notes`, 204 to the others."""
+
+    async def __call__(
+        self,
+        url: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        timeout_s: float,
+        addresses: Sequence[str],
+    ) -> int:
+        await super().__call__(url, body, headers, timeout_s, addresses)
+        return 500 if json.loads(body).get("attribute") == "notes" else 204
+
+
+async def test_a_clearance_narrowed_before_the_claim_withholds_the_event(
+    sessions: Sessions, runtime: StoreRuntime
+) -> None:
+    clock = Clock()
+    await add_webhook(sessions, "cleared.example.com", ["conflict.opened"], clearances=["pii"])
+    proposal = await open_proposal(sessions, clock)
+    await attempt(sessions, runtime, clock, proposal, merge=False)
+    settings = WebhookSettings(backoff_base_s=1, backoff_max_s=1)
+    send = Flaky()
+    now = datetime.now(UTC)
+    first = await deliver_pending(
+        sessions, settings, send, writes=StoreSettings().writes, resolve=public, clock=lambda: now
+    )
+    assert (first.attempted, first.delivered, first.retrying) == (2, 1, 1)
+    async with sessions() as session, session.begin():
+        await scope_to_domain(session, DOMAIN)
+        hooks = WebhookRepository(session, DOMAIN)
+        [hook] = await hooks.all()
+        await hooks.set_clearances(hook.id, [])
+    later = now + timedelta(minutes=5)
+    second = await deliver_pending(
+        sessions, settings, send, writes=StoreSettings().writes, resolve=public, clock=lambda: later
+    )
+    assert second.attempted == 0  # the retry of the PII Conflict is withheld
+    assert len(send.sent) == 2
+    async with sessions() as session, session.begin(), rls_scope(session, bypass=True):
+        found = await session.execute(
+            text(
+                "SELECT payload->>'attribute', status, last_error FROM webhook_deliveries "
+                "WHERE domain_id = :d"
+            ),
+            {"d": DOMAIN},
+        )
+        statuses = {attribute: (status, error) for attribute, status, error in found}
+    assert statuses["country"][0] == "delivered"
+    assert statuses["notes"][0] == "dead"
+    assert statuses["notes"][1].startswith("withdrawn")
+    for _, body in send.sent:
+        assert "$audience" not in body

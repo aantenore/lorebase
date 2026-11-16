@@ -15,10 +15,12 @@ from lorebase_store.merging.events import (
     RESOLVED_BY_RESOLUTION,
     ConflictChange,
     SchemaView,
+    capped,
     conflict_changes,
     conflict_payload,
+    truncation_payload,
 )
-from lorebase_store.repositories.merges import ConflictRow
+from lorebase_store.repositories.merges import ConflictRow, ConflictSummary
 from lorebase_store.review_events import (
     AUDIENCE_KEY,
     CONFLICT_OPENED,
@@ -49,17 +51,19 @@ PART = kind_partition(SUPPLIER)
 
 def conflict(
     fingerprint: str, *, attribute_id: str | None = COUNTRY, resolved: bool = False
-) -> ConflictRow:
-    return ConflictRow(
-        fingerprint=fingerprint,
-        code="DV1",
-        partition=PART,
-        element_key="S-1",
-        attribute_id=attribute_id,
-        payload={"base": "IT", "ours": "FR", "theirs": "DE"},
-        member_count=1,
-        resolution={"choice": "custom", "value": "ES"} if resolved else None,
-        resolved_by="usr_reviewer" if resolved else None,
+) -> ConflictSummary:
+    return ConflictSummary.of(
+        ConflictRow(
+            fingerprint=fingerprint,
+            code="DV1",
+            partition=PART,
+            element_key="S-1",
+            attribute_id=attribute_id,
+            payload={"base": "IT", "ours": "FR", "theirs": "DE"},
+            member_count=1,
+            resolution={"choice": "custom", "value": "ES"} if resolved else None,
+            resolved_by="usr_reviewer" if resolved else None,
+        )
     )
 
 
@@ -140,7 +144,7 @@ def test_names_come_from_the_schemas() -> None:
     }
 
 
-def payload_of(row: ConflictRow, event_type: str, reason: str | None = None) -> dict[str, Any]:
+def payload_of(row: ConflictSummary, event_type: str, reason: str | None = None) -> dict[str, Any]:
     return conflict_payload(
         "supply",
         ConflictChange(event_type, row, reason),
@@ -218,3 +222,34 @@ def test_proposal_payloads_hold_ids_and_branches_only() -> None:
         "changed": ["title"],
     }
     assert found[AUDIENCE_KEY] == {"branches": ["main", "side"], "tags": []}
+
+
+def test_events_past_the_cap_are_counted_in_one_more_event() -> None:
+    opened = [ConflictChange(CONFLICT_OPENED, conflict(f"o{i}")) for i in range(5)]
+    resolved = [ConflictChange(CONFLICT_RESOLVED, conflict("r0", resolved=True), "resolution")]
+    split = capped([*opened, *resolved], 3)
+    assert [(kind, len(written), len(counted)) for kind, written, counted in split] == [
+        (CONFLICT_OPENED, 3, 5),
+        (CONFLICT_RESOLVED, 1, 0),  # within the cap: no summary
+    ]
+    hidden = [*opened, ConflictChange(CONFLICT_OPENED, conflict("o9", attribute_id=NOTES))]
+    summary = truncation_payload(
+        "supply",
+        hidden,
+        SchemaView.of([schema()], None),
+        proposal_id="prp_1",
+        target="main",
+        source="side",
+        attempt_id="mga_1",
+    )
+    assert without_audience(summary) == {
+        "domain": "supply",
+        "branch": "main",
+        "source_branch": "side",
+        "proposal": "prp_1",
+        "attempt": "mga_1",
+        "count": 6,
+        "truncated": True,
+    }
+    # It counts a Conflict on a PII Attribute: only a webhook cleared for PII receives it.
+    assert summary[AUDIENCE_KEY] == {"branches": ["main", "side"], "tags": ["pii"]}

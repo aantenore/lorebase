@@ -25,6 +25,7 @@ from lorebase_core.model import Schema
 from lorebase_scribe.webhooks import HttpxSender
 from lorebase_store.db import create_engine
 from lorebase_store.materialize import create_branch
+from lorebase_store.repositories import OutboxRepository, scope_to_domain
 from lorebase_store.runtime import StoreRuntime
 from lorebase_store.settings import DatabaseSettings, StoreSettings
 from lorebase_store.webhooks import WebhookSettings, deliver_pending, verify
@@ -201,6 +202,31 @@ async def test_changes_since_a_revision(seeded: Seeded) -> None:
         assert diverged.status_code == 409
         unknown = await http.get(f"{BASE}/branches/main/changes", params={"kinds": "Nope"})
         assert unknown.status_code == 422
+
+
+async def test_review_events_stay_out_of_the_feed(seeded: Seeded) -> None:
+    supplier = Supplier(seeded, "S-1004")
+    async with keeper(seeded.app_url, agents=FAST_FEED) as http:
+        before = await head_of(http)
+        async with owner_session(seeded.owner_url) as session, session.begin():
+            await scope_to_domain(session, DOMAIN)
+            outbox = OutboxRepository(session)
+            mark = await outbox.latest(DOMAIN)
+            audience = {"branches": ["main", "side"], "tags": []}
+            for kind in ("proposal.opened", "conflict.opened"):
+                await outbox.enqueue(
+                    DOMAIN, kind, {"branch": "main", "proposal": "prp_x", "$audience": audience}
+                )
+        revision = await supplier.set_risk(55)
+        streamed = await http.get(
+            f"{BASE}/branches/main/events", headers={"Last-Event-ID": str(mark)}
+        )
+        assert streamed.status_code == 200
+        assert [e["revision"] for e in parse_sse(streamed.text)] == [revision]
+        assert "prp_x" not in streamed.text
+        page = await http.get(f"{BASE}/branches/main/changes", params={"since": before})
+        assert page.status_code == 200, page.text
+        assert [item["revision"] for item in page.json()["items"]] == [revision]
 
 
 # Webhooks -----------------------------------------------------------------------------------

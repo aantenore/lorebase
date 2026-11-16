@@ -110,3 +110,29 @@ async def test_clearances_can_be_changed(
         assert len(updates) == 3, audit.text
         assert updates[0]["details"]["clearances_before"] == ["pii"]
         assert updates[0]["details"]["clearances"] == []
+
+
+async def test_proposal_and_conflict_events_can_be_named(
+    keeper: Any, installation_admin: Any
+) -> None:
+    async with keeper(SEALED) as http:
+        created = await http.post(
+            f"{API}/domains", json={"id": "acme"}, headers=installation_admin.headers
+        )
+        assert created.status_code == 201, created.text
+        url = "https://hooks.example.com/in"
+        named = ["proposal.*", "conflict.opened", "conflict.resolved", "revision.committed"]
+        hook = await http.post(
+            HOOKS, json={"url": url, "events": named}, headers=installation_admin.headers
+        )
+        assert hook.status_code == 201, hook.text
+        assert hook.json()["events"] == sorted(named)
+        default = await http.post(HOOKS, json={"url": url}, headers=installation_admin.headers)
+        assert default.json()["events"] == ["operation.*", "revision.committed"]
+        unknown = await http.post(
+            HOOKS,
+            json={"url": url, "events": ["conflict.opened", "proposal.reviewed"]},
+            headers=installation_admin.headers,
+        )
+        assert unknown.status_code == 422, unknown.text
+        assert "proposal.reviewed" in unknown.text
