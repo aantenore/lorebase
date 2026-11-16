@@ -5,6 +5,6 @@ Importing the package registers the `guide` settings section with `lorebase_plat
 
 from lorebase_guide.settings import GuideSettings, guide_settings
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = ["GuideSettings", "guide_settings"]

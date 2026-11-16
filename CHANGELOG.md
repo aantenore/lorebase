@@ -2,6 +2,26 @@
 
 What changed in each release, newest first. The notes are written for the person deciding whether to upgrade. Lorebase follows semantic versioning. Before 1.0, any minor version may change an interface, and the notes say so.
 
+## 0.5.0 - 2026-11-16
+
+Webhooks can now tell a receiver when a review moves. The events are opt-in: existing webhooks, the default event list, the SSE feed and `GET .../changes` are unchanged. Before 1.0 a minor version may change an interface; this one changes none.
+
+### Added
+
+- Webhook events for Proposals and Conflicts ([agents](docs/agents.md#proposal-and-conflict-events)): `proposal.opened`, `proposal.updated`, `proposal.merged`, `proposal.closed`, `conflict.opened` and `conflict.resolved`, subscribed by name or with the wildcards `proposal.*` and `conflict.*` in a webhook's `events` ([#9](https://github.com/aantenore/lorebase/issues/9)). Each is written in the transaction of the change, so it exists only if the change committed, and is delivered like any other event (signed, at least once, `Idempotency-Key`, retries). They name ids, branches, codes and Attributes, never titles, descriptions or values; the competing values stay behind `GET .../proposals/{p}/conflicts` under the reader's own grants. `proposal.updated` is written only for fields that changed, and each merge attempt writes `conflict.opened` and `conflict.resolved` for what changed since the previous attempt.
+- Who receives them: a webhook gets a Proposal or Conflict event only if its `branches` cover both the target and the source branch and, for a Conflict about an Attribute, its `clearances` cover every tag of that Attribute. Otherwise the event is not delivered at all, so nothing reveals that it exists. The rule is checked when the event is fanned out and again when a delivery is sent.
+- Setting `webhooks.conflict_events_max` (default `200`): the most events of each Conflict type that one merge attempt writes. Past it, one more event of that type carries the total `count` and `truncated: true`, and only a webhook that may read every one of those Conflicts receives it. Conflict events are written only while a webhook of the Domain subscribes to them, and a webhook never receives events written before it was created. The limits and the delivery rules are in [agents](docs/agents.md#proposal-and-conflict-events).
+
+### Fixed
+
+- A property test of the safe-cast conversions no longer trips the Hypothesis filter health check.
+
+### Upgrade notes
+
+- No migration and no breaking change. One new optional setting, `webhooks.conflict_events_max`.
+- A webhook receives the new events only if it names them (or `proposal.*`, `conflict.*`) in `events`; the default event list is unchanged.
+- The ranges between workspace packages move to `>=0.5,<0.6`; install matching versions of the Lorebase packages together.
+
 ## 0.4.0 - 2026-11-13
 
 ### Added
