@@ -512,7 +512,10 @@ its source. The Revisions stay in the history.
 ### Event stream
 
 `GET /branches/{branch}/events` is a Server-Sent Events stream of the Revisions committed on
-the branch. `kinds=Supplier,Part` keeps only Revisions changing those Kinds.
+the branch. `kinds=Supplier,Part` keeps only Revisions changing those Kinds. It carries
+`revision.committed` only: Operation, Proposal and Conflict events go to
+[webhooks](#webhooks), whose subscription says what they may receive (a stream reader's
+grants are not checked against a Proposal's source branch or a Conflict's Attribute).
 
 ```text
 retry: 3000
@@ -554,7 +557,9 @@ Content-Type: application/json
 ```
 
 `events` defaults to `revision.committed` and `operation.*` (every Operation event, see
-[Operation events](#operation-events)); `operation.<side effect>` names one.
+[Operation events](#operation-events)); `operation.<side effect>` names one. The
+[Proposal and Conflict events](#proposal-and-conflict-events) are delivered only to a
+webhook that names them.
 The answer holds `secret`, shown only this once. Each delivery is a POST of the event document
 above with the headers `Lorebase-Event`, `Lorebase-Delivery` (delivery id),
 `Idempotency-Key` (`evt_<sequence>`, the same on every attempt of an event) and
@@ -643,6 +648,54 @@ vault when the delivery is sent, so an erased one arrives as `[erased]`. Creatin
 a clearance needs that clearance permission (`pii.read`, ...) on the whole Domain; the
 clearances of a webhook change with `PATCH /domains/{domain}/webhooks/{id}` and
 `{"clearances": [...]}` (the new full set); only the clearances it adds need their permission.
+
+### Proposal and Conflict events
+
+A webhook that names them in `events` (or `proposal.*`, `conflict.*`) is told when a review
+moves, instead of inferring it from commits or polling the Proposals:
+
+| Event | When |
+|-------|------|
+| `proposal.opened` | A Proposal is created (by a person, an agent write, a Source sync or an extraction) |
+| `proposal.updated` | Its title or description changes; `changed` names which, never the text |
+| `proposal.merged` | It merges; `revision` is the new head of the target |
+| `proposal.closed` | It is closed unmerged |
+| `conflict.opened` | A merge attempt reports a Conflict the previous attempt did not report open |
+| `conflict.resolved` | A Conflict open in the previous attempt is resolved (`reason: resolution`, with `choice` and `resolved_by`) or no longer reported after a head moved (`reason: obsolete`) |
+
+Each is written in the transaction of the change, so it exists only if the change committed,
+and is delivered like any other event (signed, at least once, `Idempotency-Key`, retries). In a
+merge the order of `sequence` is: the `conflict.resolved` the merge applied, then
+`revision.committed`, the deferred Operation events and `proposal.merged`.
+
+```json
+{"type": "conflict.opened", "sequence": 913, "domain": "supply", "branch": "main",
+ "source_branch": "agent/agt_risk/t-42", "proposal": "prp_01J9X4M8", "attempt": "mga_...",
+ "conflict": "9f2c...", "code": "DV1", "kind": "Supplier", "relation": null,
+ "attribute": "tier", "key": "S-1001", "count": 1}
+```
+
+A Proposal event carries `domain`, `branch` (the target), `source_branch`, `proposal`,
+`origin`, `status`, `author` and `at`; never the title, the description or values. A Conflict
+event never carries the competing values or a custom resolution value: read them with
+`GET .../proposals/{p}/conflicts` under your own grants. For a schema Conflict (`SC*`), `key`
+is the schema element id and `attribute` the property path.
+
+**Who receives them.** A webhook reads the branches its `branches` list names (every branch
+when unset) and the sensitive Attributes its `clearances` cover. A Proposal or Conflict event
+is delivered only to a webhook that reads both the target and the source branch, and a
+Conflict about an Attribute only to a webhook cleared for every tag of that Attribute (its tags
+on the target, source and default branches, carried through Derivations; an Attribute none of
+them knows needs every tag). Otherwise the event is not delivered at all: no masked entry tells
+that the Proposal or the Conflict exists, the rule `conflict_in_progress` applies to readers.
+A webhook limited to `branches: ["main"]` therefore receives no event about a Proposal from a
+task branch; leave `branches` unset or list the source branches too.
+
+**Recomputed attempts.** When a head moves, the attempt is recomputed and the stored
+resolutions are re-applied by fingerprint ([design 6.10](design.md)). Only Conflicts that are
+new, whose fingerprint changed, or that are open again write `conflict.opened`; a resolution
+carried over writes nothing again, and a recompute that leaves the Conflicts as they were
+writes no event. Closing a Proposal writes `proposal.closed` and no event for its Conflicts.
 
 ## 6. Check the health of the data
 
